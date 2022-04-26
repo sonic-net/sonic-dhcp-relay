@@ -6,11 +6,14 @@ extraction:
       - "libboost-thread-dev"
       - "libevent-dev"
       - "libhiredis-dev"
+      - "libnl-3-dev"
+      - "libnl-route-3-dev"
+      - "libnl-nf-3-dev"
+      - "dh-exec"
     after_prepare:
-    - "export GNU_MAKE=make"
     - "git clone https://github.com/Azure/sonic-swss-common; pushd sonic-swss-common; ./autogen.sh; fakeroot dpkg-buildpackage -us -uc -b; popd"
     - "dpkg-deb -x libswsscommon_1.0.0_amd64.deb $LGTM_WORKSPACE"
     - "dpkg-deb -x libswsscommon-dev_1.0.0_amd64.deb $LGTM_WORKSPACE"
     index:
       build_command:
-        - "$GNU_MAKE all LDFLAGS=\"-L${LGTM_WORKSPACE}/usr/lib/x86_64-linux-gnu\" CFLAGS=\"-I${LGTM_WORKSPACE}/usr/include\""
+        - "make all LDFLAGS=\"-L${LGTM_WORKSPACE}/usr/lib/x86_64-linux-gnu\" CFLAGS=\"-I${LGTM_WORKSPACE}/usr/include\""
