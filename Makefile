@@ -4,26 +4,21 @@ CP := cp
 MKDIR := mkdir
 CC := g++
 MV := mv
-LIBS := -levent -lhiredis -lswsscommon -pthread -lboost_thread -lboost_system
-CFLAGS += -Wall -std=c++17 -fPIE -I$(PWD)/../sonic-swss-common/common
+override LDLIBS += -levent -lhiredis -lswsscommon -pthread -lboost_thread -lboost_system
+override CPPFLAGS += -Wall -std=c++17 -fPIE -I/usr/include/swss
+override CPPFLAGS += -MMD -MP -MF"$(@:%.o=%.d)" -MT"$(@)"
 PWD := $(shell pwd)
 
+all: $(DHCP6RELAY_TARGET)
+
 ifneq ($(MAKECMDGOALS),clean)
-ifneq ($(strip $(C_DEPS)),)
--include $(C_DEPS) $(OBJS)
-endif
+-include $(OBJS:%.o=%.d)
 endif
 
 -include src/subdir.mk
- 
-all: sonic-dhcp6relay
 
-sonic-dhcp6relay: $(OBJS)
-	@echo 'Building target: $@'
-	@echo 'Invoking: G++ Linker'
-	$(CC) $(LDFLAGS) -o $(DHCP6RELAY_TARGET) $(OBJS) $(LIBS)
-	@echo 'Finished building target: $@'
-	@echo ' '
+$(DHCP6RELAY_TARGET): $(OBJS)
+	$(CC) $(LDFLAGS) $^ $(LDLIBS) -o $@
 
 install:
 	$(MKDIR) -p $(DESTDIR)/usr/sbin
@@ -34,7 +29,7 @@ deinstall:
 	$(RM) -rf $(DESTDIR)/usr/sbin
 
 clean:
-	-$(RM) $(EXECUTABLES) $(C_DEPS) $(OBJS) $(DHCP6RELAY_TARGET)
+	-$(RM) $(EXECUTABLES) $(OBJS:%.o=%.d) $(OBJS) $(DHCP6RELAY_TARGET)
 	-@echo ' '
 
 .PHONY: all clean dependents
