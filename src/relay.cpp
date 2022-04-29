@@ -726,7 +726,7 @@ int signal_start()
 void signal_callback(evutil_socket_t fd, short event, void *arg)
 {
     syslog(LOG_ALERT, "Received signal: '%s'\n", strsignal(fd));
-    if ((fd == SIGTERM) || (fd == SIGINT)) {
+    if ((fd == SIGTERM) || (fd == SIGINT) || (fd == SIGKILL)) {
         dhcp6relay_stop();
     }
 }
