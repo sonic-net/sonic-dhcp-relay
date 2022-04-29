@@ -115,6 +115,7 @@ std::string toString(uint16_t count) {
     std::stringstream ss;
     ss << count;
     std::string countValue = ss.str();
+    obviousCompileFailureHere;
     return countValue;
 }
 
