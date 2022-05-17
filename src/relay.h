@@ -1,7 +1,9 @@
+#pragma once
+
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <linux/if_packet.h>
-#include <netinet/if_ether.h>	
+#include <netinet/if_ether.h>
 #include <netinet/ip6.h>
 #include <netinet/udp.h>
 #include <ifaddrs.h>
@@ -9,14 +11,14 @@
 #include <string>
 #include <vector>
 #include <event2/util.h>
-
+#include "dbconnector.h"
+#include "sender.h"
 
 #define PACKED __attribute__ ((packed))
 
 #define RELAY_PORT 547
 #define CLIENT_PORT 546
 #define HOP_LIMIT 8     //HOP_LIMIT reduced from 32 to 8 as stated in RFC8415
-#define DHCPv6_OPTION_LIMIT 56      // DHCPv6 option code greater than 56 are currently unassigned
 
 #define lengthof(A) (sizeof (A) / sizeof (A)[0])
 
@@ -36,11 +38,8 @@ typedef enum
     DHCPv6_MESSAGE_TYPE_REPLY = 7,
     DHCPv6_MESSAGE_TYPE_RELEASE = 8,
     DHCPv6_MESSAGE_TYPE_DECLINE = 9,
-    DHCPv6_MESSAGE_TYPE_RECONFIGURE = 10,
-    DHCPv6_MESSAGE_TYPE_INFORMATION_REQUEST = 11,
     DHCPv6_MESSAGE_TYPE_RELAY_FORW = 12,
     DHCPv6_MESSAGE_TYPE_RELAY_REPL = 13,
-    DHCPv6_MESSAGE_TYPE_MALFORMED = 14,
 
     DHCPv6_MESSAGE_TYPE_COUNT
 } dhcp_message_type_t;
@@ -62,7 +61,6 @@ struct relay_config {
 
 struct dhcpv6_msg {
     uint8_t msg_type;
-    uint8_t xid[3];
 };
 
 struct PACKED dhcpv6_relay_msg {
@@ -342,17 +340,39 @@ const struct dhcpv6_relay_msg *parse_dhcpv6_relay(const uint8_t *buffer);
 const struct dhcpv6_option *parse_dhcpv6_opt(const uint8_t *buffer, const uint8_t **out_end);
 
 /**
- * @code                            void send_udp(int sock, uint8_t *buffer, struct sockaddr_in6 target, uint32_t n, relay_config *config, uint8_t msg_type);
+ * @code                            void process_sent_msg(relay_config *config, uint8_t msg_type);
  *
- * @brief                           send udp packet
- *
- * @param *buffer                   message buffer
- * @param sockaddr_in6 target       target socket
- * @param n                         length of message
+ * @brief                           process packet after successfully sent udp
+ 
  * @param relay_config *config      pointer to relay_config
  * @param uint8_t msg_type          message type of dhcpv6 option of relayed message
  * 
- * @return dhcpv6_option   end of dhcpv6 message option
+ * @return                          Update counter / syslog
  */
-void send_udp(int sock, uint8_t *buffer, struct sockaddr_in6 target, uint32_t n, relay_config *config, uint8_t msg_type);
+void process_sent_msg(relay_config *config, uint8_t msg_type);
 
+/**
+ * @code                callback(evutil_socket_t fd, short event, void *arg);
+ * 
+ * @brief               callback for libevent that is called everytime data is received at the filter socket
+ *
+ * @param fd            filter socket
+ * @param event         libevent triggered event  
+ * @param arg           callback argument provided by user
+ *
+ * @return              none
+ */
+void callback(evutil_socket_t fd, short event, void *arg);
+
+/**
+ * @code                void server_callback(evutil_socket_t fd, short event, void *arg);
+ * 
+ * @brief               callback for libevent that is called everytime data is received at the server socket
+ *
+ * @param fd            filter socket
+ * @param event         libevent triggered event  
+ * @param arg           callback argument provided by user
+ *
+ * @return              none
+ */
+void server_callback(evutil_socket_t fd, short event, void *arg);
