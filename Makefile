@@ -1,54 +1,66 @@
 RM := rm -rf
-DHCP6RELAY_TARGET := dhcp6relay
-DHCP6RELAY_TEST_TARGET := dhcp6relay-test
+BUILD_DIR := build
+BUILD_TEST_DIR := build-test
+DHCP6RELAY_TARGET := $(BUILD_DIR)/dhcp6relay
+DHCP6RELAY_TEST_TARGET := $(BUILD_TEST_DIR)/dhcp6relay-test
 CP := cp
 MKDIR := mkdir
 MV := mv
 FIND := find
 GCOVR := gcovr
-GCOV_FLAGS := -fprofile-use -fprofile-arcs -ftest-coverage -fprofile-generate
 override LDLIBS += -levent -lhiredis -lswsscommon -pthread -lboost_thread -lboost_system
-override LDLIBS_TEST += -lgtest_main -lgtest -pthread -lstdc++fs
 override CPPFLAGS += -Wall -std=c++17 -fPIE -I/usr/include/swss
 override CPPFLAGS += -MMD -MP -MF"$(@:%.o=%.d)" -MT"$(@)"
+CPPFLAGS_TEST := --coverage -fprofile-arcs -ftest-coverage -fprofile-generate
+LDLIBS_TEST := --coverage -lgtest_main -lgtest -pthread -lstdc++fs
 PWD := $(shell pwd)
 
-test-targets: CPP_FLAGS = -O0 -Wall -fmessage-length=0 -fPIC $(GCOV_FLAGS)
-
 all: $(DHCP6RELAY_TARGET) $(DHCP6RELAY_TEST_TARGET)
-
-ifneq ($(MAKECMDGOALS),clean)
--include $(OBJS:%.o=%.d)
-endif
 
 -include src/subdir.mk
 -include test/subdir.mk
 
+# Use different build directories based on whether it's a regular build or a
+# test build. This is because in the test build, code coverage is enabled,
+# which means the object files that get built will be different
+OBJS = $(SRCS:%.cpp=$(BUILD_DIR)/%.o)
+TEST_OBJS = $(SRCS:%.cpp=$(BUILD_TEST_DIR)/%.o)
+
+ifneq ($(MAKECMDGOALS),clean)
+-include $(OBJS:%.o=%.d)
+-include $(TEST_OBJS:%.o=%.d)
+endif
+
+$(BUILD_DIR)/%.o: %.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
+
 $(DHCP6RELAY_TARGET): $(OBJS)
 	$(CXX) $(LDFLAGS) $^ $(LDLIBS) -o $@
 
-$(DHCP6RELAY_TEST_TARGET): $(OBJS_DHCP6RELAY_TEST)
-	$(CC) -lgcov --coverage -o "$(DHCP6RELAY_TEST_TARGET)" $(CPP_FLAGS) $(OBJS_DHCP6RELAY_TEST) $(LDLIBS) $(LDLIBS_TEST)
+$(BUILD_TEST_DIR)/%.o: %.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(CPPFLAGS_TEST) -c -o $@ $<
+
+$(DHCP6RELAY_TEST_TARGET): $(TEST_OBJS)
+	$(CXX) $(LDFLAGS) $^ $(LDLIBS) $(LDLIBS_TEST) -o $@
+
+test: $(DHCP6RELAY_TEST_TARGET)
 	./$(DHCP6RELAY_TEST_TARGET)
 	$(GCOVR) -r ./ --html --html-details -o $(DHCP6RELAY_TEST_TARGET)-result.html
 	$(GCOVR) -r ./ --xml-pretty -o $(DHCP6RELAY_TEST_TARGET)-result.xml
 
+install: $(DHCP6RELAY_TARGET)
+	install -D $(DHCP6RELAY_TARGET) $(DESTDIR)/usr/sbin/$(notdir $(DHCP6RELAY_TARGET))
 
-install:
-	$(MKDIR) -p $(DESTDIR)/usr/sbin
-	$(MV) $(DHCP6RELAY_TARGET) $(DESTDIR)/usr/sbin
-
-deinstall:
-	$(RM) $(DESTDIR)/usr/sbin/$(DHCP6RELAY_TARGET)
-	$(RM) -rf $(DESTDIR)/usr/sbin
+uninstall:
+	$(RM) $(DESTDIR)/usr/sbin/$(notdir $(DHCP6RELAY_TARGET))
 
 clean:
-	-$(RM) $(EXECUTABLES) $(OBJS:%.o=%.d) $(OBJS) $(DHCP6RELAY_TARGET) $(DHCP6RELAY_TEST_TARGET) $(OBJS_DHCP6RELAY_TEST) *.html *.xml
+	-$(RM) $(BUILD_DIR) $(BUILD_TEST_DIR) *.html *.xml
 	$(FIND) . -name *.gcda -exec rm -f {} \;
 	$(FIND) . -name *.gcno -exec rm -f {} \;
 	$(FIND) . -name *.gcov -exec rm -f {} \;
 	-@echo ' '
 
-.PHONY: all clean dependents
-
-
+.PHONY: all clean test install uninstall

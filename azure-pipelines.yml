@@ -14,7 +14,7 @@ jobs:
     arch: amd64
     pool:
       vmImage: 'ubuntu-20.04'
-    codeCoverage: false
+    codeCoverage: true
     containerImage: sonicdev-microsoft.azurecr.io:443/sonic-slave-bullseye:latest
 - template: .azure-pipelines/build.yml
   parameters:

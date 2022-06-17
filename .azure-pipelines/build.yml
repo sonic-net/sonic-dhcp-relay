@@ -74,6 +74,6 @@ jobs:
   - ${{ if and(eq(parameters.arch, 'amd64'), parameters.codeCoverage) }}:
     - task: PublishCodeCoverageResults@1
       inputs:
-        summaryFileLocation: dhcprelay-test-result.xml
+        summaryFileLocation: dhcp6relay-test-result.xml
         pathToSources: $(Build.SourcesDirectory)
         codeCoverageTool: 'Cobertura'
