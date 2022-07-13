@@ -17,7 +17,7 @@ endif
 -include src/subdir.mk
 
 $(DHCP6RELAY_TARGET): $(OBJS)
-	$(CXX) $(LDFLAGS) $^ $(LDLIBS) -o $@
+	$(CXX) $(LDFLAGS) $^ $(LDLIBS) -o $
 
 install:
 	$(MKDIR) -p $(DESTDIR)/usr/sbin
