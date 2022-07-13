@@ -2,7 +2,6 @@ RM := rm -rf
 DHCP6RELAY_TARGET := dhcp6relay
 CP := cp
 MKDIR := mkdir
-CC := g++
 MV := mv
 override LDLIBS += -levent -lhiredis -lswsscommon -pthread -lboost_thread -lboost_system
 override CPPFLAGS += -Wall -std=c++17 -fPIE -I/usr/include/swss
@@ -18,7 +17,7 @@ endif
 -include src/subdir.mk
 
 $(DHCP6RELAY_TARGET): $(OBJS)
-	$(CC) $(LDFLAGS) $^ $(LDLIBS) -o $@
+	$(CXX) $(LDFLAGS) $^ $(LDLIBS) -o $
 
 install:
 	$(MKDIR) -p $(DESTDIR)/usr/sbin
