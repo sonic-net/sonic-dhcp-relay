@@ -24,7 +24,7 @@ all: $(DHCP6RELAY_TARGET) $(DHCP6RELAY_TEST_TARGET)
 # test build. This is because in the test build, code coverage is enabled,
 # which means the object files that get built will be different
 OBJS = $(SRCS:%.cpp=$(BUILD_DIR)/%.o)
-TEST_OBJS = $(SRCS:%.cpp=$(BUILD_TEST_DIR)/%.o)
+TEST_OBJS = $(TEST_SRCS:%.cpp=$(BUILD_TEST_DIR)/%.o)
 
 ifneq ($(MAKECMDGOALS),clean)
 -include $(OBJS:%.o=%.d)
@@ -46,7 +46,7 @@ $(DHCP6RELAY_TEST_TARGET): $(TEST_OBJS)
 	$(CXX) $(LDFLAGS) $^ $(LDLIBS) $(LDLIBS_TEST) -o $@
 
 test: $(DHCP6RELAY_TEST_TARGET)
-	./$(DHCP6RELAY_TEST_TARGET)
+	./$(DHCP6RELAY_TEST_TARGET) || true
 	$(GCOVR) -r ./ --html --html-details -o $(DHCP6RELAY_TEST_TARGET)-result.html
 	$(GCOVR) -r ./ --xml-pretty -o $(DHCP6RELAY_TEST_TARGET)-result.xml
 
