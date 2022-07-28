@@ -46,9 +46,9 @@ $(DHCP6RELAY_TEST_TARGET): $(TEST_OBJS)
 	$(CXX) $(LDFLAGS) $^ $(LDLIBS) $(LDLIBS_TEST) -o $@
 
 test: $(DHCP6RELAY_TEST_TARGET)
-	./$(DHCP6RELAY_TEST_TARGET) || true
-	$(GCOVR) -r ./ --html --html-details -o $(DHCP6RELAY_TEST_TARGET)-result.html
-	$(GCOVR) -r ./ --xml-pretty -o $(DHCP6RELAY_TEST_TARGET)-result.xml
+	./$(DHCP6RELAY_TEST_TARGET) --gtest_output=xml:$(DHCP6RELAY_TEST_TARGET)-test-result.xml || true
+	$(GCOVR) -r ./ --html --html-details -o $(DHCP6RELAY_TEST_TARGET)-code-coverage.html
+	$(GCOVR) -r ./ --xml-pretty -o $(DHCP6RELAY_TEST_TARGET)-code-coverage.xml
 
 install: $(DHCP6RELAY_TARGET)
 	install -D $(DHCP6RELAY_TARGET) $(DESTDIR)/usr/sbin/$(notdir $(DHCP6RELAY_TARGET))
