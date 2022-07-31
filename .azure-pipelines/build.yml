@@ -42,6 +42,7 @@ jobs:
           libnl-genl-3-dev \
           libnl-nf-3-dev \
           redis-server
+      sudo service redis-server start
 
     displayName: "Install dependencies"
   - checkout: self
