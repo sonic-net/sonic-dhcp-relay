@@ -687,8 +687,3 @@ TEST(relay, dhcp6relay_stop) {
   event_new(base, filter, EV_READ|EV_PERSIST, callback, &config);
   dhcp6relay_stop();
 }
-
-int main_test(int argc, char *argv[]) {
-  ::testing::InitGoogleTest(&argc, argv);
-  return RUN_ALL_TESTS();
-}

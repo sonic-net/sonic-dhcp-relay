@@ -12,7 +12,7 @@ override LDLIBS += -levent -lhiredis -lswsscommon -pthread -lboost_thread -lboos
 override CPPFLAGS += -Wall -std=c++17 -fPIE -I/usr/include/swss
 override CPPFLAGS += -MMD -MP -MF"$(@:%.o=%.d)" -MT"$(@)"
 CPPFLAGS_TEST := --coverage -fprofile-arcs -ftest-coverage -fprofile-generate
-LDLIBS_TEST := --coverage -lgtest_main -lgtest -pthread -lstdc++fs
+LDLIBS_TEST := --coverage -lgtest -pthread -lstdc++fs
 PWD := $(shell pwd)
 
 all: $(DHCP6RELAY_TARGET) $(DHCP6RELAY_TEST_TARGET)
