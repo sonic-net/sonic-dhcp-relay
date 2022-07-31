@@ -205,10 +205,10 @@ TEST(parsePacket, relay_forward)
 TEST(sock, sock_open)
 { 
   sock_fprog ether_relay_fprog = {0,{}};
-  int index = NULL;
+  int index = 0;
   if (!index) {
-                errno = EINVAL;
-        }
+      errno = EINVAL;
+  }
   EXPECT_EQ(errno, EINVAL);
   openSockCount++;
   int filter = sock_open(index, &ether_relay_fprog);
@@ -241,8 +241,7 @@ TEST(helper, send_udp)
 
 TEST(prepareConfig, prepare_relay_config)
 {
-  struct relay_config config;
-  memset(&config, 0, sizeof(config));
+  struct relay_config config{};
   config.is_option_79 = true;
 
   config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x01;
@@ -329,8 +328,7 @@ TEST(relay, relay_client) {
     };
     int32_t msg_len = sizeof(msg);
 
-    struct relay_config config;
-    memset(&config, 0, sizeof(config));
+    struct relay_config config{};
     config.is_option_79 = true;
     std::vector<std::string> servers;
     servers.push_back("fc02:2000::1");
@@ -426,8 +424,7 @@ TEST(relay, relay_relay_forw) {
     int32_t msg_len = sizeof(msg);
     
 
-    relay_config config;
-    memset(&config, 0, sizeof(config));
+    relay_config config{};
     config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x02;
     std::vector<std::string> servers;
     servers.push_back("fc02:2000::1");
@@ -540,8 +537,7 @@ TEST(relay, relay_relay_reply) {
     }; 
     int32_t msg_len = sizeof(msg);
 
-    struct relay_config config;
-    memset(&config, 0, sizeof(config));
+    struct relay_config config{};
     config.is_option_79 = true;
 
     config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x01;
@@ -629,8 +625,7 @@ TEST(relay, callback) {
     evutil_socket_t fd = 1;
     short event = 1;
 
-    struct relay_config config;
-    memset(&config, 0, sizeof(config));
+    struct relay_config config{};
     config.is_option_79 = true;
 
     config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x01;
@@ -686,8 +681,7 @@ TEST(relay, signal_callback) {
 
 TEST(relay, dhcp6relay_stop) {
   int filter = 1;
-  struct relay_config config;
-  memset(&config, 0, sizeof(config));
+  struct relay_config config{};
   struct event_base *base = event_base_new();
   struct event *mock_event;
   event_new(base, filter, EV_READ|EV_PERSIST, callback, &config);
