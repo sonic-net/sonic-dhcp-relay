@@ -32,5 +32,3 @@ clean:
 	-@echo ' '
 
 .PHONY: all clean dependents
-
-
