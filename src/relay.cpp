@@ -472,7 +472,7 @@ void relay_client(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *ip_h
         option79.option_code = htons(OPTION_CLIENT_LINKLAYER_ADDR);
         option79.option_length = htons(2 + 6); // link_layer_type field + address
 
-        if current_buffer_position + sizeof(linklayer_addr_option) > size(buffer) {
+        if ((unsigned)(current_buffer_position + sizeof(linklayer_addr_option) - buffer) > sizeof(buffer)) {
             return;
         }
         memcpy(current_buffer_position, &option79, sizeof(linklayer_addr_option));
@@ -488,7 +488,7 @@ void relay_client(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *ip_h
         intf_id.option_length = htons(sizeof(in6_addr));
         intf_id.interface_id = config->link_address.sin6_addr;
 
-        if current_buffer_position + sizeof(interface_id_option) > size(buffer) {
+        if ((unsigned)(current_buffer_position + sizeof(linklayer_addr_option) - buffer) > sizeof(buffer)) {
             return;
         }
         memcpy(current_buffer_position, &intf_id, sizeof(interface_id_option));
