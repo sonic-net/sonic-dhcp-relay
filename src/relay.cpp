@@ -853,12 +853,12 @@ void loop_relay(std::vector<relay_config> *vlans) {
 
         event_add(listen_event, NULL);
         event_add(server_listen_event, NULL);
-        
-        if((signal_init() == 0) && signal_start() == 0) {
-            shutdown();
-            for(std::size_t i = 0; i<sockets.size(); i++) {
-                close(sockets.at(i));
-            }
+    }
+
+    if((signal_init() == 0) && signal_start() == 0) {
+        shutdown();
+        for(std::size_t i = 0; i<sockets.size(); i++) {
+            close(sockets.at(i));
         }
     }
 }
