@@ -579,23 +579,114 @@ void relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *
 } 
 
 /**
- * @code                callback_dual(evutil_socket_t fd, short event, void *arg);
- * 
- * @brief               callback for libevent that is called everytime data is received at the filter socket with dual tor option enabled
+ * @code                callback(evutil_socket_t fd, short event, void *arg);
+ *
+ * @brief               callback for libevent that is called everytime data is received at the filter socket
  *
  * @param fd            filter socket
- * @param event         libevent triggered event  
+ * @param event         libevent triggered event
  * @param arg           callback argument provided by user
  *
  * @return              none
  */
 void callback(evutil_socket_t fd, short event, void *arg) {
     struct relay_config *config = (struct relay_config *)arg;
+    static uint8_t message_buffer[4096];
+    std::string counterVlan = counter_table;
+    int32_t len = recv(config->filter, message_buffer, 4096, 0);
+    if (len <= 0) {
+        syslog(LOG_WARNING, "recv: Failed to receive data at filter socket: %s\n", strerror(errno));
+        return;
+    }
+
+    char* ptr = (char *)message_buffer;
+    const uint8_t *current_position = (uint8_t *)ptr;
+    const uint8_t *tmp = NULL;
+    const uint8_t *prev = NULL;
+
+    auto ether_header = parse_ether_frame(current_position, &tmp);
+    current_position = tmp;
+
+    auto ip_header = parse_ip6_hdr(current_position, &tmp);
+    current_position = tmp;
+
+    prev = current_position;
+    if (ip_header->ip6_ctlun.ip6_un1.ip6_un1_nxt != IPPROTO_UDP) {
+        const struct ip6_ext *ext_header;
+        do {
+            ext_header = (const struct ip6_ext *)current_position;
+            current_position += ext_header->ip6e_len;
+            if((current_position == prev) || (current_position >= (uint8_t *)ptr + sizeof(message_buffer))) {
+                return;
+            }
+            prev = current_position;
+        }
+        while (ext_header->ip6e_nxt != IPPROTO_UDP);
+    }
+
+    auto udp_header = parse_udp(current_position, &tmp);
+    current_position = tmp;
+
+    auto msg = parse_dhcpv6_hdr(current_position);
+    auto option_position = current_position + sizeof(struct dhcpv6_msg);
+
+    switch (msg->msg_type) {
+        case DHCPv6_MESSAGE_TYPE_RELAY_FORW:
+        {
+            relay_relay_forw(config->local_sock, current_position, ntohs(udp_header->len) - sizeof(udphdr), ip_header, config);
+            break;
+        }
+        case DHCPv6_MESSAGE_TYPE_SOLICIT:
+        case DHCPv6_MESSAGE_TYPE_REQUEST:
+        case DHCPv6_MESSAGE_TYPE_CONFIRM:
+        case DHCPv6_MESSAGE_TYPE_RENEW:
+        case DHCPv6_MESSAGE_TYPE_REBIND:
+        case DHCPv6_MESSAGE_TYPE_RELEASE:
+        case DHCPv6_MESSAGE_TYPE_DECLINE:
+        case DHCPv6_MESSAGE_TYPE_INFORMATION_REQUEST:
+        {
+            while (option_position - message_buffer < len) {
+                auto option = parse_dhcpv6_opt(option_position, &tmp);
+                option_position = tmp;
+                if (ntohs(option->option_code) > DHCPv6_OPTION_LIMIT) {
+                    counters[DHCPv6_MESSAGE_TYPE_MALFORMED]++;
+                    update_counter(config->state_db, counterVlan.append(config->interface), DHCPv6_MESSAGE_TYPE_MALFORMED);
+                    syslog(LOG_WARNING, "DHCPv6 option is invalid or contains malformed payload\n");
+                    return;
+                }
+            }
+            counters[msg->msg_type]++;
+            update_counter(config->state_db, counterVlan.append(config->interface), msg->msg_type);
+            relay_client(config->local_sock, current_position, ntohs(udp_header->len) - sizeof(udphdr), ip_header, ether_header, config);
+            break;
+        }
+        default:
+        {
+            syslog(LOG_WARNING, "DHCPv6 client message received was not relayed\n");
+            break;
+        }
+    }
+}
+
+/**
+ * @code                callback_dual_tor(evutil_socket_t fd, short event, void *arg);
+ *
+ * @brief               callback for libevent that is called everytime data is received at the filter socket with dual tor option enabled
+ *
+ * @param fd            filter socket
+ * @param event         libevent triggered event
+ * @param arg           callback argument provided by user
+ *
+ * @return              none
+ */
+void callback_dual_tor(evutil_socket_t fd, short event, void *arg) {
+    struct relay_config *config = (struct relay_config *)arg;
     struct sockaddr_ll sll;
     socklen_t slen = sizeof sll;
 
     static uint8_t message_buffer[4096];
     std::string counterVlan = counter_table;
+    std::string key = config->mux_key;
 
     ssize_t buffer_sz = recvfrom(config->filter, message_buffer, 4096, 0, (struct sockaddr *)&sll, &slen);
     if (buffer_sz <= 0) {
@@ -608,7 +699,7 @@ void callback(evutil_socket_t fd, short event, void *arg) {
     std::string intf(interface);
     db.muxTable->hget(intf, "state", state);
 
-    if (state != "standby" && db.config_db->exists(config->mux_key.append(intf))) {
+    if (state != "standby" && db.config_db->exists(key.append(intf))) {
         char* ptr = (char *)message_buffer;
         const uint8_t *current_position = (uint8_t *)ptr;
         const uint8_t *tmp = NULL;
@@ -691,6 +782,37 @@ void callback(evutil_socket_t fd, short event, void *arg) {
  * @return              none
  */
 void server_callback(evutil_socket_t fd, short event, void *arg) {
+    struct relay_config *config = (struct relay_config *)arg;
+    sockaddr_in6 from;
+    socklen_t len = sizeof(from);
+    int32_t data = 0;
+    static uint8_t message_buffer[4096];
+
+    if ((data = recvfrom(config->local_sock, message_buffer, 4096, 0, (sockaddr *)&from, &len)) == -1) {
+        syslog(LOG_WARNING, "recv: Failed to receive data from server\n");
+    }
+
+    auto msg = parse_dhcpv6_hdr(message_buffer);
+    counters[msg->msg_type]++;
+    std::string counterVlan = counter_table;
+    update_counter(config->state_db, counterVlan.append(config->interface), msg->msg_type);
+    if (msg->msg_type == DHCPv6_MESSAGE_TYPE_RELAY_REPL) {
+        relay_relay_reply(config->server_sock, message_buffer, data, config);
+    }
+}
+
+/**
+ * @code                void server_callback_dual_tor(evutil_socket_t fd, short event, void *arg);
+ * 
+ * @brief               callback for libevent that is called everytime data is received at the server socket
+ *
+ * @param fd            filter socket
+ * @param event         libevent triggered event  
+ * @param arg           callback argument provided by user
+ *
+ * @return              none
+ */
+void server_callback_dual_tor(evutil_socket_t fd, short event, void *arg) {
     struct relay_config *config = (struct relay_config *)arg;
     sockaddr_in6 from;
     socklen_t len = sizeof(from);
@@ -844,8 +966,14 @@ void loop_relay(std::vector<relay_config> *vlans) {
         evutil_make_listen_socket_reuseable(local_sock);
         evutil_make_socket_nonblocking(local_sock);
     
-        listen_event = event_new(base, filter, EV_READ|EV_PERSIST, callback, config);
-        server_listen_event = event_new(base, local_sock, EV_READ|EV_PERSIST, server_callback, config);
+        if (dual_tor_sock) {
+            listen_event = event_new(base, filter, EV_READ|EV_PERSIST, callback_dual_tor, config);
+            server_listen_event = event_new(base, local_sock, EV_READ|EV_PERSIST, server_callback_dual_tor, config);
+        }
+        else {
+            listen_event = event_new(base, filter, EV_READ|EV_PERSIST, callback, config);
+            server_listen_event = event_new(base, local_sock, EV_READ|EV_PERSIST, server_callback, config);
+        }
 
         if (listen_event == NULL || server_listen_event == NULL) {
             syslog(LOG_ERR, "libevent: Failed to create libevent\n");
