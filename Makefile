@@ -11,8 +11,8 @@ GCOVR := gcovr
 override LDLIBS += -levent -lhiredis -lswsscommon -pthread -lboost_thread -lboost_system
 override CPPFLAGS += -Wall -std=c++17 -fPIE -I/usr/include/swss
 override CPPFLAGS += -MMD -MP -MF"$(@:%.o=%.d)" -MT"$(@)"
-CPPFLAGS_TEST := --coverage -fprofile-arcs -ftest-coverage -fprofile-generate
-LDLIBS_TEST := --coverage -lgtest -pthread -lstdc++fs
+CPPFLAGS_TEST := --coverage -fprofile-arcs -ftest-coverage -fprofile-generate -fsanitize=address
+LDLIBS_TEST := --coverage -lgtest -pthread -lstdc++fs -fsanitize=address
 PWD := $(shell pwd)
 
 all: $(DHCP6RELAY_TARGET) $(DHCP6RELAY_TEST_TARGET)
@@ -46,7 +46,7 @@ $(DHCP6RELAY_TEST_TARGET): $(TEST_OBJS)
 	$(CXX) $(LDFLAGS) $^ $(LDLIBS) $(LDLIBS_TEST) -o $@
 
 test: $(DHCP6RELAY_TEST_TARGET)
-	./$(DHCP6RELAY_TEST_TARGET) --gtest_output=xml:$(DHCP6RELAY_TEST_TARGET)-test-result.xml || true
+	sudo ASAN_OPTIONS=detect_leaks=0 ./$(DHCP6RELAY_TEST_TARGET) --gtest_output=xml:$(DHCP6RELAY_TEST_TARGET)-test-result.xml || true
 	$(GCOVR) -r ./ --html --html-details -o $(DHCP6RELAY_TEST_TARGET)-code-coverage.html
 	$(GCOVR) -r ./ --xml-pretty -o $(DHCP6RELAY_TEST_TARGET)-code-coverage.xml
 

@@ -8,8 +8,9 @@
 
 #include "MockRelay.h"
 
-uint32_t openSockCount = 0;
-uint32_t prepareSockCount = 0;
+extern struct event_base *base;
+extern struct event *ev_sigint;
+extern struct event *ev_sigterm;
 
 static struct sock_filter ether_relay_filter[] = {
 
@@ -204,24 +205,66 @@ TEST(parsePacket, relay_forward)
 
 TEST(sock, sock_open)
 { 
-  sock_fprog ether_relay_fprog = {0,{}};
-  int index = 0;
-  if (!index) {
-      errno = EINVAL;
-  }
-  EXPECT_EQ(errno, EINVAL);
-  openSockCount++;
-  int filter = sock_open(index, &ether_relay_fprog);
-  EXPECT_EQ(1, openSockCount);
+  struct sock_filter ether_relay_filter[] = {
+      { 0x6, 0, 0, 0x00040000 },
+  };
+  const struct sock_fprog ether_relay_fprog = {
+      lengthof(ether_relay_filter),
+      ether_relay_filter
+  };
+  int index = if_nametoindex("lo");
+  EXPECT_GE(sock_open(index, &ether_relay_fprog), 0);
+}
+
+TEST(sock, sock_open_invalid_filter)
+{
+  const struct sock_fprog ether_relay_fprog = {0,{}};
+  int index = if_nametoindex("lo");
+  EXPECT_EQ(sock_open(index, &ether_relay_fprog), -1);
+}
+
+TEST(sock, sock_open_invalid_ifindex_zero)
+{
+  struct sock_filter ether_relay_filter[] = {
+      { 0x6, 0, 0, 0x00040000 },
+  };
+  const struct sock_fprog ether_relay_fprog = {
+      lengthof(ether_relay_filter),
+      ether_relay_filter
+  };
+  EXPECT_EQ(sock_open(0, &ether_relay_fprog), -1);
+}
+
+TEST(sock, sock_open_invalid_ifindex)
+{
+  struct sock_filter ether_relay_filter[] = {
+      { 0x6, 0, 0, 0x00040000 },
+  };
+  const struct sock_fprog ether_relay_fprog = {
+      lengthof(ether_relay_filter),
+      ether_relay_filter
+  };
+  EXPECT_EQ(sock_open(42384239, &ether_relay_fprog), -1);
 }
 
 TEST(sock, prepare_socket)
 {
   relay_config *config = new struct relay_config;;
-  int local_sock, server_sock, index = 1;
-  prepareSockCount++;
+  int local_sock = -1, server_sock = -1, index = 1;
+  int socket_type = -1;
+  socklen_t socket_type_len = sizeof(socket_type);
   prepare_socket(&local_sock, &server_sock, config, index);
-  EXPECT_EQ(1, prepareSockCount);
+  EXPECT_GE(local_sock, 0);
+  EXPECT_GE(server_sock, 0);
+  EXPECT_EQ(0, getsockopt(local_sock, SOL_SOCKET, SO_TYPE, &socket_type, &socket_type_len));
+  EXPECT_EQ(SOCK_DGRAM, socket_type);
+  socket_type = -1;
+  socket_type_len = sizeof(socket_type);
+  EXPECT_EQ(0, getsockopt(server_sock, SOL_SOCKET, SO_TYPE, &socket_type, &socket_type_len));
+  EXPECT_EQ(SOCK_DGRAM, socket_type);
+  close(local_sock);
+  close(server_sock);
+  delete config;
 }
 
 TEST(helper, send_udp)
@@ -597,30 +640,6 @@ TEST(relay, relay_relay_reply) {
 }
 
 TEST(relay, callback) {
-      static struct sock_filter ether_relay_filter[] = {
-	
-      { 0x28, 0, 0, 0x0000000c },
-      { 0x15, 0, 13, 0x000086dd },
-      { 0x20, 0, 0, 0x00000026 },
-      { 0x15, 0, 11, 0xff020000 },
-      { 0x20, 0, 0, 0x0000002a },
-      { 0x15, 0, 9, 0x00000000 },
-      { 0x20, 0, 0, 0x0000002e },
-      { 0x15, 0, 7, 0x00000000 },
-      { 0x20, 0, 0, 0x00000032 },
-      { 0x15, 0, 5, 0x00010002 },
-      { 0x30, 0, 0, 0x00000014 },
-      { 0x15, 0, 3, 0x00000011 },
-      { 0x28, 0, 0, 0x00000038 },
-      { 0x15, 0, 1, 0x00000223 },
-      { 0x6, 0, 0, 0x00040000 },
-      { 0x6, 0, 0, 0x00000000 },
-    };
-    const struct sock_fprog ether_relay_fprog = {
-      lengthof(ether_relay_filter),
-      ether_relay_filter
-    };
-
     int mock_sock = 123;
     evutil_socket_t fd = 1;
     short event = 1;
@@ -650,40 +669,38 @@ TEST(relay, callback) {
 
     int local_sock = 1;
     int filter = 1;
-    int index = 1;
-    filter = sock_open(index, &ether_relay_fprog);
+    int index = if_nametoindex("lo");
+    config.filter = sock_open(index, &ether_relay_fprog);
+    EXPECT_GE(config.filter, 0);
     prepare_relay_config(&config, &local_sock, filter);
 
     callback(fd, event, &config);
 }
 
 TEST(relay, signal_init) {
-  struct event_base *base;
-  struct event *ev_sigint = NULL;
-  struct event *ev_sigterm;
   signal_init();
+  EXPECT_NE((uintptr_t)ev_sigint, NULL);
+  EXPECT_NE((uintptr_t)ev_sigterm, NULL);
 }
 
 TEST(relay, signal_start) {
-  struct event_base *base = event_base_new();;
-  struct event *ev_sigint;
-  struct event *ev_sigterm;
   signal_init();
+  EXPECT_NE((uintptr_t)ev_sigint, NULL);
+  EXPECT_NE((uintptr_t)ev_sigterm, NULL);
   signal_start();
 }
 
 TEST(relay, signal_callback) {
-  struct event_base *base = event_base_new();;
-  struct event *ev_sigint;
-  struct event *ev_sigterm;
   signal_callback(1, 1, &base);
 }
 
 TEST(relay, dhcp6relay_stop) {
   int filter = 1;
   struct relay_config config{};
-  struct event_base *base = event_base_new();
-  struct event *mock_event;
-  event_new(base, filter, EV_READ|EV_PERSIST, callback, &config);
+  base = event_base_new();
+  struct event* event = event_new(base, filter, EV_READ|EV_PERSIST, callback, &config);
   dhcp6relay_stop();
+  event_free(event);
+  event_base_free(base);
+  base = NULL;
 }
