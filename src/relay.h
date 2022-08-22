@@ -188,7 +188,7 @@ void relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *
 void relay_relay_reply(int sock, const uint8_t *msg, int32_t len, relay_config *configs);
 
 /**
- * @code                loop_relay(std::vector<arg_config> *vlans, std::shared_ptr<swss::DBConnector> state_db;
+ * @code                loop_relay(std::vector<arg_config> *vlans);
  * 
  * @brief               main loop: configure sockets, create libevent base, start server listener thread
  *  
