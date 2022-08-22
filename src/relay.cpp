@@ -1,3 +1,5 @@
+#define __STDC_WANT_LIB_EXT1__ 1
+#include <string.h>
 #include <errno.h>
 #include <unistd.h>
 #include <event.h>
@@ -381,8 +383,13 @@ void prepare_socket(int *local_sock, int *server_sock, relay_config *config, int
     struct ifaddrs *ifa, *ifa_tmp;
     sockaddr_in6 addr;
     sockaddr_in6 ll_addr;
+#ifdef __STDC_LIB_EXT1__
+    memset_s(&addr, sizeof(addr), 0, sizeof(addr));
+    memset_s(&ll_addr, sizeof(ll_addr), 0, sizeof(ll_addr));
+#else
     memset(&addr, 0, sizeof(addr));
     memset(&ll_addr, 0, sizeof(ll_addr));
+#endif
 
     if ((*local_sock = socket(AF_INET6, SOCK_DGRAM, 0)) == -1) {
         syslog(LOG_ERR, "socket: Failed to create socket on interface %s\n", config->interface.c_str());
@@ -514,7 +521,11 @@ void relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *
     memcpy(&new_message.peer_address, &ip_hdr->ip6_src, sizeof(in6_addr));
     new_message.hop_count = dhcp_relay_header->hop_count + 1;
 
+#ifdef __STDC_LIB_EXT1__
+    memset_s(&new_message.link_address, sizeof(new_message.link_address), 0, sizeof(in6_addr));
+#else
     memset(&new_message.link_address, 0, sizeof(in6_addr));
+#endif
 
     memcpy(current_buffer_position, &new_message, sizeof(dhcpv6_relay_msg));
     current_buffer_position += sizeof(dhcpv6_relay_msg);
