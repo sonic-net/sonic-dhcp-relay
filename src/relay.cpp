@@ -27,8 +27,7 @@ struct database redis_db;
 /* sudo tcpdump -dd "inbound and ip6 dst ff02::1:2 && udp dst port 547" */
 
 static struct sock_filter ether_relay_filter[] = {
-	
-	{ 0x28, 0, 0, 0xfffff004 },
+    { 0x28, 0, 0, 0xfffff004 },
     { 0x15, 15, 0, 0x00000004 },
     { 0x28, 0, 0, 0x0000000c },
     { 0x15, 0, 13, 0x000086dd },

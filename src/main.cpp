@@ -7,7 +7,7 @@ bool dual_tor_sock = false;
 static void usage()
 {
     printf("Usage: ./dhcp6relay {-d}\n");
-    printf("\t-u: enable dual tor option\n");
+    printf("\t-d: enable dual tor option\n");
 }
 
 int main(int argc, char *argv[]) {
