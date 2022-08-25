@@ -1,5 +1,3 @@
-#define __STDC_WANT_LIB_EXT1__ 1
-#include <string.h>
 #include <errno.h>
 #include <unistd.h>
 #include <event.h>
@@ -514,11 +512,7 @@ void relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *
     memcpy(&new_message.peer_address, &ip_hdr->ip6_src, sizeof(in6_addr));
     new_message.hop_count = dhcp_relay_header->hop_count + 1;
 
-#ifdef __STDC_LIB_EXT1__
-    memset_s(&new_message.link_address, sizeof(new_message.link_address), 0, sizeof(in6_addr));
-#else
     memset(&new_message.link_address, 0, sizeof(in6_addr));
-#endif
 
     memcpy(current_buffer_position, &new_message, sizeof(dhcpv6_relay_msg));
     current_buffer_position += sizeof(dhcpv6_relay_msg);
