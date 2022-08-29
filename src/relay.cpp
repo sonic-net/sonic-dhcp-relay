@@ -379,10 +379,8 @@ void prepare_relay_config(relay_config *interface_config, int *local_sock, int f
  */
 void prepare_socket(int *local_sock, int *server_sock, relay_config *config, int index) {
     struct ifaddrs *ifa, *ifa_tmp;
-    sockaddr_in6 addr;
-    sockaddr_in6 ll_addr;
-    memset(&addr, 0, sizeof(addr));
-    memset(&ll_addr, 0, sizeof(ll_addr));
+    sockaddr_in6 addr = {0};
+    sockaddr_in6 ll_addr = {0};
 
     if ((*local_sock = socket(AF_INET6, SOCK_DGRAM, 0)) == -1) {
         syslog(LOG_ERR, "socket: Failed to create socket on interface %s\n", config->interface.c_str());
