@@ -118,6 +118,7 @@ void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries,
 
         relay_config intf;
         intf.is_option_79 = true;
+        intf.is_interface_id = false;
         intf.interface = vlan;
         intf.db = nullptr;
         for (auto &fieldValue: fieldValues) {
@@ -134,6 +135,9 @@ void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries,
             }
             if(f == "dhcpv6_option|rfc6939_support" && v == "false") {
                 intf.is_option_79 = false;
+            }
+            if(f == "dhcpv6_option|interface_id" && v == "true") { // interface-id is off by default on non-Dual-ToR, unless specified in config db
+                intf.is_interface_id = true;
             }
         }
         vlans->push_back(intf);

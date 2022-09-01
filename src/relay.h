@@ -21,6 +21,7 @@
 #define lengthof(A) (sizeof (A) / sizeof (A)[0])
 
 #define OPTION_RELAY_MSG 9
+#define OPTION_INTERFACE_ID 18
 #define OPTION_CLIENT_LINKLAYER_ADDR 79
 
 /* DHCPv6 message types */
@@ -55,6 +56,7 @@ struct relay_config {
     std::vector<std::string> servers;
     std::vector<sockaddr_in6> servers_sock;
     bool is_option_79;
+    bool is_interface_id;
 };
 
 
@@ -82,6 +84,12 @@ struct linklayer_addr_option  {
     uint16_t option_code;
     uint16_t option_length;
     uint16_t link_layer_type;
+};
+
+struct interface_id_option  {
+    uint16_t option_code;
+    uint16_t option_length;
+    in6_addr interface_id;  // to accomodate dual-tor, this opaque value is set to carry relay interface's global ipv6 address
 };
 
 /**

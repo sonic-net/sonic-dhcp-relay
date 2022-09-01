@@ -469,12 +469,28 @@ void relay_client(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *ip_h
         option79.link_layer_type = htons(1);
         option79.option_code = htons(OPTION_CLIENT_LINKLAYER_ADDR);
         option79.option_length = htons(2 + 6); // link_layer_type field + address
-        
+
+        if ((unsigned)(current_buffer_position + sizeof(linklayer_addr_option) - buffer) > sizeof(buffer)) {
+            return;
+        }
         memcpy(current_buffer_position, &option79, sizeof(linklayer_addr_option));
         current_buffer_position += sizeof(linklayer_addr_option);
 
         memcpy(current_buffer_position, &ether_hdr->ether_shost, sizeof(ether_hdr->ether_shost));
         current_buffer_position += sizeof(ether_hdr->ether_shost);
+    }
+
+    if(config->is_interface_id) {
+        interface_id_option intf_id;
+        intf_id.option_code = htons(OPTION_INTERFACE_ID);
+        intf_id.option_length = htons(sizeof(in6_addr));
+        intf_id.interface_id = config->link_address.sin6_addr;
+
+        if ((unsigned)(current_buffer_position + sizeof(linklayer_addr_option) - buffer) > sizeof(buffer)) {
+            return;
+        }
+        memcpy(current_buffer_position, &intf_id, sizeof(interface_id_option));
+        current_buffer_position += sizeof(interface_id_option);
     }
 
     auto dhcp_message_length = len;
