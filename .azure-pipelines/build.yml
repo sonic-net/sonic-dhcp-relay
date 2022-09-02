@@ -31,9 +31,9 @@ jobs:
       displayName: install .Net
   - script: |
       sudo apt-get install -y \
-          libboost-system-dev \
-          libboost-thread-dev \
-          libboost-serialization-dev \
+          libboost-system1.71-dev \
+          libboost-thread1.71-dev \
+          libboost-serialization1.71-dev \
           googletest \
           libgtest-dev \
           libgmock-dev \
