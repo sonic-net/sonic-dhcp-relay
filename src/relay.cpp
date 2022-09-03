@@ -692,10 +692,11 @@ void callback_dual_tor(evutil_socket_t fd, short event, void *arg) {
         syslog(LOG_WARNING, "recv: Failed to receive data at filter socket: %s\n", strerror(errno));
         return;
     }
-    char interfaceName;
-  	char *interface = if_indextoname(sll.sll_ifindex, &interfaceName);
+    char interfaceName[IF_NAMESIZE];
+    if (if_indextoname(sll.sll_ifindex, interfaceName) == NULL)
+		return;
     std::string state;
-    std::string intf(interface);
+    std::string intf(interfaceName);
     redis_db.muxTable->hget(intf, "state", state);
 
     if (state != "standby" && redis_db.config_db->exists(key.append(intf))) {
