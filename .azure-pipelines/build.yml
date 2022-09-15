@@ -53,7 +53,7 @@ jobs:
       project: build
       pipeline: Azure.sonic-buildimage.common_libs
       runVersion: 'latestFromBranch'
-      runBranch: 'refs/heads/$(BUILD_BRANCH)'
+      runBranch: 'refs/heads/master'
       path: $(Build.ArtifactStagingDirectory)/download
       ${{ if eq(parameters.arch, 'amd64') }}:
         artifact: common-lib
