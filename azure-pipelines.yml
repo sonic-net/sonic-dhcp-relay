@@ -15,4 +15,4 @@ jobs:
     pool:
       vmImage: 'ubuntu-20.04'
     codeCoverage: false
-    containerImage: sonicdev-microsoft.azurecr.io:443/${{ parameters.sonic_slave }}:latest
+    containerImage: sonicdev-microsoft.azurecr.io:443/sonic-slave-stretch:latest
