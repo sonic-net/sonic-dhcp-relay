@@ -6,8 +6,9 @@ int main(int argc, char *argv[]) {
     try {
         std::vector<relay_config> vlans;
         swss::DBConnector state_db("STATE_DB", 0);
+        swss::RedisClient m_stateDbRedisClient(&state_db);
         initialize_swss(&vlans);
-        loop_relay(&vlans, &state_db);
+        loop_relay(&vlans, &m_stateDbRedisClient);
     }
     catch (std::exception &e)
     {

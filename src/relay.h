@@ -10,6 +10,7 @@
 #include <vector>
 #include <event2/util.h>
 
+#include "redisclient.h"
 
 #define PACKED __attribute__ ((packed))
 
@@ -51,7 +52,7 @@ struct relay_config {
     int server_sock;
     int filter;
     sockaddr_in6 link_address;
-    swss::DBConnector *db;
+    swss::RedisClient *db;
     std::string interface;
     std::vector<std::string> servers;
     std::vector<sockaddr_in6> servers_sock;
@@ -189,14 +190,14 @@ void relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *
 void relay_relay_reply(int sock, const uint8_t *msg, int32_t len, relay_config *configs);
 
 /**
- * @code                loop_relay(std::vector<arg_config> *vlans, swss::DBConnector *db);
+ * @code                loop_relay(std::vector<arg_config> *vlans, swss::RedisClient *db);
  * 
  * @brief               main loop: configure sockets, create libevent base, start server listener thread
  *  
  * @param vlans         list of vlans retrieved from config_db
  * @param db            state_db connector
  */
-void loop_relay(std::vector<relay_config> *vlans, swss::DBConnector *db);
+void loop_relay(std::vector<relay_config> *vlans, swss::RedisClient *db);
 
 /**
  * @code signal_init();
@@ -240,29 +241,29 @@ void signal_callback(evutil_socket_t fd, short event, void *arg);
 void shutdown();
 
 /**
- * @code                void initialize_counter(swss::DBConnector *db, std::string counterVlan);
+ * @code                void initialize_counter(swss::RedisClient *db, std::string counterVlan);
  *
  * @brief               initialize the counter by each Vlan
  *
- * @param swss::DBConnector *db     state_db connector
+ * @param swss::RedisClient *db     state_db connector
  * @param counterVlan   counter table with interface name
  * 
  * @return              none
  */
-void initialize_counter(swss::DBConnector *db, std::string counterVlan);
+void initialize_counter(swss::RedisClient *db, std::string counterVlan);
 
 /**
- * @code                void update_counter(swss::DBConnector *db, std::string CounterVlan, uint8_t msg_type);
+ * @code                void update_counter(swss::RedisClient *db, std::string CounterVlan, uint8_t msg_type);
  *
  * @brief               update the counter in state_db with count of each DHCPv6 message type
  *
- * @param swss::DBConnector *db     state_db connector
+ * @param swss::RedisClient *db     state_db connector
  * @param counterVlan   counter table with interface name
  * @param msg_type      dhcpv6 message type to be updated in counter
  * 
  * @return              none
  */
-void update_counter(swss::DBConnector *db, std::string counterVlan, uint8_t msg_type);
+void update_counter(swss::RedisClient *db, std::string counterVlan, uint8_t msg_type);
 
 /* Helper functions */
 
