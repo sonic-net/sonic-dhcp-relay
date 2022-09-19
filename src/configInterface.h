@@ -57,7 +57,7 @@ void handleSwssNotification(swssNotification test);
  *
  * @return                  none
  */
-void handleRelayNotification(swss::SubscriberStateTable &configMuxTable, std::vector<relay_config> *vlans);
+void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::vector<relay_config> *vlans);
 
 /**
  * @code                    void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries, std::vector<relay_config> *vlans)

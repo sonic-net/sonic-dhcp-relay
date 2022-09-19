@@ -122,6 +122,8 @@ void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries,
         intf.is_option_79 = true;
         intf.is_interface_id = false;
         intf.interface = vlan;
+        intf.mux_key = "";
+        intf.state_db = nullptr;
         for (auto &fieldValue: fieldValues) {
             std::string f = fvField(fieldValue);
             std::string v = fvValue(fieldValue);

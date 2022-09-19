@@ -8,6 +8,7 @@
 
 #include "MockRelay.h"
 
+bool dual_tor_sock = false;
 extern struct event_base *base;
 extern struct event *ev_sigint;
 extern struct event *ev_sigterm;
@@ -191,15 +192,13 @@ TEST(sock, sock_open)
       lengthof(ether_relay_filter),
       ether_relay_filter
   };
-  int index = if_nametoindex("lo");
-  EXPECT_GE(sock_open(index, &ether_relay_fprog), 0);
+  EXPECT_GE(sock_open(&ether_relay_fprog), 0);
 }
 
 TEST(sock, sock_open_invalid_filter)
 {
   const struct sock_fprog ether_relay_fprog = {0,{}};
-  int index = if_nametoindex("lo");
-  EXPECT_EQ(sock_open(index, &ether_relay_fprog), -1);
+  EXPECT_EQ(sock_open(&ether_relay_fprog), -1);
 }
 
 TEST(sock, sock_open_invalid_ifindex_zero)
@@ -211,7 +210,7 @@ TEST(sock, sock_open_invalid_ifindex_zero)
       lengthof(ether_relay_filter),
       ether_relay_filter
   };
-  EXPECT_EQ(sock_open(0, &ether_relay_fprog), -1);
+  EXPECT_EQ(sock_open(&ether_relay_fprog), -1);
 }
 
 TEST(sock, sock_open_invalid_ifindex)
@@ -223,16 +222,16 @@ TEST(sock, sock_open_invalid_ifindex)
       lengthof(ether_relay_filter),
       ether_relay_filter
   };
-  EXPECT_EQ(sock_open(42384239, &ether_relay_fprog), -1);
+  EXPECT_EQ(sock_open(&ether_relay_fprog), -1);
 }
 
 TEST(sock, prepare_socket)
 {
   relay_config *config = new struct relay_config;;
-  int local_sock = -1, server_sock = -1, index = 1;
+  int local_sock = -1, server_sock = -1;
   int socket_type = -1;
   socklen_t socket_type_len = sizeof(socket_type);
-  prepare_socket(&local_sock, &server_sock, config, index);
+  prepare_socket(&local_sock, &server_sock, config);
   EXPECT_GE(local_sock, 0);
   EXPECT_GE(server_sock, 0);
   EXPECT_EQ(0, getsockopt(local_sock, SOL_SOCKET, SO_TYPE, &socket_type, &socket_type_len));
@@ -278,8 +277,8 @@ TEST(prepareConfig, prepare_relay_config)
   config.servers.push_back("fc02:2000::2");
 
   config.interface = "Vlan1000";
-  swss::DBConnector stateDb("STATE_DB", 0, true);
-  config.db = &stateDb;
+  std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+  config.state_db = state_db;
 
   prepare_relay_config(&config, &local_sock, filter);
 
@@ -297,28 +296,28 @@ TEST(prepareConfig, prepare_relay_config)
 
 TEST(counter, initialize_counter)
 {
-  swss::DBConnector stateDb("STATE_DB", 0, true);
-  initialize_counter(&stateDb, "DHCPv6_COUNTER_TABLE|Vlan1000");
-  EXPECT_TRUE(stateDb.hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Unknown"));
-  EXPECT_TRUE(stateDb.hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Solicit"));
-  EXPECT_TRUE(stateDb.hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Advertise"));
-  EXPECT_TRUE(stateDb.hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Request"));
-  EXPECT_TRUE(stateDb.hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Confirm"));
-  EXPECT_TRUE(stateDb.hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Renew"));
-  EXPECT_TRUE(stateDb.hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Rebind"));
-  EXPECT_TRUE(stateDb.hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Reply"));
-  EXPECT_TRUE(stateDb.hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Release"));
-  EXPECT_TRUE(stateDb.hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Decline"));
-  EXPECT_TRUE(stateDb.hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Relay-Forward"));
-  EXPECT_TRUE(stateDb.hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Relay-Reply"));
+  std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+  initialize_counter(state_db, "DHCPv6_COUNTER_TABLE|Vlan1000");
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Unknown"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Solicit"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Advertise"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Request"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Confirm"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Renew"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Rebind"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Reply"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Release"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Decline"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Relay-Forward"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Relay-Reply"));
 }
 
 TEST(counter, update_counter)
 {
-  swss::DBConnector stateDb("STATE_DB", 0, true);
-  stateDb.hset("DHCPv6_COUNTER_TABLE|Vlan1000", "Solicit", "1");
-  update_counter(&stateDb, "DHCPv6_COUNTER_TABLE|Vlan1000", 1);
-  std::shared_ptr<std::string> output = stateDb.hget("DHCPv6_COUNTER_TABLE|Vlan1000", "Solicit");
+  std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+  state_db->hset("DHCPv6_COUNTER_TABLE|Vlan1000", "Solicit", "1");
+  update_counter(state_db, "DHCPv6_COUNTER_TABLE|Vlan1000", 1);
+  std::shared_ptr<std::string> output = state_db->hget("DHCPv6_COUNTER_TABLE|Vlan1000", "Solicit");
   std::string *ptr = output.get();
   EXPECT_EQ(*ptr, "0");
 }
@@ -352,8 +351,8 @@ TEST(relay, relay_client)
     tmp.sin6_scope_id = 0;
     config.servers_sock.push_back(tmp);
   }
-  swss::DBConnector stateDb("STATE_DB", 0, true);
-  config.db = &stateDb;
+  std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+  config.state_db = state_db;
 
   struct ether_header ether_hdr;
   ether_hdr.ether_shost[0] = 0x5a;
@@ -440,10 +439,8 @@ TEST(relay, relay_relay_forw) {
     tmp.sin6_scope_id = 0;
     config.servers_sock.push_back(tmp);
   }
-  swss::DBConnector stateDb("STATE_DB", 0, true);
-  config.db = &stateDb;
-
-
+  std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+  config.state_db = state_db;
 
   ip6_hdr ip_hdr;
   std::string s_addr = "2000::3";
@@ -505,8 +502,8 @@ TEST(relay, relay_relay_reply)
   config.servers.push_back("fc02:2000::2");
 
   config.interface = "Vlan1000";
-  swss::DBConnector stateDb("STATE_DB", 0, true);
-  config.db = &stateDb;
+  std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+  config.state_db = state_db;
 
   int local_sock = 1;
   int filter = 1;
@@ -564,13 +561,12 @@ TEST(relay, callback) {
   config.servers.push_back("fc02:2000::2");
 
   config.interface = "Vlan1000";
-  swss::DBConnector stateDb("STATE_DB", 0, true);
-  config.db = &stateDb;
+  std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+  config.state_db = state_db;
 
   int local_sock = 1;
   int filter = 1;
-  int index = if_nametoindex("lo");
-  config.filter = sock_open(index, &ether_relay_fprog);
+  config.filter = sock_open(&ether_relay_fprog);
   EXPECT_GE(config.filter, 0);
   prepare_relay_config(&config, &local_sock, filter);
 
