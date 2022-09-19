@@ -24,6 +24,8 @@
 #define OPTION_INTERFACE_ID 18
 #define OPTION_CLIENT_LINKLAYER_ADDR 79
 
+extern bool dual_tor_sock;
+
 /* DHCPv6 message types */
 typedef enum
 {
@@ -51,12 +53,19 @@ struct relay_config {
     int server_sock;
     int filter;
     sockaddr_in6 link_address;
-    swss::DBConnector *db;
+    std::shared_ptr<swss::DBConnector> state_db;
     std::string interface;
+    std::string mux_key;
     std::vector<std::string> servers;
     std::vector<sockaddr_in6> servers_sock;
     bool is_option_79;
     bool is_interface_id;
+};
+
+struct database {
+    std::shared_ptr<swss::DBConnector> config_db;
+    std::shared_ptr<swss::Table> muxTable;
+    std::shared_ptr<swss::Table> counterTable;
 };
 
 
@@ -93,29 +102,27 @@ struct interface_id_option  {
 };
 
 /**
- * @code                sock_open(int ifindex, const struct sock_fprog *fprog);
+ * @code                sock_open(const struct sock_fprog *fprog);
  *
  * @brief               prepare L2 socket to attach to "udp and port 547" filter 
  *
- * @param ifindex       interface index
  * @param fprog         bpf filter "udp and port 547"
  *
  * @return              socket descriptor
  */
-int sock_open(int ifindex, const struct sock_fprog *fprog);
+int sock_open(const struct sock_fprog *fprog);
 
 /**
- * @code                prepare_socket(int *local_sock, int *server_sock, relay_config *config, int index);
+ * @code                prepare_socket(int *local_sock, int *server_sock, relay_config *config);
  * 
  * @brief               prepare L3 socket for sending
  *
  * @param local_sock    pointer to socket binded to global address for relaying client message to server and listening for server message
  * @param server_sock       pointer to socket binded to link_local address for relaying server message to client
- * @param index         scope id of interface
  *
  * @return              none
  */
-void prepare_socket(int *local_sock, int *server_sock, relay_config *config, int index);
+void prepare_socket(int *local_sock, int *server_sock, relay_config *config);
 
 /**
  * @code                        prepare_relay_config(relay_config *interface_config, int local_sock, int filter);
@@ -189,14 +196,14 @@ void relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *
 void relay_relay_reply(int sock, const uint8_t *msg, int32_t len, relay_config *configs);
 
 /**
- * @code                loop_relay(std::vector<arg_config> *vlans, swss::DBConnector *db);
+ * @code                loop_relay(std::vector<arg_config> *vlans);
  * 
  * @brief               main loop: configure sockets, create libevent base, start server listener thread
  *  
  * @param vlans         list of vlans retrieved from config_db
- * @param db            state_db connector
+ * @param state_db      state_db connector
  */
-void loop_relay(std::vector<relay_config> *vlans, swss::DBConnector *db);
+void loop_relay(std::vector<relay_config> *vlans);
 
 /**
  * @code signal_init();
@@ -240,29 +247,29 @@ void signal_callback(evutil_socket_t fd, short event, void *arg);
 void shutdown();
 
 /**
- * @code                void initialize_counter(swss::DBConnector *db, std::string counterVlan);
+ * @code                void initialize_counter(std::shared_ptr<swss::Table> state_db, std::string counterVlan);
  *
  * @brief               initialize the counter by each Vlan
  *
- * @param swss::DBConnector *db     state_db connector
+ * @param std::shared_ptr<swss::Table> state_db     state_db connector
  * @param counterVlan   counter table with interface name
  * 
  * @return              none
  */
-void initialize_counter(swss::DBConnector *db, std::string counterVlan);
+void initialize_counter(std::shared_ptr<swss::DBConnector> state_db, std::string counterVlan);
 
 /**
- * @code                void update_counter(swss::DBConnector *db, std::string CounterVlan, uint8_t msg_type);
+ * @code                void update_counter(shared_ptr<swss::DBConnector>, std::string CounterVlan, uint8_t msg_type);
  *
  * @brief               update the counter in state_db with count of each DHCPv6 message type
  *
- * @param swss::DBConnector *db     state_db connector
+ * @param shared_ptr<swss::DBConnector> state_db     state_db connector
  * @param counterVlan   counter table with interface name
  * @param msg_type      dhcpv6 message type to be updated in counter
  * 
  * @return              none
  */
-void update_counter(swss::DBConnector *db, std::string counterVlan, uint8_t msg_type);
+void update_counter(std::shared_ptr<swss::DBConnector> state_db, std::string counterVlan, uint8_t msg_type);
 
 /* Helper functions */
 
