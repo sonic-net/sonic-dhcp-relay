@@ -2,12 +2,30 @@
 #include <syslog.h>
 #include "configInterface.h"
 
+bool dual_tor_sock = false;
+
+static void usage()
+{
+    printf("Usage: ./dhcp6relay {-d}\n");
+    printf("\t-d: enable dual tor option\n");
+}
+
 int main(int argc, char *argv[]) {
+    if (argc > 1) {
+        switch (argv[1][1])
+        {
+            case 'd':
+                dual_tor_sock = true;
+                break;
+            default:
+                fprintf(stderr, "%s: Unknown option\n", basename(argv[0]));
+                usage();
+        }
+    }
     try {
         std::vector<relay_config> vlans;
-        swss::DBConnector state_db("STATE_DB", 0);
         initialize_swss(&vlans);
-        loop_relay(&vlans, &state_db);
+        loop_relay(&vlans);
     }
     catch (std::exception &e)
     {
