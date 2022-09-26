@@ -323,260 +323,258 @@ TEST(counter, update_counter)
   EXPECT_EQ(*ptr, "0");
 }
 
-TEST(relay, relay_client) {
+TEST(relay, relay_client) 
+{
+  int mock_sock = 124;
 
-    int mock_sock = 124;
+  uint8_t msg[] = {
+      0x01, 0x2f, 0xf4, 0xc8, 0x00, 0x01, 0x00, 0x0e,
+      0x00, 0x01, 0x00, 0x01, 0x25, 0x3a, 0x37, 0xb9,
+      0x5a, 0xc6, 0xb0, 0x12, 0xe8, 0xb4, 0x00, 0x06,
+      0x00, 0x04, 0x00, 0x17, 0x00, 0x18, 0x00, 0x08,
+      0x00, 0x02, 0x00, 0x00, 0x00, 0x03, 0x00, 0x0c,
+      0xb0, 0x12, 0xe8, 0xb4, 0x00, 0x00, 0x0e, 0x10,
+      0x00, 0x00, 0x15, 0x18
+  };
+  int32_t msg_len = sizeof(msg);
 
-    uint8_t msg[] = {
-        0x01, 0x2f, 0xf4, 0xc8, 0x00, 0x01, 0x00, 0x0e,
-        0x00, 0x01, 0x00, 0x01, 0x25, 0x3a, 0x37, 0xb9,
-        0x5a, 0xc6, 0xb0, 0x12, 0xe8, 0xb4, 0x00, 0x06,
-        0x00, 0x04, 0x00, 0x17, 0x00, 0x18, 0x00, 0x08,
-        0x00, 0x02, 0x00, 0x00, 0x00, 0x03, 0x00, 0x0c,
-        0xb0, 0x12, 0xe8, 0xb4, 0x00, 0x00, 0x0e, 0x10,
-        0x00, 0x00, 0x15, 0x18
-    };
-    int32_t msg_len = sizeof(msg);
+  struct relay_config config{};
+  config.is_option_79 = true;
+  std::vector<std::string> servers;
+  servers.push_back("fc02:2000::1");
+  servers.push_back("fc02:2000::2");
+  for (auto server:servers) {
+    sockaddr_in6 tmp;
+    inet_pton(AF_INET6, server.c_str(), &tmp.sin6_addr);
+    tmp.sin6_family = AF_INET6;
+    tmp.sin6_flowinfo = 0;
+    tmp.sin6_port = htons(RELAY_PORT);
+    tmp.sin6_scope_id = 0;
+    config.servers_sock.push_back(tmp);
+  }
+  swss::DBConnector stateDb("STATE_DB", 0, true);
+  config.db = &stateDb;
 
-    struct relay_config config{};
-    config.is_option_79 = true;
-    std::vector<std::string> servers;
-    servers.push_back("fc02:2000::1");
-    servers.push_back("fc02:2000::2");
-    for (auto server:servers) {
-      sockaddr_in6 tmp;
-      inet_pton(AF_INET6, server.c_str(), &tmp.sin6_addr);
-      tmp.sin6_family = AF_INET6;
-      tmp.sin6_flowinfo = 0;
-      tmp.sin6_port = htons(RELAY_PORT);
-      tmp.sin6_scope_id = 0;
-      config.servers_sock.push_back(tmp);
-    }
-    swss::DBConnector stateDb("STATE_DB", 0, true);
-    config.db = &stateDb;
+  struct ether_header ether_hdr;
+  ether_hdr.ether_shost[0] = 0x5a;
+  ether_hdr.ether_shost[1] = 0xc6;
+  ether_hdr.ether_shost[2] = 0xb0;
+  ether_hdr.ether_shost[3] = 0x12;
+  ether_hdr.ether_shost[4] = 0xe8;
+  ether_hdr.ether_shost[5] = 0xb4;
 
-    struct ether_header ether_hdr;
-    ether_hdr.ether_shost[0] = 0x5a;
-    ether_hdr.ether_shost[1] = 0xc6;
-    ether_hdr.ether_shost[2] = 0xb0;
-    ether_hdr.ether_shost[3] = 0x12;
-    ether_hdr.ether_shost[4] = 0xe8;
-    ether_hdr.ether_shost[5] = 0xb4;
+  ip6_hdr ip_hdr;
+  std::string s_addr = "2000::3";
 
-    ip6_hdr ip_hdr;
-    std::string s_addr = "2000::3";
-    
-    relay_client(mock_sock, msg, msg_len, &ip_hdr, &ether_hdr, &config);
+  relay_client(mock_sock, msg, msg_len, &ip_hdr, &ether_hdr, &config);
 
-    EXPECT_EQ(last_used_sock, 124);
-    
-    auto sent_msg = parse_dhcpv6_relay(sender_buffer);
+  EXPECT_EQ(last_used_sock, 124);
 
-    EXPECT_EQ(sent_msg->msg_type, DHCPv6_MESSAGE_TYPE_RELAY_FORW);
-    EXPECT_EQ(sent_msg->hop_count, 0);
-    
-    for (int i = 0; i < 16; i++) {
-        EXPECT_EQ(sent_msg->link_address.__in6_u.__u6_addr8[i], config.link_address.sin6_addr.__in6_u.__u6_addr8[i]);
-        EXPECT_EQ(sent_msg->peer_address.__in6_u.__u6_addr8[i], ip_hdr.ip6_src.__in6_u.__u6_addr8[i]);
-    }
+  auto sent_msg = parse_dhcpv6_relay(sender_buffer);
 
-    const uint8_t *current_position = sender_buffer + sizeof(dhcpv6_relay_msg);
+  EXPECT_EQ(sent_msg->msg_type, DHCPv6_MESSAGE_TYPE_RELAY_FORW);
+  EXPECT_EQ(sent_msg->hop_count, 0);
 
-    bool link_layer_seen = false;
-    while ((current_position - sender_buffer) < valid_byte_count) {
-        
-        auto option = parse_dhcpv6_opt(current_position, &current_position);
-        switch (ntohs(option->option_code)) {
-            case OPTION_RELAY_MSG:
-                EXPECT_EQ(memcmp(((uint8_t *)option) + sizeof(dhcpv6_option), msg, msg_len), 0);
-            case OPTION_CLIENT_LINKLAYER_ADDR:
-                link_layer_seen = true;
-/*              auto link_layer_option = (linklayer_addr_option *)option;
-                EXPECT_EQ(link_layer_option->link_layer_type, htons(1));
-                for (int i = 0; i < 6; i++){
-                    EXPECT_EQ(*(((uint8_t *)option) + sizeof(dhcpv6_option) + i), ether_hdr.ether_shost[i]);
-                }
-                break; */
-        }
-    }
-    EXPECT_TRUE(link_layer_seen);
-    EXPECT_GE(sendUdpCount, 1);
-    sendUdpCount = 0;
+  for (int i = 0; i < 16; i++) {
+      EXPECT_EQ(sent_msg->link_address.__in6_u.__u6_addr8[i], config.link_address.sin6_addr.__in6_u.__u6_addr8[i]);
+      EXPECT_EQ(sent_msg->peer_address.__in6_u.__u6_addr8[i], ip_hdr.ip6_src.__in6_u.__u6_addr8[i]);
+  }
+
+  const uint8_t *current_position = sender_buffer + sizeof(dhcpv6_relay_msg);
+
+  bool link_layer = false;
+  bool interface_id = false;
+  while ((current_position - sender_buffer) < valid_byte_count) {
+      
+      auto option = parse_dhcpv6_opt(current_position, &current_position);
+      switch (ntohs(option->option_code)) {
+          case OPTION_RELAY_MSG:
+              EXPECT_EQ(memcmp(((uint8_t *)option) + sizeof(dhcpv6_option), msg, msg_len), 0);
+          case OPTION_CLIENT_LINKLAYER_ADDR:
+              link_layer = true;
+          case OPTION_INTERFACE_ID:
+                interface_id = true;
+      }
+  }
+  EXPECT_TRUE(link_layer);
+  EXPECT_TRUE(interface_id);
+  EXPECT_GE(sendUdpCount, 1);
+  sendUdpCount = 0;
 }
 
 TEST(relay, relay_relay_forw) {
-    int mock_sock = 125;
+  int mock_sock = 125;
 
-    uint8_t msg[] = {
-        0x0c, 0x00, 0x20, 0x01, 0x0d, 0xb8, 0x01, 0x5a,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x01, 0xfe, 0x80, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x01, 0x00, 0x09, 0x00, 0x34, 0x01, 0x2f,
-        0xf4, 0xc8, 0x00, 0x01, 0x00, 0x0e, 0x00, 0x01,
-        0x00, 0x01, 0x25, 0x3a, 0x37, 0xb9, 0x5a, 0xc6,
-        0xb0, 0x12, 0xe8, 0xb4, 0x00, 0x06, 0x00, 0x04,
-        0x00, 0x17, 0x00, 0x18, 0x00, 0x08, 0x00, 0x02,
-        0x00, 0x00, 0x00, 0x03, 0x00, 0x0c, 0xb0, 0x12,
-        0xe8, 0xb4, 0x00, 0x00, 0x0e, 0x10, 0x00, 0x00,
-        0x15, 0x18, 0x00, 0x4f, 0x00, 0x08, 0x00, 0x01,
-        0x5a, 0xc6, 0xb0, 0x12, 0xe8, 0xb4, 0x00, 0x12,
-        0x00, 0x03, 0x47, 0x69, 0x32, 0x00, 0x25, 0x00,
-        0x16, 0x00, 0x00, 0x00, 0x09, 0x02, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x03, 0x00,
-        0x01, 0x00, 0x1e, 0xbd, 0x3c, 0x68, 0x00
-    };
-    int32_t msg_len = sizeof(msg);
+  uint8_t msg[] = {
+      0x0c, 0x00, 0x20, 0x01, 0x0d, 0xb8, 0x01, 0x5a,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x01, 0xfe, 0x80, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x01, 0x00, 0x09, 0x00, 0x34, 0x01, 0x2f,
+      0xf4, 0xc8, 0x00, 0x01, 0x00, 0x0e, 0x00, 0x01,
+      0x00, 0x01, 0x25, 0x3a, 0x37, 0xb9, 0x5a, 0xc6,
+      0xb0, 0x12, 0xe8, 0xb4, 0x00, 0x06, 0x00, 0x04,
+      0x00, 0x17, 0x00, 0x18, 0x00, 0x08, 0x00, 0x02,
+      0x00, 0x00, 0x00, 0x03, 0x00, 0x0c, 0xb0, 0x12,
+      0xe8, 0xb4, 0x00, 0x00, 0x0e, 0x10, 0x00, 0x00,
+      0x15, 0x18, 0x00, 0x4f, 0x00, 0x08, 0x00, 0x01,
+      0x5a, 0xc6, 0xb0, 0x12, 0xe8, 0xb4, 0x00, 0x12,
+      0x00, 0x03, 0x47, 0x69, 0x32, 0x00, 0x25, 0x00,
+      0x16, 0x00, 0x00, 0x00, 0x09, 0x02, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x03, 0x00,
+      0x01, 0x00, 0x1e, 0xbd, 0x3c, 0x68, 0x00
+  };
+  int32_t msg_len = sizeof(msg);
 
-    relay_config config{};
-    config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x02;
-    std::vector<std::string> servers;
-    servers.push_back("fc02:2000::1");
-    servers.push_back("fc02:2000::2");
-    for (auto server:servers) {
-      sockaddr_in6 tmp;
-      inet_pton(AF_INET6, server.c_str(), &tmp.sin6_addr);
-      tmp.sin6_family = AF_INET6;
-      tmp.sin6_flowinfo = 0;
-      tmp.sin6_port = htons(RELAY_PORT);
-      tmp.sin6_scope_id = 0;
-      config.servers_sock.push_back(tmp);
-    }
-    swss::DBConnector stateDb("STATE_DB", 0, true);
-    config.db = &stateDb;
+  relay_config config{};
+  config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x02;
+  std::vector<std::string> servers;
+  servers.push_back("fc02:2000::1");
+  servers.push_back("fc02:2000::2");
+  for (auto server:servers) {
+    sockaddr_in6 tmp;
+    inet_pton(AF_INET6, server.c_str(), &tmp.sin6_addr);
+    tmp.sin6_family = AF_INET6;
+    tmp.sin6_flowinfo = 0;
+    tmp.sin6_port = htons(RELAY_PORT);
+    tmp.sin6_scope_id = 0;
+    config.servers_sock.push_back(tmp);
+  }
+  swss::DBConnector stateDb("STATE_DB", 0, true);
+  config.db = &stateDb;
 
 
 
-    ip6_hdr ip_hdr;
-    std::string s_addr = "2000::3";
-    inet_pton(AF_INET6, s_addr.c_str(), &ip_hdr.ip6_src);
+  ip6_hdr ip_hdr;
+  std::string s_addr = "2000::3";
+  inet_pton(AF_INET6, s_addr.c_str(), &ip_hdr.ip6_src);
 
-    relay_relay_forw(mock_sock, msg, msg_len, &ip_hdr, &config);
+  relay_relay_forw(mock_sock, msg, msg_len, &ip_hdr, &config);
 
-    EXPECT_EQ(last_used_sock, 125);
+  EXPECT_EQ(last_used_sock, 125);
 
-    auto sent_msg = parse_dhcpv6_relay(sender_buffer);
-    
-    EXPECT_EQ(sent_msg->msg_type, DHCPv6_MESSAGE_TYPE_RELAY_FORW);
-    EXPECT_EQ(sent_msg->hop_count, 1);
-    
-    for (int i = 0; i < 16; i++) {
-        EXPECT_EQ(sent_msg->link_address.__in6_u.__u6_addr8[i], 0);
-        EXPECT_EQ(sent_msg->peer_address.__in6_u.__u6_addr8[i], ip_hdr.ip6_src.__in6_u.__u6_addr8[i]);
-    }
+  auto sent_msg = parse_dhcpv6_relay(sender_buffer);
+  
+  EXPECT_EQ(sent_msg->msg_type, DHCPv6_MESSAGE_TYPE_RELAY_FORW);
+  EXPECT_EQ(sent_msg->hop_count, 1);
+  
+  for (int i = 0; i < 16; i++) {
+      EXPECT_EQ(sent_msg->link_address.__in6_u.__u6_addr8[i], 0);
+      EXPECT_EQ(sent_msg->peer_address.__in6_u.__u6_addr8[i], ip_hdr.ip6_src.__in6_u.__u6_addr8[i]);
+  }
 
-    EXPECT_GE(sendUdpCount, 1);
-    sendUdpCount = 0;
+  EXPECT_GE(sendUdpCount, 1);
+  sendUdpCount = 0;
 }
 
-TEST(relay, relay_relay_reply) {
-    int mock_sock = 123;
-    
-    // From dhcpv6_relay.pcapng
-    uint8_t msg[] = { 
-        0x0d, 0x00, 0x20, 0x01, 0x0d, 0xb8, 0x01, 0x5a,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x01, 0xfe, 0x80, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x01, 0x00, 0x12, 0x00, 0x03, 0x47, 0x69,
-        0x32, 0x00, 0x09, 0x00, 0x54, 0x07, 0x4f, 0x6d,
-        0x04, 0x00, 0x03, 0x00, 0x28, 0xb0, 0x12, 0xe8,
-        0xb4, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x05, 0x00, 0x18, 0x20, 0x01, 0x0d,
-        0xb8, 0x01, 0x5a, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x01, 0x78, 0x00, 0x00, 0x1c,
-        0x20, 0x00, 0x00, 0x1d, 0x4c, 0x00, 0x01, 0x00,
-        0x0e, 0x00, 0x01, 0x00, 0x01, 0x25, 0x3a, 0x37,
-        0xb9, 0x5a, 0xc6, 0xb0, 0x12, 0xe8, 0xb4, 0x00,
-        0x02, 0x00, 0x0e, 0x00, 0x01, 0x00, 0x01, 0x25,
-        0x3a, 0x32, 0x33, 0x50, 0xe5, 0x49, 0x50, 0x9e,
-        0x40
-    }; 
-    int32_t msg_len = sizeof(msg);
+TEST(relay, relay_relay_reply) 
+{
+  int mock_sock = 123;
 
-    struct relay_config config{};
-    config.is_option_79 = true;
+  uint8_t msg[] = { 
+      0x0d, 0x00, 0x20, 0x01, 0x0d, 0xb8, 0x01, 0x5a,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x01, 0xfe, 0x80, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x01, 0x00, 0x12, 0x00, 0x03, 0x47, 0x69,
+      0x32, 0x00, 0x09, 0x00, 0x54, 0x07, 0x4f, 0x6d,
+      0x04, 0x00, 0x03, 0x00, 0x28, 0xb0, 0x12, 0xe8,
+      0xb4, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x05, 0x00, 0x18, 0x20, 0x01, 0x0d,
+      0xb8, 0x01, 0x5a, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x01, 0x78, 0x00, 0x00, 0x1c,
+      0x20, 0x00, 0x00, 0x1d, 0x4c, 0x00, 0x01, 0x00,
+      0x0e, 0x00, 0x01, 0x00, 0x01, 0x25, 0x3a, 0x37,
+      0xb9, 0x5a, 0xc6, 0xb0, 0x12, 0xe8, 0xb4, 0x00,
+      0x02, 0x00, 0x0e, 0x00, 0x01, 0x00, 0x01, 0x25,
+      0x3a, 0x32, 0x33, 0x50, 0xe5, 0x49, 0x50, 0x9e,
+      0x40
+  }; 
+  int32_t msg_len = sizeof(msg);
 
-    config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x01;
+  struct relay_config config{};
+  config.is_option_79 = true;
 
-    struct ip6_hdr ip_hdr;
-    std::string s_addr = "fe80::1";
-    inet_pton(AF_INET6, s_addr.c_str(), &ip_hdr.ip6_src);
+  config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x01;
 
-    config.servers.push_back("fc02:2000::1");
-    config.servers.push_back("fc02:2000::2");
+  struct ip6_hdr ip_hdr;
+  std::string s_addr = "fe80::1";
+  inet_pton(AF_INET6, s_addr.c_str(), &ip_hdr.ip6_src);
 
-    config.interface = "Vlan1000";
-    swss::DBConnector stateDb("STATE_DB", 0, true);
-    config.db = &stateDb;
+  config.servers.push_back("fc02:2000::1");
+  config.servers.push_back("fc02:2000::2");
 
-    int local_sock = 1;
-    int filter = 1;
+  config.interface = "Vlan1000";
+  swss::DBConnector stateDb("STATE_DB", 0, true);
+  config.db = &stateDb;
 
-    prepare_relay_config(&config, &local_sock, filter);
+  int local_sock = 1;
+  int filter = 1;
 
-    relay_relay_reply(mock_sock, msg, msg_len, &config);
+  prepare_relay_config(&config, &local_sock, filter);
 
-    EXPECT_EQ(last_used_sock, 123);
+  relay_relay_reply(mock_sock, msg, msg_len, &config);
 
-    uint8_t expected_bytes[] = {
-        0x07, 0x4f, 0x6d, 0x04, 0x00, 0x03, 0x00, 0x28,
-        0xb0, 0x12, 0xe8, 0xb4, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x18,
-        0x20, 0x01, 0x0d, 0xb8, 0x01, 0x5a, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x78,
-        0x00, 0x00, 0x1c, 0x20, 0x00, 0x00, 0x1d, 0x4c,
-        0x00, 0x01, 0x00, 0x0e, 0x00, 0x01, 0x00, 0x01,
-        0x25, 0x3a, 0x37, 0xb9, 0x5a, 0xc6, 0xb0, 0x12,
-        0xe8, 0xb4, 0x00, 0x02, 0x00, 0x0e, 0x00, 0x01,
-        0x00, 0x01, 0x25, 0x3a, 0x32, 0x33, 0x50, 0xe5,
-        0x49, 0x50, 0x9e, 0x40
-    };
+  EXPECT_EQ(last_used_sock, 123);
 
-    EXPECT_EQ(valid_byte_count, sizeof(expected_bytes));
+  uint8_t expected_bytes[] = {
+      0x07, 0x4f, 0x6d, 0x04, 0x00, 0x03, 0x00, 0x28,
+      0xb0, 0x12, 0xe8, 0xb4, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x18,
+      0x20, 0x01, 0x0d, 0xb8, 0x01, 0x5a, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x78,
+      0x00, 0x00, 0x1c, 0x20, 0x00, 0x00, 0x1d, 0x4c,
+      0x00, 0x01, 0x00, 0x0e, 0x00, 0x01, 0x00, 0x01,
+      0x25, 0x3a, 0x37, 0xb9, 0x5a, 0xc6, 0xb0, 0x12,
+      0xe8, 0xb4, 0x00, 0x02, 0x00, 0x0e, 0x00, 0x01,
+      0x00, 0x01, 0x25, 0x3a, 0x32, 0x33, 0x50, 0xe5,
+      0x49, 0x50, 0x9e, 0x40
+  };
 
-    EXPECT_EQ(0, memcmp(sender_buffer, expected_bytes, sizeof(expected_bytes)));
+  EXPECT_EQ(valid_byte_count, sizeof(expected_bytes));
 
-    EXPECT_EQ(last_target.sin6_port, htons(CLIENT_PORT));
+  EXPECT_EQ(0, memcmp(sender_buffer, expected_bytes, sizeof(expected_bytes)));
 
-    in6_addr expected_target;
-    inet_pton(AF_INET6, "fe80::1", &expected_target);
-    for (int i = 0; i < 16; i++) {
-        EXPECT_EQ(last_target.sin6_addr.__in6_u.__u6_addr8[i], expected_target.__in6_u.__u6_addr8[i]);
-    }
+  EXPECT_EQ(last_target.sin6_port, htons(CLIENT_PORT));
 
-    EXPECT_GE(sendUdpCount, 1);
-    sendUdpCount = 0;
+  in6_addr expected_target;
+  inet_pton(AF_INET6, "fe80::1", &expected_target);
+  for (int i = 0; i < 16; i++) {
+      EXPECT_EQ(last_target.sin6_addr.__in6_u.__u6_addr8[i], expected_target.__in6_u.__u6_addr8[i]);
+  }
+
+  EXPECT_GE(sendUdpCount, 1);
+  sendUdpCount = 0;
 }
 
 TEST(relay, callback) {
-    evutil_socket_t fd = 1;
-    short event = 1;
+  evutil_socket_t fd = 1;
+  short event = 1;
 
-    struct relay_config config{};
-    config.is_option_79 = true;
+  struct relay_config config{};
+  config.is_option_79 = true;
 
-    config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x01;
+  config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x01;
 
-    struct ip6_hdr ip_hdr;
-    std::string s_addr = "fe80::1";
-    inet_pton(AF_INET6, s_addr.c_str(), &ip_hdr.ip6_src);
+  struct ip6_hdr ip_hdr;
+  std::string s_addr = "fe80::1";
+  inet_pton(AF_INET6, s_addr.c_str(), &ip_hdr.ip6_src);
 
-    config.servers.push_back("fc02:2000::1");
-    config.servers.push_back("fc02:2000::2");
+  config.servers.push_back("fc02:2000::1");
+  config.servers.push_back("fc02:2000::2");
 
-    config.interface = "Vlan1000";
-    swss::DBConnector stateDb("STATE_DB", 0, true);
-    config.db = &stateDb;
+  config.interface = "Vlan1000";
+  swss::DBConnector stateDb("STATE_DB", 0, true);
+  config.db = &stateDb;
 
-    int local_sock = 1;
-    int filter = 1;
-    int index = if_nametoindex("lo");
-    config.filter = sock_open(index, &ether_relay_fprog);
-    EXPECT_GE(config.filter, 0);
-    prepare_relay_config(&config, &local_sock, filter);
+  int local_sock = 1;
+  int filter = 1;
+  int index = if_nametoindex("lo");
+  config.filter = sock_open(index, &ether_relay_fprog);
+  EXPECT_GE(config.filter, 0);
+  prepare_relay_config(&config, &local_sock, filter);
 
-    callback(fd, event, &config);
+  callback(fd, event, &config);
 }
 
 TEST(relay, signal_init) {
