@@ -7,6 +7,9 @@ constexpr auto DEFAULT_TIMEOUT_MSEC = 1000;
 
 bool pollSwssNotifcation = true;
 std::shared_ptr<boost::thread> mSwssThreadPtr;
+
+std::shared_ptr<swss::DBConnector> configDbPtr = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+swss::SubscriberStateTable ipHelpersTable(configDbPtr.get(), "DHCP_RELAY");
 swss::Select swssSelect;
 
 /**
@@ -19,14 +22,9 @@ swss::Select swssSelect;
 void initialize_swss(std::vector<relay_config> *vlans)
 {
     try {
-        std::shared_ptr<swss::DBConnector> configDbPtr = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
-        swss::SubscriberStateTable ipHelpersTable(configDbPtr.get(), "DHCP_RELAY");
         swssSelect.addSelectable(&ipHelpersTable);
-        get_dhcp(vlans, &ipHelpersTable);
-        struct swssNotification test;
-        test.ipHelpersTable = &ipHelpersTable;
-        test.vlans = vlans;
-        mSwssThreadPtr = std::make_shared<boost::thread> (&handleSwssNotification, test);
+        get_dhcp(vlans);
+        mSwssThreadPtr = std::make_shared<boost::thread> (&handleSwssNotification, vlans);
     }
     catch (const std::bad_alloc &e) {
         syslog(LOG_ERR, "Failed allocate memory. Exception details: %s", e.what());
@@ -54,15 +52,15 @@ void deinitialize_swss()
  *
  * @return              none
  */
-void get_dhcp(std::vector<relay_config> *vlans, swss::SubscriberStateTable *ipHelpersTable) {
+void get_dhcp(std::vector<relay_config> *vlans) {
     swss::Selectable *selectable;
     int ret = swssSelect.select(&selectable, DEFAULT_TIMEOUT_MSEC);
     if (ret == swss::Select::ERROR) {
         syslog(LOG_WARNING, "Select: returned ERROR");
     } else if (ret == swss::Select::TIMEOUT) {
     } 
-    if (selectable == static_cast<swss::Selectable *> (ipHelpersTable)) {
-        handleRelayNotification(*ipHelpersTable, vlans);
+    if (selectable == static_cast<swss::Selectable *> (&ipHelpersTable)) {
+        handleRelayNotification(ipHelpersTable, vlans);
     }
 }
 /**
@@ -74,10 +72,10 @@ void get_dhcp(std::vector<relay_config> *vlans, swss::SubscriberStateTable *ipHe
  *
  * @return              none
  */
-void handleSwssNotification(swssNotification test)
+void handleSwssNotification(std::vector<relay_config> *vlans)
 {
     while (pollSwssNotifcation) {
-        get_dhcp(test.vlans, test.ipHelpersTable);
+        get_dhcp(vlans);
     } 
 }
 

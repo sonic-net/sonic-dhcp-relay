@@ -1,14 +1,8 @@
-#pragma once
-
 #include <boost/thread.hpp>
 #include "subscriberstatetable.h"
 #include "select.h"
 #include "relay.h"
 
-struct swssNotification {
-    std::vector<relay_config> *vlans;
-    swss::SubscriberStateTable *ipHelpersTable;
-};
 /**
  * @code                void initialize_swss()
  * 
@@ -34,7 +28,7 @@ void deinitialize_swss();
  *
  * @return              none
  */
-void get_dhcp(std::vector<relay_config> *vlans, swss::SubscriberStateTable *ipHelpersTable);
+void get_dhcp(std::vector<relay_config> *vlans);
 
 /**
  * @code                void handleSwssNotification(std::vector<relay_config> *vlans)
@@ -45,7 +39,7 @@ void get_dhcp(std::vector<relay_config> *vlans, swss::SubscriberStateTable *ipHe
  *
  * @return              none
  */
-void handleSwssNotification(swssNotification test);
+void handleSwssNotification(std::vector<relay_config> *vlans);
 
 /**
  * @code                    void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::vector<relay_config> *vlans)
