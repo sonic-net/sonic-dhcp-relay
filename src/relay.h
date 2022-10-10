@@ -69,6 +69,7 @@ struct relay_config {
 struct database {
     std::shared_ptr<swss::DBConnector> config_db;
     std::shared_ptr<swss::Table> muxTable;
+    std::shared_ptr<swss::Table> counterTable;
 };
 
 
@@ -105,7 +106,7 @@ struct interface_id_option  {
 };
 
 /**
- * @code                sock_open(int ifindex, const struct sock_fprog *fprog);
+ * @code                sock_open(const struct sock_fprog *fprog);
  *
  * @brief               prepare L2 socket to attach to "udp and port 547" filter 
  *
@@ -250,11 +251,11 @@ void signal_callback(evutil_socket_t fd, short event, void *arg);
 void shutdown();
 
 /**
- * @code                initialize_counter(std::shared_ptr<swss::DBConnector> state_db, std::string counterVlan);
+ * @code                void initialize_counter(std::shared_ptr<swss::Table> state_db, std::string counterVlan);
  *
  * @brief               initialize the counter by each Vlan
  *
- * @param std::shared_ptr<swss::DBConnector> state_db     state_db connector pointer
+ * @param std::shared_ptr<swss::Table> state_db     state_db connector
  * @param counterVlan   counter table with interface name
  * 
  * @return              none

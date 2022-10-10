@@ -19,6 +19,7 @@ struct event_base *base;
 struct event *ev_sigint;
 struct event *ev_sigterm;
 static std::string vlan_member = "VLAN_MEMBER|";
+
 static std::string counter_table = "DHCPv6_COUNTER_TABLE|";
 struct database redis_db;
 
