@@ -638,6 +638,10 @@ void callback(evutil_socket_t fd, short event, void *arg) {
     }
 
     auto udp_header = parse_udp(current_position, &tmp);
+    if ((current_position + ntohs(udp_header->len)) != ((uint8_t *)ptr + len)) {
+        syslog(LOG_WARNING, "UDP header length is invalid\n");
+        return;
+    }
     current_position = tmp;
 
     auto msg = parse_dhcpv6_hdr(current_position);
