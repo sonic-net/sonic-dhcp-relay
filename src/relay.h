@@ -64,14 +64,9 @@ struct relay_config {
     std::vector<sockaddr_in6> servers_sock;
     bool is_option_79;
     bool is_interface_id;
-};
-
-struct database {
+    std::shared_ptr<swss::Table> mux_table;
     std::shared_ptr<swss::DBConnector> config_db;
-    std::shared_ptr<swss::Table> muxTable;
-    std::shared_ptr<swss::Table> counterTable;
 };
-
 
 /* DHCPv6 messages and options */
 

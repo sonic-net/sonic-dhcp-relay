@@ -21,7 +21,6 @@ struct event *ev_sigterm;
 static std::string vlan_member = "VLAN_MEMBER|";
 
 static std::string counter_table = "DHCPv6_COUNTER_TABLE|";
-struct database redis_db;
 
 /* DHCPv6 filter */
 /* sudo tcpdump -dd "inbound and ip6 dst ff02::1:2 && udp dst port 547" */
@@ -702,9 +701,9 @@ void callback_dual_tor(evutil_socket_t fd, short event, void *arg) {
 		return;
     std::string state;
     std::string intf(interfaceName);
-    redis_db.muxTable->hget(intf, "state", state);
+    config->mux_table->hget(intf, "state", state);
 
-    if (state != "standby" && redis_db.config_db->exists(key.append(intf))) {
+    if (state != "standby" && config->config_db->exists(key.append(intf))) {
         char* ptr = (char *)message_buffer;
         const uint8_t *current_position = (uint8_t *)ptr;
         const uint8_t *tmp = NULL;
@@ -939,8 +938,6 @@ void loop_relay(std::vector<relay_config> *vlans) {
     std::shared_ptr<swss::Table> mStateDbMuxTablePtr = std::make_shared<swss::Table> (
             state_db.get(), "HW_MUX_CABLE_TABLE"
         );
-    redis_db.config_db = config_db;
-    redis_db.muxTable = mStateDbMuxTablePtr;
 
     int filter = 0;
     filter = sock_open(&ether_relay_fprog);
@@ -950,6 +947,8 @@ void loop_relay(std::vector<relay_config> *vlans) {
         relay_config *config = &vlan;
         int local_sock = 0; 
         int server_sock = 0;
+        config->config_db = config_db;
+        config->mux_table = mStateDbMuxTablePtr;
         config->state_db = state_db;
         config->mux_key = vlan_member + config->interface + "|";
 
