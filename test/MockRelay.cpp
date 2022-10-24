@@ -3,6 +3,8 @@
 #include <event2/event.h>
 #include <event2/bufferevent.h>
 #include <experimental/filesystem>
+#include <chrono>
+#include <thread>
 #include "gtest/gtest.h"
 #include "gmock/gmock.h"
 
@@ -15,28 +17,62 @@ extern struct event *ev_sigterm;
 
 static struct sock_filter ether_relay_filter[] = {
 
-        { 0x28, 0, 0, 0x0000000c },
-        { 0x15, 0, 13, 0x000086dd },
-        { 0x20, 0, 0, 0x00000026 },
-        { 0x15, 0, 11, 0xff020000 },
-        { 0x20, 0, 0, 0x0000002a },
-        { 0x15, 0, 9, 0x00000000 },
-        { 0x20, 0, 0, 0x0000002e },
-        { 0x15, 0, 7, 0x00000000 },
-        { 0x20, 0, 0, 0x00000032 },
-        { 0x15, 0, 5, 0x00010002 },
-        { 0x30, 0, 0, 0x00000014 },
-        { 0x15, 0, 3, 0x00000011 },
-        { 0x28, 0, 0, 0x00000038 },
-        { 0x15, 0, 1, 0x00000223 },
-        { 0x6, 0, 0, 0x00040000 },
-        { 0x6, 0, 0, 0x00000000 },
+    { 0x28, 0, 0, 0xfffff004 },
+    { 0x15, 15, 0, 0x00000004 },
+    { 0x28, 0, 0, 0x0000000c },
+    { 0x15, 0, 13, 0x000086dd },
+    { 0x20, 0, 0, 0x00000026 },
+    { 0x15, 0, 11, 0xff020000 },
+    { 0x20, 0, 0, 0x0000002a },
+    { 0x15, 0, 9, 0x00000000 },
+    { 0x20, 0, 0, 0x0000002e },
+    { 0x15, 0, 7, 0x00000000 },
+    { 0x20, 0, 0, 0x00000032 },
+    { 0x15, 0, 5, 0x00010002 },
+    { 0x30, 0, 0, 0x00000014 },
+    { 0x15, 0, 3, 0x00000011 },
+    { 0x28, 0, 0, 0x00000038 },
+    { 0x15, 0, 1, 0x00000223 },
+    { 0x6, 0, 0, 0x00040000 },
+    { 0x6, 0, 0, 0x00000000 },
 };
 const struct sock_fprog ether_relay_fprog = {
         lengthof(ether_relay_filter),
         ether_relay_filter
 };
 
+/* sudo tcpdump -dd -i lo port 547 */
+static struct sock_filter lo_ether_relay_filter[] = {
+
+    { 0x28, 0, 0, 0x0000000c },
+    { 0x15, 0, 8, 0x000086dd },
+    { 0x30, 0, 0, 0x00000014 },
+    { 0x15, 2, 0, 0x00000084 },
+    { 0x15, 1, 0, 0x00000006 },
+    { 0x15, 0, 17, 0x00000011 },
+    { 0x28, 0, 0, 0x00000036 },
+    { 0x15, 14, 0, 0x00000223 },
+    { 0x28, 0, 0, 0x00000038 },
+    { 0x15, 12, 13, 0x00000223 },
+    { 0x15, 0, 12, 0x00000800 },
+    { 0x30, 0, 0, 0x00000017 },
+    { 0x15, 2, 0, 0x00000084 },
+    { 0x15, 1, 0, 0x00000006 },
+    { 0x15, 0, 8, 0x00000011 },
+    { 0x28, 0, 0, 0x00000014 },
+    { 0x45, 6, 0, 0x00001fff },
+    { 0xb1, 0, 0, 0x0000000e },
+    { 0x48, 0, 0, 0x0000000e },
+    { 0x15, 2, 0, 0x00000223 },
+    { 0x48, 0, 0, 0x00000010 },
+    { 0x15, 0, 1, 0x00000223 },
+    { 0x6, 0, 0, 0x00040000 },
+    { 0x6, 0, 0, 0x00000000 },
+};
+const struct sock_fprog lo_ether_relay_fprog = {
+        lengthof(lo_ether_relay_filter),
+        lo_ether_relay_filter
+};
 
 TEST(helper, toString)
 {
@@ -70,7 +106,7 @@ TEST(parsePacket, parse_ether_frame)
   EXPECT_EQ(0x13, ether_header->ether_shost[4]);
   EXPECT_EQ(0x01, ether_header->ether_shost[5]);
 
-  EXPECT_EQ(56710, ether_header->ether_type);
+  EXPECT_EQ(ntohs(ETHERTYPE_IPV6), ether_header->ether_type);
 }
 
 TEST(parsePacket, parse_ip6_hdr)
@@ -200,31 +236,7 @@ TEST(sock, sock_open_invalid_filter)
   const struct sock_fprog ether_relay_fprog = {0,{}};
   EXPECT_EQ(sock_open(&ether_relay_fprog), -1);
 }
-
-TEST(sock, sock_open_invalid_ifindex_zero)
-{
-  struct sock_filter ether_relay_filter[] = {
-      { 0x6, 0, 0, 0x00040000 },
-  };
-  const struct sock_fprog ether_relay_fprog = {
-      lengthof(ether_relay_filter),
-      ether_relay_filter
-  };
-  EXPECT_EQ(sock_open(&ether_relay_fprog), -1);
-}
-
-TEST(sock, sock_open_invalid_ifindex)
-{
-  struct sock_filter ether_relay_filter[] = {
-      { 0x6, 0, 0, 0x00040000 },
-  };
-  const struct sock_fprog ether_relay_fprog = {
-      lengthof(ether_relay_filter),
-      ether_relay_filter
-  };
-  EXPECT_EQ(sock_open(&ether_relay_fprog), -1);
-}
-
+/* 
 TEST(sock, prepare_socket)
 {
   relay_config *config = new struct relay_config;;
@@ -244,7 +256,7 @@ TEST(sock, prepare_socket)
   close(server_sock);
   delete config;
 }
-
+ */
 TEST(helper, send_udp)
 {
   int sock = 0;
@@ -416,12 +428,7 @@ TEST(relay, relay_relay_forw) {
       0x00, 0x17, 0x00, 0x18, 0x00, 0x08, 0x00, 0x02,
       0x00, 0x00, 0x00, 0x03, 0x00, 0x0c, 0xb0, 0x12,
       0xe8, 0xb4, 0x00, 0x00, 0x0e, 0x10, 0x00, 0x00,
-      0x15, 0x18, 0x00, 0x4f, 0x00, 0x08, 0x00, 0x01,
-      0x5a, 0xc6, 0xb0, 0x12, 0xe8, 0xb4, 0x00, 0x12,
-      0x00, 0x03, 0x47, 0x69, 0x32, 0x00, 0x25, 0x00,
-      0x16, 0x00, 0x00, 0x00, 0x09, 0x02, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x03, 0x00,
-      0x01, 0x00, 0x1e, 0xbd, 0x3c, 0x68, 0x00
+      0x15, 0x18
   };
   int32_t msg_len = sizeof(msg);
 
@@ -544,33 +551,240 @@ TEST(relay, relay_relay_reply)
   sendUdpCount = 0;
 }
 
-TEST(relay, callback) {
+TEST(callback, solicit) {
   evutil_socket_t fd = 1;
   short event = 1;
 
   struct relay_config config{};
   config.is_option_79 = true;
-
   config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x01;
-
-  struct ip6_hdr ip_hdr;
-  std::string s_addr = "fe80::1";
-  inet_pton(AF_INET6, s_addr.c_str(), &ip_hdr.ip6_src);
 
   config.servers.push_back("fc02:2000::1");
   config.servers.push_back("fc02:2000::2");
+  
+  struct sockaddr_in6 addr;
+  addr.sin6_family = AF_INET6;
+  addr.sin6_port = htons(RELAY_PORT);
+  inet_pton(AF_INET6, "::1", &addr.sin6_addr);
 
-  config.interface = "Vlan1000";
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   config.state_db = state_db;
-
-  int local_sock = 1;
-  int filter = 1;
-  config.filter = sock_open(&ether_relay_fprog);
+  config.filter = sock_open(&lo_ether_relay_fprog);
   EXPECT_GE(config.filter, 0);
-  prepare_relay_config(&config, &local_sock, filter);
+  int sock = socket(AF_INET6, SOCK_DGRAM, 0);
+  int local_sock = 0;
+  int server_sock = 0;
+  config.servers.push_back("fc02:2000::1");
+  config.servers.push_back("fc02:2000::2");
+  prepare_relay_config(&config, &local_sock, config.filter);
 
+  uint8_t solicit[] = { //SOLICIT
+      0x01, 0x2f, 0xf4, 0xc8, 0x00, 0x01, 0x00, 0x0e,
+      0x00, 0x01, 0x00, 0x01, 0x25, 0x3a, 0x37, 0xb9,
+      0x5a, 0xc6, 0xb0, 0x12, 0xe8, 0xb4, 0x00, 0x06,
+      0x00, 0x04, 0x00, 0x17, 0x00, 0x18, 0x00, 0x08,
+      0x00, 0x02, 0x00, 0x00, 0x00, 0x03, 0x00, 0x0c,
+      0xb0, 0x12, 0xe8, 0xb4, 0x00, 0x00, 0x0e, 0x10,
+      0x00, 0x00, 0x15, 0x18
+  };
+
+  sendto(sock, solicit, sizeof(solicit), 0, (sockaddr*)&addr, sizeof(addr));
+  std::this_thread::sleep_for(std::chrono::milliseconds(3000)); // wait 2 seconds for socket to receive data for consistent passing test
   callback(fd, event, &config);
+  EXPECT_GE(sendUdpCount, 2);
+  sendUdpCount = 0;
+
+  close(local_sock);
+  close(server_sock);
+}
+
+TEST(callback, relay_forward) {
+  evutil_socket_t fd = 1;
+  short event = 1;
+
+  struct relay_config config{};
+  config.is_option_79 = true;
+  config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x01;
+
+  config.servers.push_back("fc02:2000::1");
+  config.servers.push_back("fc02:2000::2");
+  
+  struct sockaddr_in6 addr;
+  addr.sin6_family = AF_INET6;
+  addr.sin6_port = htons(RELAY_PORT);
+  inet_pton(AF_INET6, "::1", &addr.sin6_addr);
+
+  std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+  config.state_db = state_db;
+  config.filter = sock_open(&lo_ether_relay_fprog);
+  EXPECT_GE(config.filter, 0);
+  int sock = socket(AF_INET6, SOCK_DGRAM, 0);
+  int local_sock = 0;
+  int server_sock = 0;
+  config.servers.push_back("fc02:2000::1");
+  config.servers.push_back("fc02:2000::2");
+  prepare_relay_config(&config, &local_sock, config.filter);
+
+  uint8_t relay_forward[] = { //RELAY_FORWARD
+    0x0c, 0x00, 0x20, 0x01, 0x0d, 0xb8, 0x01, 0x5a,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x01, 0xfe, 0x80, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x01, 0x00, 0x09, 0x00, 0x34, 0x01, 0x2f,
+    0xf4, 0xc8, 0x00, 0x01, 0x00, 0x0e, 0x00, 0x01,
+    0x00, 0x01, 0x25, 0x3a, 0x37, 0xb9, 0x5a, 0xc6,
+    0xb0, 0x12, 0xe8, 0xb4, 0x00, 0x06, 0x00, 0x04,
+    0x00, 0x17, 0x00, 0x18, 0x00, 0x08, 0x00, 0x02,
+    0x00, 0x00, 0x00, 0x03, 0x00, 0x0c, 0xb0, 0x12,
+    0xe8, 0xb4, 0x00, 0x00, 0x0e, 0x10, 0x00, 0x00,
+    0x15, 0x18
+  };
+
+  sendto(sock, relay_forward, sizeof(relay_forward), 0, (sockaddr*)&addr, sizeof(addr));
+  std::this_thread::sleep_for(std::chrono::milliseconds(3000)); // wait 2 seconds for socket to receive data for consistent passing test
+  callback(fd, event, &config);
+  EXPECT_GE(sendUdpCount, 2);
+  sendUdpCount = 0;
+
+  close(local_sock);
+  close(server_sock);
+}
+
+TEST(callback_dual_tor, solicit) {
+  evutil_socket_t fd = 1;
+  short event = 1;
+
+  struct relay_config config{};
+  config.is_option_79 = true;
+  config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x01;
+
+  config.servers.push_back("fc02:2000::1");
+  config.servers.push_back("fc02:2000::2");
+  
+  struct sockaddr_in6 addr;
+  addr.sin6_family = AF_INET6;
+  addr.sin6_port = htons(RELAY_PORT);
+  inet_pton(AF_INET6, "::1", &addr.sin6_addr);
+
+  std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+  state_db->hset("HW_MUX_CABLE_TABLE|lo", "state", "standby");
+  std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+  config_db->hset(config.mux_key + "lo", "tagging_mode", "untagged");
+  std::shared_ptr<swss::Table> mStateDbMuxTablePtr = std::make_shared<swss::Table> (
+          state_db.get(), "HW_MUX_CABLE_TABLE"
+      );
+
+  config.state_db = state_db;
+  config.mux_table = mStateDbMuxTablePtr;
+  config.interface = "lo";
+  config.filter = sock_open(&lo_ether_relay_fprog);
+  config.mux_key = "VLAN_MEMBER|Vlan000|";
+  config.config_db = config_db;
+  
+  EXPECT_GE(config.filter, 0); 
+  int sock = socket(AF_INET6, SOCK_DGRAM, 0);
+  int local_sock = 0;
+  int server_sock = 0;
+  config.servers.push_back("fc02:2000::1");
+  config.servers.push_back("fc02:2000::2");
+  prepare_relay_config(&config, &local_sock, config.filter);
+
+  uint8_t solicit[] = { /* SOLICIT */
+      0x01, 0x2f, 0xf4, 0xc8, 0x00, 0x01, 0x00, 0x0e,
+      0x00, 0x01, 0x00, 0x01, 0x25, 0x3a, 0x37, 0xb9,
+      0x5a, 0xc6, 0xb0, 0x12, 0xe8, 0xb4, 0x00, 0x06,
+      0x00, 0x04, 0x00, 0x17, 0x00, 0x18, 0x00, 0x08,
+      0x00, 0x02, 0x00, 0x00, 0x00, 0x03, 0x00, 0x0c,
+      0xb0, 0x12, 0xe8, 0xb4, 0x00, 0x00, 0x0e, 0x10,
+      0x00, 0x00, 0x15, 0x18
+  };
+
+  sendto(sock, solicit, sizeof(solicit), 0, (sockaddr*)&addr, sizeof(addr));
+  std::this_thread::sleep_for(std::chrono::milliseconds(3000)); // wait 2 seconds for socket to receive data for consistent passing test
+  callback_dual_tor(fd, event, &config);
+  EXPECT_EQ(sendUdpCount, 0);
+  sendUdpCount = 0;
+
+  config.state_db->hset("HW_MUX_CABLE_TABLE|lo", "state", "active");
+  sendto(sock, solicit, sizeof(solicit), 0, (sockaddr*)&addr, sizeof(addr));
+  std::this_thread::sleep_for(std::chrono::milliseconds(3000)); // wait 2 seconds for socket to receive data for consistent passing test
+  callback_dual_tor(fd, event, &config);
+  EXPECT_GE(sendUdpCount, 2);
+  sendUdpCount = 0;
+
+  close(local_sock);
+  close(server_sock);
+}
+
+TEST(callback_dual_tor, relay_forward) {
+  evutil_socket_t fd = 1;
+  short event = 1;
+
+  struct relay_config config{};
+  config.is_option_79 = true;
+  config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x01;
+
+  config.servers.push_back("fc02:2000::1");
+  config.servers.push_back("fc02:2000::2");
+  
+  struct sockaddr_in6 addr;
+  addr.sin6_family = AF_INET6;
+  addr.sin6_port = htons(RELAY_PORT);
+  inet_pton(AF_INET6, "::1", &addr.sin6_addr);
+
+  std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+  state_db->hset("HW_MUX_CABLE_TABLE|lo", "state", "standby");
+  std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+  config_db->hset(config.mux_key + "lo", "tagging_mode", "untagged");
+  std::shared_ptr<swss::Table> mStateDbMuxTablePtr = std::make_shared<swss::Table> (
+          state_db.get(), "HW_MUX_CABLE_TABLE"
+      );
+
+  config.state_db = state_db;
+  config.mux_table = mStateDbMuxTablePtr;
+  config.interface = "lo";
+  config.filter = sock_open(&lo_ether_relay_fprog);
+  config.mux_key = "VLAN_MEMBER|Vlan000|";
+  config.config_db = config_db;
+  
+  EXPECT_GE(config.filter, 0); 
+  int sock = socket(AF_INET6, SOCK_DGRAM, 0);
+  int local_sock = 0;
+  int server_sock = 0;
+  config.servers.push_back("fc02:2000::1");
+  config.servers.push_back("fc02:2000::2");
+  prepare_relay_config(&config, &local_sock, config.filter);
+
+  uint8_t relay_forward[] = { /* RELAY_FORWARD */
+    0x0c, 0x00, 0x20, 0x01, 0x0d, 0xb8, 0x01, 0x5a,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x01, 0xfe, 0x80, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x01, 0x00, 0x09, 0x00, 0x34, 0x01, 0x2f,
+    0xf4, 0xc8, 0x00, 0x01, 0x00, 0x0e, 0x00, 0x01,
+    0x00, 0x01, 0x25, 0x3a, 0x37, 0xb9, 0x5a, 0xc6,
+    0xb0, 0x12, 0xe8, 0xb4, 0x00, 0x06, 0x00, 0x04,
+    0x00, 0x17, 0x00, 0x18, 0x00, 0x08, 0x00, 0x02,
+    0x00, 0x00, 0x00, 0x03, 0x00, 0x0c, 0xb0, 0x12,
+    0xe8, 0xb4, 0x00, 0x00, 0x0e, 0x10, 0x00, 0x00,
+    0x15, 0x18
+  };
+
+  sendto(sock, relay_forward, sizeof(relay_forward), 0, (sockaddr*)&addr, sizeof(addr));
+  std::this_thread::sleep_for(std::chrono::milliseconds(3000)); // wait 2 seconds for socket to receive data for consistent passing test
+  callback_dual_tor(fd, event, &config);
+  EXPECT_EQ(sendUdpCount, 0);
+  sendUdpCount = 0;
+
+  config.state_db->hset("HW_MUX_CABLE_TABLE|lo", "state", "active");
+  sendto(sock, relay_forward, sizeof(relay_forward), 0, (sockaddr*)&addr, sizeof(addr));
+  std::this_thread::sleep_for(std::chrono::milliseconds(3000)); // wait 2 seconds for socket to receive data for consistent passing test
+  callback_dual_tor(fd, event, &config);
+  EXPECT_GE(sendUdpCount, 2);
+  sendUdpCount = 0;
+
+  close(local_sock);
+  close(server_sock);
 }
 
 TEST(relay, signal_init) {
