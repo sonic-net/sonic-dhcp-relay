@@ -12,6 +12,7 @@
 #include "dbconnector.h" 
 #include "configInterface.h"
 
+#define BUFFER_SIZE 9200
 
 struct event *listen_event;
 struct event *server_listen_event;
@@ -451,7 +452,7 @@ void prepare_socket(int *local_sock, int *server_sock, relay_config *config) {
  * @return none
  */
 void relay_client(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, const ether_header *ether_hdr, relay_config *config) {    
-    static uint8_t buffer[4096];
+    static uint8_t buffer[BUFFER_SIZE];
     auto current_buffer_position = buffer;
     dhcpv6_relay_msg new_message;
     new_message.msg_type = DHCPv6_MESSAGE_TYPE_RELAY_FORW;
@@ -514,7 +515,7 @@ void relay_client(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *ip_h
  * @return none
  */
 void relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, relay_config *config) {
-    static uint8_t buffer[4096];
+    static uint8_t buffer[BUFFER_SIZE];
     dhcpv6_relay_msg new_message;
     auto current_buffer_position = buffer;
     auto dhcp_relay_header = parse_dhcpv6_relay(msg);
@@ -553,7 +554,7 @@ void relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *
  * @return              none
  */
  void relay_relay_reply(int sock, const uint8_t *msg, int32_t len, relay_config *config) {
-    static uint8_t buffer[4096];
+    static uint8_t buffer[BUFFER_SIZE];
     uint8_t type = 0;
     struct sockaddr_in6 target_addr;
     auto current_buffer_position = buffer;
@@ -604,9 +605,9 @@ void relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *
  */
 void callback(evutil_socket_t fd, short event, void *arg) {
     struct relay_config *config = (struct relay_config *)arg;
-    static uint8_t message_buffer[4096];
+    static uint8_t message_buffer[BUFFER_SIZE];
     std::string counterVlan = counter_table;
-    int32_t len = recv(config->filter, message_buffer, 4096, 0);
+    int32_t len = recv(config->filter, message_buffer, BUFFER_SIZE, 0);
     if (len <= 0) {
         syslog(LOG_WARNING, "recv: Failed to receive data at filter socket: %s\n", strerror(errno));
         return;
@@ -629,7 +630,7 @@ void callback(evutil_socket_t fd, short event, void *arg) {
         do {
             ext_header = (const struct ip6_ext *)current_position;
             current_position += ext_header->ip6e_len;
-            if((current_position == prev) || (current_position >= (uint8_t *)ptr + sizeof(message_buffer))) {
+            if((current_position == prev) || (current_position + sizeof(*ext_header) >= (uint8_t *)ptr + sizeof(message_buffer))) {
                 return;
             }
             prev = current_position;
@@ -638,12 +639,17 @@ void callback(evutil_socket_t fd, short event, void *arg) {
     }
 
     auto udp_header = parse_udp(current_position, &tmp);
-    if ((current_position + ntohs(udp_header->len)) != ((uint8_t *)ptr + len)) {
-        syslog(LOG_WARNING, "UDP header length is invalid\n");
+    uint16_t udp_len = ntohs(udp_header->len);
+    if (((current_position + udp_len) != ((uint8_t *)ptr + len)) || (udp_len < 8)) { // UDP header length is 8
+        syslog(LOG_WARNING, "Invalid UDP header length\n");
         return;
     }
     current_position = tmp;
 
+    if (current_position + 4 > ((uint8_t *)ptr + len)) { // struct dhcpv6_msg size is 4
+        syslog(LOG_WARNING, "Invalid DHCPv6 header");
+        return;
+    }
     auto msg = parse_dhcpv6_hdr(current_position);
     auto option_position = current_position + sizeof(struct dhcpv6_msg);
 
@@ -662,7 +668,7 @@ void callback(evutil_socket_t fd, short event, void *arg) {
         case DHCPv6_MESSAGE_TYPE_DECLINE:
         case DHCPv6_MESSAGE_TYPE_INFORMATION_REQUEST:
         {
-            while (option_position - message_buffer < len) {
+            while ((option_position - message_buffer + sizeof(struct dhcpv6_option)) < (uint8_t)len) {
                 auto option = parse_dhcpv6_opt(option_position, &tmp);
                 option_position = tmp;
                 if (ntohs(option->option_code) > DHCPv6_OPTION_LIMIT) {
@@ -701,11 +707,11 @@ void callback_dual_tor(evutil_socket_t fd, short event, void *arg) {
     struct sockaddr_ll sll;
     socklen_t slen = sizeof sll;
 
-    static uint8_t message_buffer[4096];
+    static uint8_t message_buffer[BUFFER_SIZE];
     std::string counterVlan = counter_table;
     std::string key = config->mux_key;
 
-    ssize_t buffer_sz = recvfrom(config->filter, message_buffer, 4096, 0, (struct sockaddr *)&sll, &slen);
+    ssize_t buffer_sz = recvfrom(config->filter, message_buffer, BUFFER_SIZE, 0, (struct sockaddr *)&sll, &slen);
     if (buffer_sz <= 0) {
         syslog(LOG_WARNING, "recv: Failed to receive data at filter socket: %s\n", strerror(errno));
         return;
@@ -735,7 +741,7 @@ void callback_dual_tor(evutil_socket_t fd, short event, void *arg) {
             do {
                 ext_header = (const struct ip6_ext *)current_position;
                 current_position += ext_header->ip6e_len;
-                if((current_position == prev) || (current_position >= (uint8_t *)ptr + sizeof(message_buffer))) {
+                if((current_position == prev) || (current_position + sizeof(*ext_header) >= (uint8_t *)ptr + sizeof(message_buffer))) {
                     return;
                 }
                 prev = current_position;
@@ -744,6 +750,11 @@ void callback_dual_tor(evutil_socket_t fd, short event, void *arg) {
         }
 
         auto udp_header = parse_udp(current_position, &tmp);
+        uint16_t udp_len = ntohs(udp_header->len);
+        if (((current_position + udp_len) != ((uint8_t *)ptr + buffer_sz)) || (udp_len < 8)) {
+            syslog(LOG_WARNING, "Invalid UDP header length\n");
+            return;
+        }
         current_position = tmp;
 
         auto msg = parse_dhcpv6_hdr(current_position);
@@ -764,7 +775,7 @@ void callback_dual_tor(evutil_socket_t fd, short event, void *arg) {
             case DHCPv6_MESSAGE_TYPE_DECLINE:
             case DHCPv6_MESSAGE_TYPE_INFORMATION_REQUEST:
             {
-                while (option_position - message_buffer < buffer_sz) {
+                while ((option_position - message_buffer + sizeof(struct dhcpv6_option)) < (uint8_t)buffer_sz) {
                     auto option = parse_dhcpv6_opt(option_position, &tmp);
                     option_position = tmp;
                     if (ntohs(option->option_code) > DHCPv6_OPTION_LIMIT) {
@@ -804,10 +815,11 @@ void server_callback(evutil_socket_t fd, short event, void *arg) {
     sockaddr_in6 from;
     socklen_t len = sizeof(from);
     int32_t data = 0;
-    static uint8_t message_buffer[4096];
+    static uint8_t message_buffer[BUFFER_SIZE];
 
-    if ((data = recvfrom(config->local_sock, message_buffer, 4096, 0, (sockaddr *)&from, &len)) == -1) {
-        syslog(LOG_WARNING, "recv: Failed to receive data from server\n");
+    if ((data = recvfrom(config->local_sock, message_buffer, BUFFER_SIZE, 0, (sockaddr *)&from, &len)) == -1) {
+        syslog(LOG_ERR, "recv: Failed to receive data from server\n");
+        return;
     }
 
     auto msg = parse_dhcpv6_hdr(message_buffer);
@@ -835,10 +847,11 @@ void server_callback_dual_tor(evutil_socket_t fd, short event, void *arg) {
     sockaddr_in6 from;
     socklen_t len = sizeof(from);
     int32_t data = 0;
-    static uint8_t message_buffer[4096];
+    static uint8_t message_buffer[BUFFER_SIZE];
 
-    if ((data = recvfrom(config->local_sock, message_buffer, 4096, 0, (sockaddr *)&from, &len)) == -1) {
+    if ((data = recvfrom(config->local_sock, message_buffer, BUFFER_SIZE, 0, (sockaddr *)&from, &len)) == -1) {
         syslog(LOG_WARNING, "recv: Failed to receive data from server\n");
+        return;
     }
 
     auto msg = parse_dhcpv6_hdr(message_buffer);
