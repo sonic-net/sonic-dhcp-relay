@@ -646,7 +646,7 @@ void callback(evutil_socket_t fd, short event, void *arg) {
     }
     current_position = tmp;
 
-    if (current_position + 4 > ((uint8_t *)ptr + len)) { // struct dhcpv6_msg size is 4
+    if (current_position + sizeof(struct dhcpv6_msg) < ((uint8_t *)ptr + len)) {
         syslog(LOG_WARNING, "Invalid DHCPv6 header");
         return;
     }
@@ -757,6 +757,10 @@ void callback_dual_tor(evutil_socket_t fd, short event, void *arg) {
         }
         current_position = tmp;
 
+        if (current_position + sizeof(struct dhcpv6_msg) < ((uint8_t *)ptr + buffer_sz)) {
+            syslog(LOG_WARNING, "Invalid DHCPv6 header");
+            return;
+        }
         auto msg = parse_dhcpv6_hdr(current_position);
         auto option_position = current_position + sizeof(struct dhcpv6_msg);
 
@@ -822,6 +826,11 @@ void server_callback(evutil_socket_t fd, short event, void *arg) {
         return;
     }
 
+    if (data < (int32_t)sizeof(struct dhcpv6_msg)) {
+        syslog(LOG_WARNING, "Invalid DHCPv6 header");
+        return;
+    }
+
     auto msg = parse_dhcpv6_hdr(message_buffer);
     counters[msg->msg_type]++;
     std::string counterVlan = counter_table;
@@ -851,6 +860,11 @@ void server_callback_dual_tor(evutil_socket_t fd, short event, void *arg) {
 
     if ((data = recvfrom(config->local_sock, message_buffer, BUFFER_SIZE, 0, (sockaddr *)&from, &len)) == -1) {
         syslog(LOG_WARNING, "recv: Failed to receive data from server\n");
+        return;
+    }
+
+    if (data < (int32_t)sizeof(struct dhcpv6_msg)) {
+        syslog(LOG_WARNING, "Invalid DHCPv6 header");
         return;
     }
 
