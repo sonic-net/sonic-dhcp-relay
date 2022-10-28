@@ -651,6 +651,9 @@ void callback(evutil_socket_t fd, short event, void *arg) {
         return;
     }
     auto msg = parse_dhcpv6_hdr(current_position);
+    if (ntohs(msg->msg_type) == 0 || ntohs(msg->msg_type) > 14) {
+        return;
+    }
     auto option_position = current_position + sizeof(struct dhcpv6_msg);
 
     switch (msg->msg_type) {
@@ -762,6 +765,9 @@ void callback_dual_tor(evutil_socket_t fd, short event, void *arg) {
             return;
         }
         auto msg = parse_dhcpv6_hdr(current_position);
+        if (ntohs(msg->msg_type) == 0 || ntohs(msg->msg_type) > 14) {
+            return;
+        }
         auto option_position = current_position + sizeof(struct dhcpv6_msg);
 
         switch (msg->msg_type) {
@@ -789,7 +795,12 @@ void callback_dual_tor(evutil_socket_t fd, short event, void *arg) {
                         return;
                     }
                 }
-                counters[msg->msg_type]++;
+                if (ntohs(msg->msg_type) == 0 || ntohs(msg->msg_type) > 14) {
+                    return;
+                }
+                else {
+                    counters[msg->msg_type]++;
+                }
                 update_counter(config->state_db, counterVlan.append(config->interface), msg->msg_type);
                 relay_client(config->local_sock, current_position, ntohs(udp_header->len) - sizeof(udphdr), ip_header, ether_header, config);
                 break;
@@ -832,7 +843,12 @@ void server_callback(evutil_socket_t fd, short event, void *arg) {
     }
 
     auto msg = parse_dhcpv6_hdr(message_buffer);
-    counters[msg->msg_type]++;
+    if (ntohs(msg->msg_type) == 0 || ntohs(msg->msg_type) > 14) {
+        return;
+    }
+    else {
+        counters[msg->msg_type]++;
+    }
     std::string counterVlan = counter_table;
     update_counter(config->state_db, counterVlan.append(config->interface), msg->msg_type);
     if (msg->msg_type == DHCPv6_MESSAGE_TYPE_RELAY_REPL) {
@@ -869,7 +885,12 @@ void server_callback_dual_tor(evutil_socket_t fd, short event, void *arg) {
     }
 
     auto msg = parse_dhcpv6_hdr(message_buffer);
-    counters[msg->msg_type]++;
+    if (ntohs(msg->msg_type) == 0 || ntohs(msg->msg_type) > 14) {
+        return;
+    }
+    else {
+        counters[msg->msg_type]++;
+    }
     std::string counterVlan = counter_table;
     update_counter(config->state_db, counterVlan.append(config->interface), msg->msg_type);
     if (msg->msg_type == DHCPv6_MESSAGE_TYPE_RELAY_REPL) {
