@@ -646,14 +646,17 @@ void callback(evutil_socket_t fd, short event, void *arg) {
     }
     current_position = tmp;
 
-    if (current_position + sizeof(struct dhcpv6_msg) < ((uint8_t *)ptr + len)) {
-        syslog(LOG_WARNING, "Invalid DHCPv6 header");
+    if (current_position + sizeof(struct dhcpv6_msg) > ((uint8_t *)ptr + len)) {
+        syslog(LOG_WARNING, "Invalid DHCPv6 packet length %d, no space for dhcpv6 msg header\n", len);
         return;
     }
     auto msg = parse_dhcpv6_hdr(current_position);
-    if (ntohs(msg->msg_type) == 0 || ntohs(msg->msg_type) > 14) {
+    // RFC3315 only
+    if (msg->msg_type < DHCPv6_MESSAGE_TYPE_SOLICIT || msg->msg_type > DHCPv6_MESSAGE_TYPE_RELAY_REPL) {
+        syslog(LOG_WARNING, "Unknown DHCPv6 message type %d\n", msg->msg_type);
         return;
     }
+
     auto option_position = current_position + sizeof(struct dhcpv6_msg);
 
     switch (msg->msg_type) {
@@ -760,14 +763,17 @@ void callback_dual_tor(evutil_socket_t fd, short event, void *arg) {
         }
         current_position = tmp;
 
-        if (current_position + sizeof(struct dhcpv6_msg) < ((uint8_t *)ptr + buffer_sz)) {
-            syslog(LOG_WARNING, "Invalid DHCPv6 header");
+        if (current_position + sizeof(struct dhcpv6_msg) > ((uint8_t *)ptr + buffer_sz)) {
+            syslog(LOG_WARNING, "Invalid DHCPv6 packet length %d, no space for dhcpv6 msg header\n", buffer_sz);
             return;
         }
         auto msg = parse_dhcpv6_hdr(current_position);
-        if (ntohs(msg->msg_type) == 0 || ntohs(msg->msg_type) > 14) {
+        // RFC3315 only
+        if (msg->msg_type < DHCPv6_MESSAGE_TYPE_SOLICIT || msg->msg_type > DHCPv6_MESSAGE_TYPE_RELAY_REPL) {
+            syslog(LOG_WARNING, "Unknown DHCPv6 message type %d\n", msg->msg_type);
             return;
         }
+
         auto option_position = current_position + sizeof(struct dhcpv6_msg);
 
         switch (msg->msg_type) {
