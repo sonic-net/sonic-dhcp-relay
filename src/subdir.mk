@@ -1,4 +1,5 @@
-OBJS += \
-$(PWD)/src/relay.o \
-$(PWD)/src/configInterface.o \
-$(PWD)/src/main.o 
+SRCS += \
+src/sender.cpp \
+src/relay.cpp \
+src/configInterface.cpp \
+src/main.cpp
