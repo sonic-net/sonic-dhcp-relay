@@ -643,6 +643,7 @@ void callback(evutil_socket_t fd, short event, void *arg) {
     auto msg = parse_dhcpv6_hdr(current_position);
     // RFC3315 only
     if (msg->msg_type < DHCPv6_MESSAGE_TYPE_SOLICIT || msg->msg_type > DHCPv6_MESSAGE_TYPE_RELAY_REPL) {
+        update_counter(config->state_db, counterVlan.append(config->interface), DHCPv6_MESSAGE_TYPE_UNKNOWN);
         syslog(LOG_WARNING, "Unknown DHCPv6 message type %d\n", msg->msg_type);
         return;
     }
@@ -760,6 +761,7 @@ void callback_dual_tor(evutil_socket_t fd, short event, void *arg) {
         auto msg = parse_dhcpv6_hdr(current_position);
         // RFC3315 only
         if (msg->msg_type < DHCPv6_MESSAGE_TYPE_SOLICIT || msg->msg_type > DHCPv6_MESSAGE_TYPE_RELAY_REPL) {
+            update_counter(config->state_db, counterVlan.append(config->interface), DHCPv6_MESSAGE_TYPE_UNKNOWN);
             syslog(LOG_WARNING, "Unknown DHCPv6 message type %d\n", msg->msg_type);
             return;
         }
@@ -841,6 +843,7 @@ void server_callback(evutil_socket_t fd, short event, void *arg) {
     auto msg = parse_dhcpv6_hdr(message_buffer);
     // RFC3315 only
     if (msg->msg_type < DHCPv6_MESSAGE_TYPE_SOLICIT || msg->msg_type > DHCPv6_MESSAGE_TYPE_RELAY_REPL) {
+        update_counter(config->state_db, counterVlan.append(config->interface), DHCPv6_MESSAGE_TYPE_UNKNOWN);
         syslog(LOG_WARNING, "Unknown DHCPv6 message type %d\n", msg->msg_type);
         return;
     }
