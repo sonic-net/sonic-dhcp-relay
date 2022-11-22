@@ -755,7 +755,7 @@ void callback_dual_tor(evutil_socket_t fd, short event, void *arg) {
         current_position = tmp;
 
         if (current_position + sizeof(struct dhcpv6_msg) > ((uint8_t *)ptr + buffer_sz)) {
-            syslog(LOG_WARNING, "Invalid DHCPv6 packet length %d, no space for dhcpv6 msg header\n", buffer_sz);
+            syslog(LOG_WARNING, "Invalid DHCPv6 packet length %ld, no space for dhcpv6 msg header\n", buffer_sz);
             return;
         }
         auto msg = parse_dhcpv6_hdr(current_position);
@@ -829,6 +829,7 @@ void server_callback(evutil_socket_t fd, short event, void *arg) {
     socklen_t len = sizeof(from);
     int32_t data = 0;
     static uint8_t message_buffer[BUFFER_SIZE];
+    std::string counterVlan = counter_table;
 
     if ((data = recvfrom(config->local_sock, message_buffer, BUFFER_SIZE, 0, (sockaddr *)&from, &len)) == -1) {
         syslog(LOG_ERR, "recv: Failed to receive data from server\n");
@@ -850,7 +851,7 @@ void server_callback(evutil_socket_t fd, short event, void *arg) {
     else {
         counters[msg->msg_type]++;
     }
-    std::string counterVlan = counter_table;
+
     update_counter(config->state_db, counterVlan.append(config->interface), msg->msg_type);
     if (msg->msg_type == DHCPv6_MESSAGE_TYPE_RELAY_REPL) {
         relay_relay_reply(config->server_sock, message_buffer, data, config);
