@@ -755,7 +755,7 @@ void callback_dual_tor(evutil_socket_t fd, short event, void *arg) {
         current_position = tmp;
 
         if (current_position + sizeof(struct dhcpv6_msg) > ((uint8_t *)ptr + buffer_sz)) {
-            syslog(LOG_WARNING, "Invalid DHCPv6 packet length %ld, no space for dhcpv6 msg header\n", buffer_sz);
+            syslog(LOG_WARNING, "Invalid DHCPv6 packet length %zu, no space for dhcpv6 msg header\n", buffer_sz);
             return;
         }
         auto msg = parse_dhcpv6_hdr(current_position);
@@ -837,7 +837,7 @@ void server_callback(evutil_socket_t fd, short event, void *arg) {
     }
 
     if (data < (int32_t)sizeof(struct dhcpv6_msg)) {
-        syslog(LOG_WARNING, "Invalid DHCPv6 packet length %d, no space for dhcpv6 msg header\n", len);
+        syslog(LOG_WARNING, "Invalid DHCPv6 packet length %zu, no space for dhcpv6 msg header\n", data);
 	return;
     }
 
