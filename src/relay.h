@@ -394,15 +394,3 @@ void callback_dual_tor(evutil_socket_t fd, short event, void *arg);
  */
 void server_callback(evutil_socket_t fd, short event, void *arg);
 
-/**
- * @code                void server_callback_dual_tor(evutil_socket_t fd, short event, void *arg);
- * 
- * @brief               callback for libevent that is called everytime data is received at the server socket
- *
- * @param fd            filter socket
- * @param event         libevent triggered event  
- * @param arg           callback argument provided by user
- *
- * @return              none
- */
-void server_callback_dual_tor(evutil_socket_t fd, short event, void *arg);
