@@ -653,6 +653,7 @@ void callback(evutil_socket_t fd, short event, void *arg) {
     auto msg = parse_dhcpv6_hdr(current_position);
     // RFC3315 only
     if (msg->msg_type < DHCPv6_MESSAGE_TYPE_SOLICIT || msg->msg_type > DHCPv6_MESSAGE_TYPE_RELAY_REPL) {
+        update_counter(config->state_db, counterVlan.append(config->interface), DHCPv6_MESSAGE_TYPE_UNKNOWN);
         syslog(LOG_WARNING, "Unknown DHCPv6 message type %d\n", msg->msg_type);
         return;
     }
@@ -764,12 +765,13 @@ void callback_dual_tor(evutil_socket_t fd, short event, void *arg) {
         current_position = tmp;
 
         if (current_position + sizeof(struct dhcpv6_msg) > ((uint8_t *)ptr + buffer_sz)) {
-            syslog(LOG_WARNING, "Invalid DHCPv6 packet length %d, no space for dhcpv6 msg header\n", buffer_sz);
+            syslog(LOG_WARNING, "Invalid DHCPv6 packet length %zu, no space for dhcpv6 msg header\n", buffer_sz);
             return;
         }
         auto msg = parse_dhcpv6_hdr(current_position);
         // RFC3315 only
         if (msg->msg_type < DHCPv6_MESSAGE_TYPE_SOLICIT || msg->msg_type > DHCPv6_MESSAGE_TYPE_RELAY_REPL) {
+            update_counter(config->state_db, counterVlan.append(config->interface), DHCPv6_MESSAGE_TYPE_UNKNOWN);
             syslog(LOG_WARNING, "Unknown DHCPv6 message type %d\n", msg->msg_type);
             return;
         }
@@ -837,6 +839,7 @@ void server_callback(evutil_socket_t fd, short event, void *arg) {
     socklen_t len = sizeof(from);
     int32_t data = 0;
     static uint8_t message_buffer[BUFFER_SIZE];
+    std::string counterVlan = counter_table;
 
     if ((data = recvfrom(config->local_sock, message_buffer, BUFFER_SIZE, 0, (sockaddr *)&from, &len)) == -1) {
         syslog(LOG_ERR, "recv: Failed to receive data from server\n");
@@ -844,60 +847,21 @@ void server_callback(evutil_socket_t fd, short event, void *arg) {
     }
 
     if (data < (int32_t)sizeof(struct dhcpv6_msg)) {
-        syslog(LOG_WARNING, "Invalid DHCPv6 header");
-        return;
+        syslog(LOG_WARNING, "Invalid DHCPv6 packet length %d, no space for dhcpv6 msg header\n", data);
+	return;
     }
 
     auto msg = parse_dhcpv6_hdr(message_buffer);
-    if (ntohs(msg->msg_type) == 0 || ntohs(msg->msg_type) > 14) {
+    // RFC3315 only
+    if (msg->msg_type < DHCPv6_MESSAGE_TYPE_SOLICIT || msg->msg_type > DHCPv6_MESSAGE_TYPE_RELAY_REPL) {
+        update_counter(config->state_db, counterVlan.append(config->interface), DHCPv6_MESSAGE_TYPE_UNKNOWN);
+        syslog(LOG_WARNING, "Unknown DHCPv6 message type %d\n", msg->msg_type);
         return;
     }
     else {
         counters[msg->msg_type]++;
     }
-    std::string counterVlan = counter_table;
-    update_counter(config->state_db, counterVlan.append(config->interface), msg->msg_type);
-    if (msg->msg_type == DHCPv6_MESSAGE_TYPE_RELAY_REPL) {
-        relay_relay_reply(config->server_sock, message_buffer, data, config);
-    }
-}
 
-/**
- * @code                void server_callback_dual_tor(evutil_socket_t fd, short event, void *arg);
- * 
- * @brief               callback for libevent that is called everytime data is received at the server socket
- *
- * @param fd            filter socket
- * @param event         libevent triggered event  
- * @param arg           callback argument provided by user
- *
- * @return              none
- */
-void server_callback_dual_tor(evutil_socket_t fd, short event, void *arg) {
-    struct relay_config *config = (struct relay_config *)arg;
-    sockaddr_in6 from;
-    socklen_t len = sizeof(from);
-    int32_t data = 0;
-    static uint8_t message_buffer[BUFFER_SIZE];
-
-    if ((data = recvfrom(config->local_sock, message_buffer, BUFFER_SIZE, 0, (sockaddr *)&from, &len)) == -1) {
-        syslog(LOG_WARNING, "recv: Failed to receive data from server\n");
-        return;
-    }
-
-    if (data < (int32_t)sizeof(struct dhcpv6_msg)) {
-        syslog(LOG_WARNING, "Invalid DHCPv6 header");
-        return;
-    }
-
-    auto msg = parse_dhcpv6_hdr(message_buffer);
-    if (ntohs(msg->msg_type) == 0 || ntohs(msg->msg_type) > 14) {
-        return;
-    }
-    else {
-        counters[msg->msg_type]++;
-    }
-    std::string counterVlan = counter_table;
     update_counter(config->state_db, counterVlan.append(config->interface), msg->msg_type);
     if (msg->msg_type == DHCPv6_MESSAGE_TYPE_RELAY_REPL) {
         relay_relay_reply(config->server_sock, message_buffer, data, config);
@@ -1039,12 +1003,11 @@ void loop_relay(std::vector<relay_config> *vlans) {
     
         if (dual_tor_sock) {
             listen_event = event_new(base, filter, EV_READ|EV_PERSIST, callback_dual_tor, config);
-            server_listen_event = event_new(base, local_sock, EV_READ|EV_PERSIST, server_callback_dual_tor, config);
         }
         else {
             listen_event = event_new(base, filter, EV_READ|EV_PERSIST, callback, config);
-            server_listen_event = event_new(base, local_sock, EV_READ|EV_PERSIST, server_callback, config);
         }
+	server_listen_event = event_new(base, local_sock, EV_READ|EV_PERSIST, server_callback, config);
 
         if (listen_event == NULL || server_listen_event == NULL) {
             syslog(LOG_ERR, "libevent: Failed to create libevent\n");
