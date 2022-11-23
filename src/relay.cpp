@@ -837,7 +837,7 @@ void server_callback(evutil_socket_t fd, short event, void *arg) {
     }
 
     if (data < (int32_t)sizeof(struct dhcpv6_msg)) {
-        syslog(LOG_WARNING, "Invalid DHCPv6 packet length %zu, no space for dhcpv6 msg header\n", data);
+        syslog(LOG_WARNING, "Invalid DHCPv6 packet length %d, no space for dhcpv6 msg header\n", data);
 	return;
     }
 
