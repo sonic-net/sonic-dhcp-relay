@@ -22,7 +22,7 @@ void initialize_swss(std::vector<relay_config> *vlans)
         std::shared_ptr<swss::DBConnector> configDbPtr = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
         swss::SubscriberStateTable ipHelpersTable(configDbPtr.get(), "DHCP_RELAY");
         swssSelect.addSelectable(&ipHelpersTable);
-        get_dhcp(vlans, &ipHelpersTable);
+        get_dhcp(vlans, &ipHelpersTable, false);
         struct swssNotification test;
         test.vlans = vlans;
         test.ipHelpersTable = &ipHelpersTable;
@@ -43,18 +43,20 @@ void initialize_swss(std::vector<relay_config> *vlans)
 void deinitialize_swss()
 {
     stopSwssNotificationPoll();
-    mSwssThreadPtr->interrupt();
+    if (mSwssThreadPtr != nullptr) {
+        mSwssThreadPtr->interrupt();
+    }
 }
 
 
 /**
- * @code                void get_dhcp(std::vector<relay_config> *vlans)
+ * @code                void get_dhcp(std::vector<relay_config> *vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic)
  * 
  * @brief               initialize and get vlan table information from DHCP_RELAY
  *
  * @return              none
  */
-void get_dhcp(std::vector<relay_config> *vlans, swss::SubscriberStateTable *ipHelpersTable) {
+void get_dhcp(std::vector<relay_config> *vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic) {
     swss::Selectable *selectable;
     int ret = swssSelect.select(&selectable, DEFAULT_TIMEOUT_MSEC);
     if (ret == swss::Select::ERROR) {
@@ -62,7 +64,12 @@ void get_dhcp(std::vector<relay_config> *vlans, swss::SubscriberStateTable *ipHe
     } else if (ret == swss::Select::TIMEOUT) {
     } 
     if (selectable == static_cast<swss::Selectable *> (ipHelpersTable)) {
-        handleRelayNotification(*ipHelpersTable, vlans);
+        if (!dynamic) {
+            handleRelayNotification(*ipHelpersTable, vlans);
+        } else {
+            syslog(LOG_WARNING, "relay config changed, "
+                   "need restart container to take effect");
+        }
     }
 }
 /**
@@ -77,8 +84,8 @@ void get_dhcp(std::vector<relay_config> *vlans, swss::SubscriberStateTable *ipHe
 void handleSwssNotification(swssNotification test)
 {
     while (pollSwssNotifcation) {
-        get_dhcp(test.vlans, test.ipHelpersTable);
-    } 
+        get_dhcp(test.vlans, test.ipHelpersTable, true);
+    }
 }
 
 /**
