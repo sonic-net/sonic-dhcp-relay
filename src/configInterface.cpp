@@ -23,7 +23,7 @@ void initialize_swss(std::vector<relay_config> *vlans)
 {
     try {
         swssSelect.addSelectable(&ipHelpersTable);
-        get_dhcp(vlans);
+        get_dhcp(vlans, false);
         mSwssThreadPtr = std::make_shared<boost::thread> (&handleSwssNotification, vlans);
     }
     catch (const std::bad_alloc &e) {
@@ -41,26 +41,33 @@ void initialize_swss(std::vector<relay_config> *vlans)
 void deinitialize_swss()
 {
     stopSwssNotificationPoll();
-    mSwssThreadPtr->interrupt();
+    if (mSwssThreadPtr != nullptr) {
+        mSwssThreadPtr->interrupt();
+    }
 }
 
 
 /**
- * @code                void get_dhcp(std::vector<relay_config> *vlans)
+ * @code                void get_dhcp(std::vector<relay_config> *vlans, bool dynamic)
  * 
  * @brief               initialize and get vlan table information from DHCP_RELAY
  *
  * @return              none
  */
-void get_dhcp(std::vector<relay_config> *vlans) {
+void get_dhcp(std::vector<relay_config> *vlans, bool dynamic) {
     swss::Selectable *selectable;
     int ret = swssSelect.select(&selectable, DEFAULT_TIMEOUT_MSEC);
     if (ret == swss::Select::ERROR) {
         syslog(LOG_WARNING, "Select: returned ERROR");
     } else if (ret == swss::Select::TIMEOUT) {
-    } 
+    }
     if (selectable == static_cast<swss::Selectable *> (&ipHelpersTable)) {
-        handleRelayNotification(ipHelpersTable, vlans);
+        if (!dynamic) {
+            handleRelayNotification(ipHelpersTable, vlans);
+        } else {
+            syslog(LOG_WARNING, "dynamic configration change disabled, "
+                   "need restart container to take effect");
+        }
     }
 }
 /**
@@ -75,7 +82,7 @@ void get_dhcp(std::vector<relay_config> *vlans) {
 void handleSwssNotification(std::vector<relay_config> *vlans)
 {
     while (pollSwssNotifcation) {
-        get_dhcp(vlans);
+        get_dhcp(vlans, true);
     } 
 }
 
