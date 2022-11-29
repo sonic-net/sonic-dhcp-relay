@@ -54,7 +54,7 @@ jobs:
             swig3.0 \
             uuid-dev \
             libzmq3-dev \
-            libyang \
+            libyang1 \
             libyang-dev
 
     - name: build-swss-common
