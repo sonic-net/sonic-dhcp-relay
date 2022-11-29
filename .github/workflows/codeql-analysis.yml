@@ -55,6 +55,7 @@ jobs:
             uuid-dev \
             libzmq3-dev \
             libyang-dev \
+            libpython2.7-dev \
             python
 
     - name: build-swss-common
