@@ -10,6 +10,7 @@
 #include <linux/filter.h>
 #include <string>
 #include <vector>
+#include <unordered_map>
 #include <event2/util.h>
 #include "dbconnector.h"
 #include "table.h"
@@ -20,13 +21,17 @@
 #define RELAY_PORT 547
 #define CLIENT_PORT 546
 #define HOP_LIMIT 8     //HOP_LIMIT reduced from 32 to 8 as stated in RFC8415
-#define DHCPv6_OPTION_LIMIT 56      // DHCPv6 option code greater than 56 are currently unassigned
+#define DHCPv6_OPTION_LIMIT 62      // DHCPv6 option code greater than 62 are currently unassigned
+#define RAWSOCKET_RECV_SIZE 1048576 // system allowed max size under /proc/sys/net/core/rmem_max
+#define CLIENT_IF_PREFIX "Ethernet"
 
 #define lengthof(A) (sizeof (A) / sizeof (A)[0])
 
 #define OPTION_RELAY_MSG 9
 #define OPTION_INTERFACE_ID 18
 #define OPTION_CLIENT_LINKLAYER_ADDR 79
+
+#define BATCH_SIZE 64
 
 extern bool dual_tor_sock;
 
@@ -124,7 +129,7 @@ int sock_open(const struct sock_fprog *fprog);
 void prepare_socket(int *local_sock, int *server_sock, relay_config *config);
 
 /**
- * @code                        prepare_relay_config(relay_config *interface_config, int local_sock, int filter);
+ * @code                        prepare_relay_config(relay_config &interface_config, int local_sock, int filter);
  * 
  * @brief                       prepare for specified relay interface config: server and link address
  *
@@ -134,7 +139,7 @@ void prepare_socket(int *local_sock, int *server_sock, relay_config *config);
  *
  * @return                      none
  */
-void prepare_relay_config(relay_config *interface_config, int *local_sock, int filter);
+void prepare_relay_config(relay_config &interface_config, int local_sock, int filter);
 
 /**
  * @code                relay_forward(uint8_t *buffer, const struct dhcpv6_msg *msg, uint16_t msg_length);
@@ -195,14 +200,14 @@ void relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *
 void relay_relay_reply(int sock, const uint8_t *msg, int32_t len, relay_config *configs);
 
 /**
- * @code                loop_relay(std::vector<arg_config> *vlans);
+ * @code                loop_relay(std::unordered_map<std::string, relay_config> &vlans);
  * 
  * @brief               main loop: configure sockets, create libevent base, start server listener thread
  *  
  * @param vlans         list of vlans retrieved from config_db
  * @param state_db      state_db connector
  */
-void loop_relay(std::vector<relay_config> *vlans);
+void loop_relay(std::unordered_map<std::string, relay_config> &vlans);
 
 /**
  * @code signal_init();
@@ -273,15 +278,15 @@ void update_counter(std::shared_ptr<swss::DBConnector> state_db, std::string cou
 /* Helper functions */
 
 /**
- * @code                std::string toString(uint16_t count);
+ * @code                std::string toString(uint64_t count);
  *
- * @brief               convert uint16_t to string
+ * @brief               convert uint64_t to string
  *
  * @param count         count of messages in counter
  * 
  * @return              count in string
  */
-std::string toString(uint16_t count);
+std::string toString(uint64_t count);
 
 /**
  * @code                const struct ether_header *parse_ether_frame(const uint8_t *buffer, const uint8_t **out_end);
@@ -356,7 +361,19 @@ const struct dhcpv6_relay_msg *parse_dhcpv6_relay(const uint8_t *buffer);
 const struct dhcpv6_option *parse_dhcpv6_opt(const uint8_t *buffer, const uint8_t **out_end);
 
 /**
- * @code                callback(evutil_socket_t fd, short event, void *arg);
+ * @code                update_vlan_mapping(std::string vlan, std::shared_ptr<swss::DBConnector> cfgdb);
+ *
+ * @brief               build vlan member interface to vlan mapping table 
+ *
+ * @param vlan          vlan name string
+ * @param cfgdb         config db connection
+ *
+ * @return              none
+ */
+void update_vlan_mapping(std::string vlan, std::shared_ptr<swss::DBConnector> cfgdb);
+
+/**
+ * @code                client_callback(evutil_socket_t fd, short event, void *arg);
  *
  * @brief               callback for libevent that is called everytime data is received at the filter socket
  *
@@ -366,20 +383,21 @@ const struct dhcpv6_option *parse_dhcpv6_opt(const uint8_t *buffer, const uint8_
  *
  * @return              none
  */
-void callback(evutil_socket_t fd, short event, void *arg);
+void client_callback(evutil_socket_t fd, short event, void *arg);
 
 /**
- * @code                callback_dual_tor(evutil_socket_t fd, short event, void *arg);
+ * @code                client_packet_handler(uint8_t *buffer, ssize_t length, struct relay_config *config, std::string &ifname);
  *
- * @brief               callback for libevent that is called everytime data is received at the filter socket with dual tor option enabled
+ * @brief               dhcpv6 client packet handler
  *
- * @param fd            filter socket
- * @param event         libevent triggered event
- * @param arg           callback argument provided by user
+ * @param buffer        packet buffer
+ * @param length        packet length
+ * @param config        vlan related relay config
+ * @param ifname        vlan member interface name
  *
  * @return              none
  */
-void callback_dual_tor(evutil_socket_t fd, short event, void *arg);
+void client_packet_handler(uint8_t *buffer, ssize_t length, struct relay_config *config, std::string &ifname);
 
 /**
  * @code                void server_callback(evutil_socket_t fd, short event, void *arg);

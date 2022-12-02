@@ -272,7 +272,7 @@ TEST(prepareConfig, prepare_relay_config)
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   config.state_db = state_db;
 
-  prepare_relay_config(&config, &local_sock, filter);
+  prepare_relay_config(config, local_sock, filter);
 
   char addr1[INET6_ADDRSTRLEN];
   char addr2[INET6_ADDRSTRLEN];
@@ -495,7 +495,7 @@ TEST(relay, relay_relay_reply)
   int local_sock = 1;
   int filter = 1;
 
-  prepare_relay_config(&config, &local_sock, filter);
+  prepare_relay_config(config, local_sock, filter);
 
   relay_relay_reply(mock_sock, msg, msg_len, &config);
 
@@ -550,9 +550,10 @@ TEST(relay, signal_callback) {
 
 TEST(relay, dhcp6relay_stop) {
   int filter = 1;
-  struct relay_config config{};
+  std::unordered_map<std::string, relay_config> vlans;
   base = event_base_new();
-  struct event* event = event_new(base, filter, EV_READ|EV_PERSIST, callback, &config);
+  struct event* event = event_new(base, filter, EV_READ|EV_PERSIST, client_callback,
+                                  reinterpret_cast<void *>(&vlans));
   dhcp6relay_stop();
   event_free(event);
   event_base_free(base);
