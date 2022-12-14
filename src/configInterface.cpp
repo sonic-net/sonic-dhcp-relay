@@ -16,7 +16,7 @@ swss::Select swssSelect;
  *
  * @return              none
  */
-void initialize_swss(std::vector<relay_config> *vlans)
+void initialize_swss(std::unordered_map<std::string, relay_config> &vlans)
 {
     try {
         std::shared_ptr<swss::DBConnector> configDbPtr = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
@@ -50,13 +50,14 @@ void deinitialize_swss()
 
 
 /**
- * @code                void get_dhcp(std::vector<relay_config> *vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic)
+
+ * @code                void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic)
  * 
  * @brief               initialize and get vlan table information from DHCP_RELAY
  *
  * @return              none
  */
-void get_dhcp(std::vector<relay_config> *vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic) {
+void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic) {
     swss::Selectable *selectable;
     int ret = swssSelect.select(&selectable, DEFAULT_TIMEOUT_MSEC);
     if (ret == swss::Select::ERROR) {
@@ -77,7 +78,7 @@ void get_dhcp(std::vector<relay_config> *vlans, swss::SubscriberStateTable *ipHe
  * 
  * @brief               main thread for handling SWSS notification
  *
- * @param context       list of vlans/argument config that contains strings of server and option
+ * @param context       map of vlans/argument config that contains strings of server and option
  *
  * @return              none
  */
@@ -89,16 +90,16 @@ void handleSwssNotification(swssNotification test)
 }
 
 /**
- * @code                    void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::vector<relay_config> *vlans)
+ * @code                    void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::unordered_map<std::string, relay_config> &vlans)
  * 
  * @brief                   handles DHCPv6 relay configuration change notification
  *
  * @param ipHelpersTable    DHCP table
- * @param vlans             list of vlans/argument config that contains strings of server and option
+ * @param vlans             map of vlans/argument config that contains strings of server and option
  *
  * @return                  none
  */
-void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::vector<relay_config> *vlans)
+void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::unordered_map<std::string, relay_config> &vlans)
 {
     std::deque<swss::KeyOpFieldsValuesTuple> entries;
 
@@ -107,16 +108,16 @@ void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::ve
 }
 
 /**
- * @code                    void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries, std::vector<relay_config> *vlans)
+ * @code                    void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries, std::unordered_map<std::string, relay_config> vlans)
  * 
  * @brief                   process DHCPv6 relay servers and options configuration change notification
  *
  * @param entries           queue of std::tuple<std::string, std::string, std::vector<FieldValueTuple>> entries in DHCP table
- * @param vlans             list of vlans/argument config that contains strings of server and option
+ * @param vlans             map of vlans/argument config that contains strings of server and option
  *
  * @return                  none
  */
-void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries, std::vector<relay_config> *vlans)
+void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries, std::unordered_map<std::string, relay_config> &vlans)
 {
     std::vector<std::string> servers;
 
@@ -150,7 +151,9 @@ void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries,
                 intf.is_interface_id = true;
             }
         }
-        vlans->push_back(intf);
+        syslog(LOG_INFO, "add %s relay config, option79 %s interface-id %s\n", vlan.c_str(),
+               intf.is_option_79 ? "enable" : "disable", intf.is_interface_id ? "enable" : "disable");
+        vlans[vlan] = intf;
     }
 }
 
