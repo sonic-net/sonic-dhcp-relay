@@ -263,36 +263,36 @@ void relay_forward(uint8_t *buffer, const struct dhcpv6_msg *msg, uint16_t msg_l
 int sock_open(const struct sock_fprog *fprog)
 {
 
-	int s = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
-	if (s == -1) {
-		syslog(LOG_ERR, "socket: Failed to create socket\n");
-		return -1;
-	}
+    int s = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+    if (s == -1) {
+        syslog(LOG_ERR, "socket: Failed to create socket\n");
+        return -1;
+    }
 
-	struct sockaddr_ll sll = {
-	    .sll_family = AF_PACKET,
-	    .sll_protocol = htons(ETH_P_ALL),
-	    .sll_ifindex = 0 // any interface
-	};
+    struct sockaddr_ll sll = {
+        .sll_family = AF_PACKET,
+        .sll_protocol = htons(ETH_P_ALL),
+        .sll_ifindex = 0 // any interface
+    };
 
-	if (bind(s, (struct sockaddr *)&sll, sizeof sll) == -1) {
-		syslog(LOG_ERR, "bind: Failed to bind to specified interface\n");
-		(void) close(s);
-	    return -1;
-	}
+    if (bind(s, (struct sockaddr *)&sll, sizeof sll) == -1) {
+        syslog(LOG_ERR, "bind: Failed to bind to specified interface\n");
+        (void) close(s);
+        return -1;
+    }
 
-	if (fprog && setsockopt(s, SOL_SOCKET, SO_ATTACH_FILTER, fprog, sizeof *fprog) == -1) {
-		syslog(LOG_ERR, "setsockopt: Failed to attach filter\n");
-		(void) close(s);
-	    return -1;
-	}
+    if (fprog && setsockopt(s, SOL_SOCKET, SO_ATTACH_FILTER, fprog, sizeof *fprog) == -1) {
+        syslog(LOG_ERR, "setsockopt: Failed to attach filter\n");
+        (void) close(s);
+        return -1;
+    }
 
     int optval = 0;
     socklen_t optlen = sizeof(optval);
     if (getsockopt(s, SOL_SOCKET, SO_RCVBUF, &optval, &optlen) == -1) {
         syslog(LOG_ERR, "getsockopt: Failed to get recv buffer size\n");
-		(void) close(s);
-	    return -1;
+        (void) close(s);
+        return -1;
     }
 
     int optval_new = RAWSOCKET_RECV_SIZE;
@@ -302,7 +302,7 @@ int sock_open(const struct sock_fprog *fprog)
         syslog(LOG_INFO, "setsockopt: change raw socket recv buffer size from %d to %d\n", optval, optval_new);
     }
 
-	return s;
+    return s;
 }
 
 /**
@@ -631,7 +631,7 @@ void update_vlan_mapping(std::string vlan, std::shared_ptr<swss::DBConnector> cf
  * @return              none
  */
 void client_callback(evutil_socket_t fd, short event, void *arg) {
-    auto vlans = *(reinterpret_cast<std::unordered_map<std::string, struct relay_config> *>(arg));
+    auto vlans = reinterpret_cast<std::unordered_map<std::string, struct relay_config> *>(arg);
     static uint8_t message_buffer[BUFFER_SIZE];
     struct sockaddr_ll sll;
     socklen_t slen = sizeof(sll);
@@ -659,8 +659,8 @@ void client_callback(evutil_socket_t fd, short event, void *arg) {
             }
             continue;
         }
-        auto config_itr = vlans.find(vlan->second);
-        if (config_itr == vlans.end()) {
+        auto config_itr = vlans->find(vlan->second);
+        if (config_itr == vlans->end()) {
             syslog(LOG_WARNING, "config not found for vlan %s\n", vlan->second.c_str());
             continue;
         }
@@ -809,7 +809,7 @@ void server_callback(evutil_socket_t fd, short event, void *arg) {
 
         if (buffer_sz < (int32_t)sizeof(struct dhcpv6_msg)) {
             syslog(LOG_WARNING, "Invalid DHCPv6 packet length %ld, no space for dhcpv6 msg header\n", buffer_sz);
-	        continue;
+            continue;
         }
 
         auto msg = parse_dhcpv6_hdr(message_buffer);
@@ -942,6 +942,9 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
         }
         event_add(listen_event, NULL);
         syslog(LOG_INFO, "libevent: add filter socket event\n");
+    } else {
+        syslog(LOG_ALERT, "Failed to create relay filter socket");
+        exit(EXIT_FAILURE);
     }
 
     for(auto &vlan : vlans) {

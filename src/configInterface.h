@@ -30,13 +30,13 @@ void initialize_swss(std::unordered_map<std::string, relay_config> &vlans);
 void deinitialize_swss();
 
 /**
- * @code                void get_dhcp(std::unordered_map<std::string, relay_config> vlans)
+ * @code                void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic)
  * 
  * @brief               initialize and get vlan information from DHCP_RELAY
  *
  * @return              none
  */
-void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable);
+void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic);
 
 /**
  * @code                void swssNotification test
