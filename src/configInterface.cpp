@@ -50,14 +50,14 @@ void deinitialize_swss()
 
 
 /**
+
  * @code                void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic)
  * 
  * @brief               initialize and get vlan table information from DHCP_RELAY
  *
  * @return              none
  */
-void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic)
-{
+void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic) {
     swss::Selectable *selectable;
     int ret = swssSelect.select(&selectable, DEFAULT_TIMEOUT_MSEC);
     if (ret == swss::Select::ERROR) {

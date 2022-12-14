@@ -37,7 +37,6 @@ void deinitialize_swss();
  * @return              none
  */
 void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic);
-
 /**
  * @code                void swssNotification test
  * 
