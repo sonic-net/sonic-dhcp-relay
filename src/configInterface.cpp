@@ -23,10 +23,6 @@ void initialize_swss(std::unordered_map<std::string, relay_config> &vlans)
         swss::SubscriberStateTable ipHelpersTable(configDbPtr.get(), "DHCP_RELAY");
         swssSelect.addSelectable(&ipHelpersTable);
         get_dhcp(vlans, &ipHelpersTable, false);
-        struct swssNotification test;
-        test.vlans = vlans;
-        test.ipHelpersTable = &ipHelpersTable;
-        mSwssThreadPtr = std::make_shared<boost::thread> (&handleSwssNotification, test);
     }
     catch (const std::bad_alloc &e) {
         syslog(LOG_ERR, "Failed allocate memory. Exception details: %s", e.what());
