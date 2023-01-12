@@ -203,22 +203,6 @@ TEST(parsePacket, parse_dhcpv6_opt)
   EXPECT_EQ(99, ntohs(dhcp_relay_header->option_length));
 }
 
-TEST(parsePacket, relay_forward)
-{ 
-  unsigned char relay_option[] = {      /* DHCPv6 Relay Option */
-    0x00, 0x09, 0x00, 0x63
-  };
-  char *ptr = (char *)relay_option;
-  static uint8_t buffer[8];
-  auto current_buffer_position = buffer;
-  const uint8_t *current_position = (uint8_t *)ptr;
-
-  relay_forward(current_buffer_position, parse_dhcpv6_hdr(current_position), 4);
-  auto option = (const struct dhcpv6_option *)current_buffer_position;
-  EXPECT_EQ(9, ntohs(option->option_code));
-  EXPECT_EQ(4, ntohs(option->option_length));
-}
-
 TEST(sock, sock_open)
 { 
   struct sock_filter ether_relay_filter[] = {
