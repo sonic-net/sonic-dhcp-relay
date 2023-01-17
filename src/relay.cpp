@@ -231,17 +231,18 @@ void initialize_counter(std::shared_ptr<swss::DBConnector> state_db, std::string
 }
 
 /**
- * @code                void update_counter(std::shared_ptr<swss::DBConnector> state_db, std::string CounterVlan, uint8_t msg_type);
+ * @code                void increase_counter(std::shared_ptr<swss::DBConnector> state_db, std::string CounterVlan, uint8_t msg_type);
  *
- * @brief               update the counter in state_db with count of each DHCPv6 message type
+ * @brief               increase the counter in state_db with count of each DHCPv6 message type
  *
  * @param std::shared_ptr<swss::DBConnector> state_db,     state_db connector pointer
  * @param counterVlan   counter table with interface name
- * @param msg_type      dhcpv6 message type to be updated in counter
+ * @param msg_type      dhcpv6 message type to be increased in counter
  * 
  * @return              none
  */
-void update_counter(std::shared_ptr<swss::DBConnector> state_db, std::string counterVlan, uint8_t msg_type) {
+void increase_counter(std::shared_ptr<swss::DBConnector> state_db, std::string counterVlan, uint8_t msg_type) {
+    counters[msg_type]++;
     state_db->hset(counterVlan, counterMap.find(msg_type)->second, toString(counters[msg_type]));
 }
 
@@ -356,11 +357,10 @@ const struct dhcpv6_option *parse_dhcpv6_opt(const uint8_t *buffer, const uint8_
     return option;
 }
 
-void sent_msg_update_counter(relay_config *config, uint8_t msg_type) {
+void sent_msg_increase_counter(relay_config *config, uint8_t msg_type) {
     std::string counterVlan = counter_table;
     if (counterMap.find(msg_type) != counterMap.end()) {
-        counters[msg_type]++;
-        update_counter(config->state_db, counterVlan.append(config->interface), msg_type);
+        increase_counter(config->state_db, counterVlan.append(config->interface), msg_type);
     } else {
         syslog(LOG_WARNING, "unexpected message type %d(0x%x)\n", msg_type, msg_type);
     }
@@ -574,27 +574,14 @@ void relay_client(int sock, const uint8_t *msg, uint16_t len, const ip6_hdr *ip_
     if (!result) {
         char addr_str[INET6_ADDRSTRLEN];
         inet_ntop(AF_INET6, &ip_hdr->ip6_src, addr_str, INET6_ADDRSTRLEN);
-        counters[DHCPv6_MESSAGE_TYPE_MALFORMED]++;
-        update_counter(config->state_db, counterVlan.append(config->interface), DHCPv6_MESSAGE_TYPE_MALFORMED);
+        increase_counter(config->state_db, counterVlan.append(config->interface), DHCPv6_MESSAGE_TYPE_MALFORMED);
         syslog(LOG_WARNING, "DHCPv6 option is invalid or contains malformed payload from %s\n", addr_str);
         return;
     }
-    counters[dhcpv6.hdr.msg_type]++;
-    update_counter(config->state_db, counterVlan.append(config->interface), dhcpv6.hdr.msg_type);
+    increase_counter(config->state_db, counterVlan.append(config->interface), dhcpv6.hdr.msg_type);
 
-    /* place to add/modify/delete client dhcpv6 options */
-    if(config->is_option_79) {
-        option_linklayer_addr option79;
-        option79.link_layer_type = 1;
-        std::memcpy(option79.link_layer_addr, &ether_hdr->ether_shost, sizeof(ether_hdr->ether_shost));
-        dhcpv6.opt_list.Add(OPTION_CLIENT_LINKLAYER_ADDR, (const uint8_t *)&option79, sizeof(option_linklayer_addr));
-    }
+    /* place to add/modify/delete original client dhcpv6 options */
 
-    if(config->is_interface_id) {
-        option_interface_id intf_id;
-        intf_id.interface_id = config->link_address.sin6_addr;
-        dhcpv6.opt_list.Add(OPTION_INTERFACE_ID, (const uint8_t *)&intf_id, sizeof(option_interface_id));
-    }
     uint16_t dhcpv6_pkt_len = 0;
     auto dhcpv6_pkt = dhcpv6.MarshalBinary(dhcpv6_pkt_len);
     if (!dhcpv6_pkt_len) {
@@ -603,12 +590,26 @@ void relay_client(int sock, const uint8_t *msg, uint16_t len, const ip6_hdr *ip_
         syslog(LOG_ERR, "Marshal client dhcpv6 message from %s error", addr_str);
         return;
     }
-
+    /* generage relay packet */
     class RelayMsg relay;
     relay.hdr.msg_type = DHCPv6_MESSAGE_TYPE_RELAY_FORW;
     relay.hdr.hop_count = 0;
     memcpy(&relay.hdr.peer_address, &ip_hdr->ip6_src, sizeof(in6_addr));
     memcpy(&relay.hdr.link_address, &config->link_address.sin6_addr, sizeof(in6_addr));
+
+    /* insert relay options */
+    if(config->is_option_79) {
+        option_linklayer_addr option79;
+        option79.link_layer_type = htons(1);
+        std::memcpy(option79.link_layer_addr, &ether_hdr->ether_shost, sizeof(ether_hdr->ether_shost));
+        relay.opt_list.Add(OPTION_CLIENT_LINKLAYER_ADDR, (const uint8_t *)&option79, sizeof(option_linklayer_addr));
+    }
+
+    if(config->is_interface_id) {
+        option_interface_id intf_id;
+        intf_id.interface_id = config->link_address.sin6_addr;
+        relay.opt_list.Add(OPTION_INTERFACE_ID, (const uint8_t *)&intf_id, sizeof(option_interface_id));
+    }
     /* insert relay-msg option */
     relay.opt_list.Add(OPTION_RELAY_MSG, dhcpv6_pkt, dhcpv6_pkt_len);
 
@@ -623,7 +624,7 @@ void relay_client(int sock, const uint8_t *msg, uint16_t len, const ip6_hdr *ip_
 
     for(auto server: config->servers_sock) {
         if(send_udp(sock, relay_pkt, server, relay_pkt_len)) {
-            sent_msg_update_counter(config, DHCPv6_MESSAGE_TYPE_RELAY_FORW);
+            sent_msg_increase_counter(config, DHCPv6_MESSAGE_TYPE_RELAY_FORW);
         }
     }
 }
@@ -644,8 +645,13 @@ void relay_client(int sock, const uint8_t *msg, uint16_t len, const ip6_hdr *ip_
 void relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, relay_config *config) {
     auto dhcp_relay_header = parse_dhcpv6_relay(msg);
 
-    if (dhcp_relay_header->hop_count >= HOP_LIMIT)
+    if (dhcp_relay_header->hop_count >= HOP_LIMIT) {
+        char addr_str[INET6_ADDRSTRLEN];
+        inet_ntop(AF_INET6, &ip_hdr->ip6_src, addr_str, INET6_ADDRSTRLEN);
+        syslog(LOG_INFO, "receive relay-forward message from %s with hop count %d over limit",
+               addr_str, dhcp_relay_header->hop_count);
         return;
+    }
 
     RelayMsg relay;
     relay.hdr.msg_type = DHCPv6_MESSAGE_TYPE_RELAY_FORW;
@@ -667,7 +673,7 @@ void relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *
 
     for(auto server: config->servers_sock) {
         if(send_udp(sock, send_buffer, server, send_buffer_len)) {
-            sent_msg_update_counter(config, DHCPv6_MESSAGE_TYPE_RELAY_FORW);
+            sent_msg_increase_counter(config, DHCPv6_MESSAGE_TYPE_RELAY_FORW);
         }
     }
 }
@@ -690,14 +696,14 @@ void relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *
     class RelayMsg relay;
     auto result = relay.UnmarshalBinary(msg, len);
     if (!result) {
-        counters[DHCPv6_MESSAGE_TYPE_MALFORMED]++;
-        update_counter(config->state_db, counterVlan.append(config->interface), DHCPv6_MESSAGE_TYPE_MALFORMED);
+        increase_counter(config->state_db, counterVlan.append(config->interface), DHCPv6_MESSAGE_TYPE_MALFORMED);
         syslog(LOG_WARNING, "Relay-Reply option is invalid or contains malformed payload\n");
         return;
     }
 
     auto opt_value = relay.opt_list.Get(OPTION_RELAY_MSG);
     if (opt_value.empty()) {
+        increase_counter(config->state_db, counterVlan.append(config->interface), DHCPv6_MESSAGE_TYPE_UNKNOWN);
         syslog(LOG_WARNING, "option relay-msg not found");
         return;
     }
@@ -713,7 +719,7 @@ void relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *
     target_addr.sin6_scope_id = if_nametoindex(config->interface.c_str());
 
     if(send_udp(sock, dhcpv6, target_addr, length)) {
-        sent_msg_update_counter(config, msg_type);
+        sent_msg_increase_counter(config, msg_type);
     }
 }
 
@@ -841,7 +847,7 @@ void client_packet_handler(uint8_t *buffer, ssize_t length, struct relay_config 
     auto msg = parse_dhcpv6_hdr(current_position);
     // RFC3315 only
     if (msg->msg_type < DHCPv6_MESSAGE_TYPE_SOLICIT || msg->msg_type > DHCPv6_MESSAGE_TYPE_RELAY_REPL) {
-        update_counter(config->state_db, counterVlan.append(config->interface), DHCPv6_MESSAGE_TYPE_UNKNOWN);
+        increase_counter(config->state_db, counterVlan.append(config->interface), DHCPv6_MESSAGE_TYPE_UNKNOWN);
         syslog(LOG_WARNING, "Unknown DHCPv6 message type %d from %s\n", msg->msg_type, ifname.c_str());
         return;
     }
@@ -908,14 +914,12 @@ void server_callback(evutil_socket_t fd, short event, void *arg) {
         auto msg_type = parse_dhcpv6_hdr(server_recv_buffer)->msg_type;
         // RFC3315 only
         if (msg_type < DHCPv6_MESSAGE_TYPE_SOLICIT || msg_type > DHCPv6_MESSAGE_TYPE_RELAY_REPL) {
-            update_counter(config->state_db, counterVlan.append(config->interface), DHCPv6_MESSAGE_TYPE_UNKNOWN);
+            increase_counter(config->state_db, counterVlan.append(config->interface), DHCPv6_MESSAGE_TYPE_UNKNOWN);
             syslog(LOG_WARNING, "Unknown DHCPv6 message type %d\n", msg_type);
             continue;
-        } else {
-            counters[msg_type]++;
         }
 
-        update_counter(config->state_db, counterVlan.append(config->interface), msg_type);
+        increase_counter(config->state_db, counterVlan.append(config->interface), msg_type);
         if (msg_type == DHCPv6_MESSAGE_TYPE_RELAY_REPL) {
             relay_relay_reply(config->server_sock, server_recv_buffer, buffer_sz, config);
         }

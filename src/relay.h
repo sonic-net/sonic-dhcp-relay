@@ -306,17 +306,17 @@ void shutdown();
 void initialize_counter(std::shared_ptr<swss::DBConnector> state_db, std::string counterVlan);
 
 /**
- * @code                void update_counter(shared_ptr<swss::DBConnector>, std::string CounterVlan, uint8_t msg_type);
+ * @code                void increase_counter(shared_ptr<swss::DBConnector>, std::string CounterVlan, uint8_t msg_type);
  *
- * @brief               update the counter in state_db with count of each DHCPv6 message type
+ * @brief               increase the counter in state_db with count of each DHCPv6 message type
  *
  * @param shared_ptr<swss::DBConnector> state_db     state_db connector
  * @param counterVlan   counter table with interface name
- * @param msg_type      dhcpv6 message type to be updated in counter
+ * @param msg_type      dhcpv6 message type to be increased in counter
  * 
  * @return              none
  */
-void update_counter(std::shared_ptr<swss::DBConnector> state_db, std::string counterVlan, uint8_t msg_type);
+void increase_counter(std::shared_ptr<swss::DBConnector> state_db, std::string counterVlan, uint8_t msg_type);
 
 /* Helper functions */
 
