@@ -288,14 +288,14 @@ TEST(counter, initialize_counter)
   EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Relay-Reply"));
 }
 
-TEST(counter, update_counter)
+TEST(counter, increase_counter)
 {
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
-  state_db->hset("DHCPv6_COUNTER_TABLE|Vlan1000", "Solicit", "1");
-  update_counter(state_db, "DHCPv6_COUNTER_TABLE|Vlan1000", 1);
+  state_db->hset("DHCPv6_COUNTER_TABLE|Vlan1000", "Solicit", "0");
+  increase_counter(state_db, "DHCPv6_COUNTER_TABLE|Vlan1000", 1);
   std::shared_ptr<std::string> output = state_db->hget("DHCPv6_COUNTER_TABLE|Vlan1000", "Solicit");
   std::string *ptr = output.get();
-  EXPECT_EQ(*ptr, "0");
+  EXPECT_EQ(*ptr, "1");
 }
 
 TEST(relay, relay_client) 
