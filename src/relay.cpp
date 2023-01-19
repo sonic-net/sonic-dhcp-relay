@@ -569,6 +569,7 @@ void prepare_socket(int &local_sock, int &server_sock, relay_config &config) {
 void relay_client(int sock, const uint8_t *msg, uint16_t len, const ip6_hdr *ip_hdr, const ether_header *ether_hdr, relay_config *config) {    
     std::string counterVlan = counter_table;
 
+    /* unmarshal dhcpv6 client message to detect malformed message */
     DHCPv6Msg dhcpv6;
     auto result = dhcpv6.UnmarshalBinary(msg, len);
     if (!result) {
@@ -580,16 +581,6 @@ void relay_client(int sock, const uint8_t *msg, uint16_t len, const ip6_hdr *ip_
     }
     increase_counter(config->state_db, counterVlan.append(config->interface), dhcpv6.hdr.msg_type);
 
-    /* place to add/modify/delete original client dhcpv6 options */
-
-    uint16_t dhcpv6_pkt_len = 0;
-    auto dhcpv6_pkt = dhcpv6.MarshalBinary(dhcpv6_pkt_len);
-    if (!dhcpv6_pkt_len) {
-        char addr_str[INET6_ADDRSTRLEN];
-        inet_ntop(AF_INET6, &ip_hdr->ip6_src, addr_str, INET6_ADDRSTRLEN);
-        syslog(LOG_ERR, "Marshal client dhcpv6 message from %s error", addr_str);
-        return;
-    }
     /* generage relay packet */
     class RelayMsg relay;
     relay.hdr.msg_type = DHCPv6_MESSAGE_TYPE_RELAY_FORW;
@@ -610,8 +601,8 @@ void relay_client(int sock, const uint8_t *msg, uint16_t len, const ip6_hdr *ip_
         intf_id.interface_id = config->link_address.sin6_addr;
         relay.opt_list.Add(OPTION_INTERFACE_ID, (const uint8_t *)&intf_id, sizeof(option_interface_id));
     }
-    /* insert relay-msg option */
-    relay.opt_list.Add(OPTION_RELAY_MSG, dhcpv6_pkt, dhcpv6_pkt_len);
+    /* Insert relay-msg option, use original dhcpv6 client message to keep the same option order. */
+    relay.opt_list.Add(OPTION_RELAY_MSG, msg, len);
 
     uint16_t relay_pkt_len = 0;
     auto relay_pkt = relay.MarshalBinary(relay_pkt_len);

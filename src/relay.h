@@ -10,7 +10,7 @@
 #include <linux/filter.h>
 #include <string>
 #include <vector>
-#include <unordered_map>
+#include <map>
 #include <event2/util.h>
 #include <syslog.h>
 #include "dbconnector.h"
@@ -114,7 +114,7 @@ public:
     bool UnmarshalBinary(const uint8_t *packet, uint16_t len);
 
 private:
-    std::unordered_map<OptionCode, std::vector<uint8_t>> options;
+    std::map<OptionCode, std::vector<uint8_t>> options;
     std::vector<uint8_t> list;
 };
 
