@@ -138,6 +138,14 @@ bool Options::UnmarshalBinary(const uint8_t *packet, uint16_t length) {
 /* Class RelayMsg */
 
 uint8_t *RelayMsg::MarshalBinary(uint16_t &len) {
+    if (buffer == nullptr) {
+        buffer.reset(new (std::nothrow)uint8_t[BUFFER_SIZE]);
+        if (!buffer) {
+            syslog(LOG_ERR, "Failed to init relay msg buffer\n");
+            exit(1);
+        }
+    }
+
     auto ptr = buffer.get();
     std::memcpy(ptr, &hdr, sizeof(dhcpv6_relay_msg));
     len = sizeof(dhcpv6_relay_msg);
@@ -174,6 +182,14 @@ bool RelayMsg::UnmarshalBinary(const uint8_t *packet, uint16_t len) {
 
 /* Class DHCPv6Msg */
 uint8_t *DHCPv6Msg::MarshalBinary(uint16_t &len) {
+    if (buffer == nullptr) {
+        buffer.reset(new (std::nothrow)uint8_t[BUFFER_SIZE]);
+        if (!buffer) {
+            syslog(LOG_ERR, "Failed to init dhcpv6 msg buffer\n");
+            exit(1);
+        }
+    }
+
     auto ptr = buffer.get();
     std::memcpy(ptr, &hdr, sizeof(dhcpv6_msg));
     len = sizeof(dhcpv6_msg);

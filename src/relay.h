@@ -121,11 +121,7 @@ private:
 class RelayMsg: public Options {
 public:
     RelayMsg() {
-        buffer.reset(new (std::nothrow)uint8_t[BUFFER_SIZE]);
-        if (!buffer) {
-            syslog(LOG_ERR, "Failed to init relay msg buffer\n");
-            exit(1);
-        }
+        buffer = nullptr;
     };
     uint8_t *MarshalBinary(uint16_t &len);
     bool UnmarshalBinary(const uint8_t* packet, uint16_t len);
@@ -140,15 +136,7 @@ private:
 class DHCPv6Msg: public Options {
 public:
     DHCPv6Msg() {
-        buffer.reset(new (std::nothrow)uint8_t[BUFFER_SIZE]);
-        if (!buffer) {
-            syslog(LOG_ERR, "Failed to init dhcpv6 msg buffer\n");
-            exit(1);
-        }
-    };
-    
-    uint8_t MsgType() {
-        return hdr.msg_type;
+        buffer = nullptr;
     };
 
     uint8_t *MarshalBinary(uint16_t &len);
