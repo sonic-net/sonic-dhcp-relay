@@ -71,47 +71,54 @@ std::map<int, std::string> counterMap = {{DHCPv6_MESSAGE_TYPE_UNKNOWN, "Unknown"
 /* interface to vlan mapping */
 std::unordered_map<std::string, std::string> vlan_map;
 
+/* Options Class Definition */
 
-/* Class Options */
-
+// add single option
 bool Options::Add(OptionCode key, const uint8_t *value, uint16_t len) {
     std::vector<uint8_t> option_v(value, value + len);
-    options[key] = option_v;
+    m_options[key] = option_v;
     return true;
 }
 
+// delete single option based on OptionCode
 bool Options::Delete(OptionCode key) {
-    if (options.find(key) == options.end()) {
+    if (m_options.find(key) == m_options.end()) {
         return false;
     }
-    options.erase(key);
+    m_options.erase(key);
     return true;
 }
 
+// get a copy of option value based on OptionCode
 std::vector<uint8_t> Options::Get(OptionCode key) {
-    if (options.find(key) == options.end()) {
+    if (m_options.find(key) == m_options.end()) {
         return std::vector<uint8_t>{};
     }
-    return options[key];
+    return m_options[key];
 }
 
+// marshal options to binary, return pointer of binary vector
 std::vector<uint8_t> *Options::MarshalBinary() {
-    if (options.empty()) {
+    if (m_options.empty()) {
         return nullptr;
     }
-    list.clear();
-    for (auto &itr : options) {
+    if (!m_list.empty()) {
+        syslog(LOG_WARNING, "options already marshaled !!!");
+        return &m_list;
+    }
+    for (auto &itr : m_options) {
         uint16_t type = htons(itr.first);
         uint16_t length = htons(itr.second.size());
-        list.push_back(((uint8_t *)&type)[0]);
-        list.push_back(((uint8_t *)&type)[1]);
-        list.push_back(((uint8_t *)&length)[0]);
-        list.push_back(((uint8_t *)&length)[1]);
-        list.insert(list.end(), itr.second.begin(), itr.second.end());
+        m_list.push_back(((uint8_t *)&type)[0]);
+        m_list.push_back(((uint8_t *)&type)[1]);
+        m_list.push_back(((uint8_t *)&length)[0]);
+        m_list.push_back(((uint8_t *)&length)[1]);
+        m_list.insert(m_list.end(), itr.second.begin(), itr.second.end());
     }
-    return &list;
+    return &m_list;
 }
 
+// unmarshal options binary to options map
 bool Options::UnmarshalBinary(const uint8_t *packet, uint16_t length) {
     while (length >= sizeof(dhcpv6_option)) {
         auto option = (dhcpv6_option *)packet;
@@ -127,30 +134,34 @@ bool Options::UnmarshalBinary(const uint8_t *packet, uint16_t length) {
         }
         auto value_ptr = packet + sizeof(dhcpv6_option);
         std::vector<uint8_t> option_v(value_ptr, value_ptr + len);
-        options[type] = option_v;
+        m_options[type] = option_v;
         auto offset = sizeof(dhcpv6_option) + len;
         length -= offset;
         packet += offset;
     }
+    if (length > 0) {
+        syslog(LOG_WARNING, "options unmarshal incomplete, %d bytes left", length);
+    }
     return true;
 }
 
-/* Class RelayMsg */
+/* RelayMsg Class Definitions */
 
+// marshal dhcpv6 relay message class to binary
 uint8_t *RelayMsg::MarshalBinary(uint16_t &len) {
-    if (buffer == nullptr) {
-        buffer.reset(new (std::nothrow)uint8_t[BUFFER_SIZE]);
-        if (!buffer) {
+    if (m_buffer == nullptr) {
+        m_buffer.reset(new (std::nothrow)uint8_t[BUFFER_SIZE]);
+        if (!m_buffer) {
             syslog(LOG_ERR, "Failed to init relay msg buffer\n");
             exit(1);
         }
     }
 
-    auto ptr = buffer.get();
-    std::memcpy(ptr, &hdr, sizeof(dhcpv6_relay_msg));
+    auto ptr = m_buffer.get();
+    std::memcpy(ptr, &msgHdr, sizeof(dhcpv6_relay_msg));
     len = sizeof(dhcpv6_relay_msg);
 
-    auto opt = opt_list.MarshalBinary();
+    auto opt = optionList.MarshalBinary();
     if (opt && !opt->empty()) {
         std::memcpy(ptr + sizeof(dhcpv6_relay_msg), opt->data(), opt->size());
         len += opt->size();
@@ -159,42 +170,45 @@ uint8_t *RelayMsg::MarshalBinary(uint16_t &len) {
     return ptr;
 }
 
+// unmarshal dhcpv6 relay message binary to RelayMsg class
 bool RelayMsg::UnmarshalBinary(const uint8_t *packet, uint16_t len) {
     if (len < sizeof(dhcpv6_relay_msg)) {
         syslog(LOG_WARNING, "unmarshal relay msg error, invalid packet length %d", len);
         return false;
     }
-    auto msg_hdr = (dhcpv6_relay_msg *)packet;
-    hdr.msg_type = msg_hdr->msg_type;
-    hdr.hop_count = msg_hdr->hop_count;
-    std::memcpy(&hdr.link_address, &msg_hdr->link_address, sizeof(struct in6_addr));
-    std::memcpy(&hdr.peer_address, &msg_hdr->peer_address, sizeof(struct in6_addr));
-    if (!opt_list.UnmarshalBinary(packet + sizeof(dhcpv6_relay_msg), len - sizeof(dhcpv6_relay_msg))) {
+    auto hdr = (dhcpv6_relay_msg *)packet;
+    msgHdr.msg_type = hdr->msg_type;
+    msgHdr.hop_count = hdr->hop_count;
+    std::memcpy(&msgHdr.link_address, &hdr->link_address, sizeof(struct in6_addr));
+    std::memcpy(&msgHdr.peer_address, &hdr->peer_address, sizeof(struct in6_addr));
+    if (!optionList.UnmarshalBinary(packet + sizeof(dhcpv6_relay_msg), len - sizeof(dhcpv6_relay_msg))) {
         char link_addr_str[INET6_ADDRSTRLEN], peer_addr_str[INET6_ADDRSTRLEN];
-        inet_ntop(AF_INET6, &hdr.link_address, link_addr_str, INET6_ADDRSTRLEN);
-        inet_ntop(AF_INET6, &hdr.peer_address, peer_addr_str, INET6_ADDRSTRLEN);
+        inet_ntop(AF_INET6, &msgHdr.link_address, link_addr_str, INET6_ADDRSTRLEN);
+        inet_ntop(AF_INET6, &msgHdr.peer_address, peer_addr_str, INET6_ADDRSTRLEN);
         syslog(LOG_WARNING, "unmarshal relay msg (type %d, link addr %s, peer addr %s) error, invalid options",
-               hdr.msg_type, link_addr_str, peer_addr_str);
+               msgHdr.msg_type, link_addr_str, peer_addr_str);
         return false;
     }
     return true;
 }
 
-/* Class DHCPv6Msg */
+/* DHCPv6Msg Class Definitions */
+
+// marshal dhcpv6 message class to binary
 uint8_t *DHCPv6Msg::MarshalBinary(uint16_t &len) {
-    if (buffer == nullptr) {
-        buffer.reset(new (std::nothrow)uint8_t[BUFFER_SIZE]);
-        if (!buffer) {
+    if (m_buffer == nullptr) {
+        m_buffer.reset(new (std::nothrow)uint8_t[BUFFER_SIZE]);
+        if (!m_buffer) {
             syslog(LOG_ERR, "Failed to init dhcpv6 msg buffer\n");
             exit(1);
         }
     }
 
-    auto ptr = buffer.get();
-    std::memcpy(ptr, &hdr, sizeof(dhcpv6_msg));
+    auto ptr = m_buffer.get();
+    std::memcpy(ptr, &msgHdr, sizeof(dhcpv6_msg));
     len = sizeof(dhcpv6_msg);
 
-    auto opt = opt_list.MarshalBinary();
+    auto opt = optionList.MarshalBinary();
     if (opt && !opt->empty()) {
         std::memcpy(ptr + sizeof(dhcpv6_msg), opt->data(), opt->size());
         len += opt->size();
@@ -203,16 +217,17 @@ uint8_t *DHCPv6Msg::MarshalBinary(uint16_t &len) {
     return ptr;
 }
 
+// unmarshal dhcpv6 message binary to DHCPv6Msg class
 bool DHCPv6Msg::UnmarshalBinary(const uint8_t *packet, uint16_t len) {
     if (len < sizeof(dhcpv6_msg)) {
         syslog(LOG_WARNING, "unmarshal DHCPv6 msg error, invalid packet length %d", len);
         return false;
     }
-    auto msg_hdr = (dhcpv6_msg *)packet;
-    hdr.msg_type = msg_hdr->msg_type;
-    std::memcpy(&hdr.xid, &msg_hdr->xid, 3);
-    if (!opt_list.UnmarshalBinary(packet + sizeof(dhcpv6_msg), len - sizeof(dhcpv6_msg))) {
-        syslog(LOG_WARNING, "unmarshal DHCPv6 msg (type %d) error, invalid options", hdr.msg_type);
+    auto hdr = (dhcpv6_msg *)packet;
+    msgHdr.msg_type = hdr->msg_type;
+    std::memcpy(&msgHdr.xid, &hdr->xid, sizeof(msgHdr.xid));
+    if (!optionList.UnmarshalBinary(packet + sizeof(dhcpv6_msg), len - sizeof(dhcpv6_msg))) {
+        syslog(LOG_WARNING, "unmarshal DHCPv6 msg (type %d) error, invalid options", msgHdr.msg_type);
         return false;
     }
     return true;
@@ -585,7 +600,7 @@ void prepare_socket(int &local_sock, int &server_sock, relay_config &config) {
 void relay_client(int sock, const uint8_t *msg, uint16_t len, const ip6_hdr *ip_hdr, const ether_header *ether_hdr, relay_config *config) {    
     std::string counterVlan = counter_table;
 
-    /* unmarshal dhcpv6 client message to detect malformed message */
+    /* unmarshal dhcpv6 message to detect malformed message */
     DHCPv6Msg dhcpv6;
     auto result = dhcpv6.UnmarshalBinary(msg, len);
     if (!result) {
@@ -595,30 +610,30 @@ void relay_client(int sock, const uint8_t *msg, uint16_t len, const ip6_hdr *ip_
         syslog(LOG_WARNING, "DHCPv6 option is invalid or contains malformed payload from %s\n", addr_str);
         return;
     }
-    increase_counter(config->state_db, counterVlan.append(config->interface), dhcpv6.hdr.msg_type);
+    increase_counter(config->state_db, counterVlan.append(config->interface), dhcpv6.msgHdr.msg_type);
 
     /* generage relay packet */
     class RelayMsg relay;
-    relay.hdr.msg_type = DHCPv6_MESSAGE_TYPE_RELAY_FORW;
-    relay.hdr.hop_count = 0;
-    memcpy(&relay.hdr.peer_address, &ip_hdr->ip6_src, sizeof(in6_addr));
-    memcpy(&relay.hdr.link_address, &config->link_address.sin6_addr, sizeof(in6_addr));
+    relay.msgHdr.msg_type = DHCPv6_MESSAGE_TYPE_RELAY_FORW;
+    relay.msgHdr.hop_count = 0;
+    std::memcpy(&relay.msgHdr.peer_address, &ip_hdr->ip6_src, sizeof(in6_addr));
+    std::memcpy(&relay.msgHdr.link_address, &config->link_address.sin6_addr, sizeof(in6_addr));
 
     /* insert relay options */
     if(config->is_option_79) {
         option_linklayer_addr option79;
         option79.link_layer_type = htons(1);
         std::memcpy(option79.link_layer_addr, &ether_hdr->ether_shost, sizeof(ether_hdr->ether_shost));
-        relay.opt_list.Add(OPTION_CLIENT_LINKLAYER_ADDR, (const uint8_t *)&option79, sizeof(option_linklayer_addr));
+        relay.optionList.Add(OPTION_CLIENT_LINKLAYER_ADDR, (const uint8_t *)&option79, sizeof(option_linklayer_addr));
     }
 
     if(config->is_interface_id) {
         option_interface_id intf_id;
         intf_id.interface_id = config->link_address.sin6_addr;
-        relay.opt_list.Add(OPTION_INTERFACE_ID, (const uint8_t *)&intf_id, sizeof(option_interface_id));
+        relay.optionList.Add(OPTION_INTERFACE_ID, (const uint8_t *)&intf_id, sizeof(option_interface_id));
     }
     /* Insert relay-msg option, use original dhcpv6 client message to keep the same option order. */
-    relay.opt_list.Add(OPTION_RELAY_MSG, msg, len);
+    relay.optionList.Add(OPTION_RELAY_MSG, msg, len);
 
     uint16_t relay_pkt_len = 0;
     auto relay_pkt = relay.MarshalBinary(relay_pkt_len);
@@ -661,13 +676,13 @@ void relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *
     }
 
     RelayMsg relay;
-    relay.hdr.msg_type = DHCPv6_MESSAGE_TYPE_RELAY_FORW;
-    memcpy(&relay.hdr.peer_address, &ip_hdr->ip6_src, sizeof(in6_addr));
-    relay.hdr.hop_count = dhcp_relay_header->hop_count + 1;
-    memset(&relay.hdr.link_address, 0, sizeof(in6_addr));
+    relay.msgHdr.msg_type = DHCPv6_MESSAGE_TYPE_RELAY_FORW;
+    memcpy(&relay.msgHdr.peer_address, &ip_hdr->ip6_src, sizeof(in6_addr));
+    relay.msgHdr.hop_count = dhcp_relay_header->hop_count + 1;
+    memset(&relay.msgHdr.link_address, 0, sizeof(in6_addr));
 
     /* add relay-msg option */
-    relay.opt_list.Add(OPTION_RELAY_MSG, msg, len);
+    relay.optionList.Add(OPTION_RELAY_MSG, msg, len);
     
     uint16_t send_buffer_len = 0;
     auto send_buffer = relay.MarshalBinary(send_buffer_len);
@@ -708,7 +723,7 @@ void relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *
         return;
     }
 
-    auto opt_value = relay.opt_list.Get(OPTION_RELAY_MSG);
+    auto opt_value = relay.optionList.Get(OPTION_RELAY_MSG);
     if (opt_value.empty()) {
         increase_counter(config->state_db, counterVlan.append(config->interface), DHCPv6_MESSAGE_TYPE_UNKNOWN);
         syslog(LOG_WARNING, "option relay-msg not found");
@@ -719,7 +734,7 @@ void relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *
     auto msg_type = parse_dhcpv6_hdr(dhcpv6)->msg_type;
 
     struct sockaddr_in6 target_addr;
-    memcpy(&target_addr.sin6_addr, &relay.hdr.peer_address, sizeof(struct in6_addr));
+    memcpy(&target_addr.sin6_addr, &relay.msgHdr.peer_address, sizeof(struct in6_addr));
     target_addr.sin6_family = AF_INET6;
     target_addr.sin6_flowinfo = 0;
     target_addr.sin6_port = htons(CLIENT_PORT);

@@ -105,6 +105,7 @@ struct PACKED option_interface_id  {
 
 typedef uint16_t OptionCode;
 
+// DHCPv6 Options Class Definition 
 class Options {
 public:
     bool Add(OptionCode key, const uint8_t *value, uint16_t len);
@@ -114,39 +115,43 @@ public:
     bool UnmarshalBinary(const uint8_t *packet, uint16_t len);
 
 private:
-    std::map<OptionCode, std::vector<uint8_t>> options;
-    std::vector<uint8_t> list;
+    std::map<OptionCode, std::vector<uint8_t>> m_options;
+    std::vector<uint8_t> m_list;
 };
 
+// DHCPv6 Relay Message Class Definition
 class RelayMsg: public Options {
 public:
     RelayMsg() {
-        buffer = nullptr;
+        m_buffer = nullptr;
     };
     uint8_t *MarshalBinary(uint16_t &len);
     bool UnmarshalBinary(const uint8_t* packet, uint16_t len);
 
 public:
-    dhcpv6_relay_msg hdr;
-    Options opt_list;
+    dhcpv6_relay_msg msgHdr;
+    Options optionList;
+
 private:
-    std::unique_ptr<uint8_t[]> buffer;
+    std::unique_ptr<uint8_t[]> m_buffer;
 };
 
+// DHCPv6 Raw Message Class Definition
 class DHCPv6Msg: public Options {
 public:
     DHCPv6Msg() {
-        buffer = nullptr;
+        m_buffer = nullptr;
     };
 
     uint8_t *MarshalBinary(uint16_t &len);
     bool UnmarshalBinary(const uint8_t *packet, uint16_t len);
 
 public:
-    dhcpv6_msg hdr;
-    Options opt_list;
+    dhcpv6_msg msgHdr;
+    Options optionList;
+
 private:
-    std::unique_ptr<uint8_t[]> buffer;
+    std::unique_ptr<uint8_t[]> m_buffer;
 };
 
 /**
