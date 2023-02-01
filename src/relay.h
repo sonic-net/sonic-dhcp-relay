@@ -1,7 +1,9 @@
+#pragma once
+
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <linux/if_packet.h>
-#include <netinet/if_ether.h>	
+#include <netinet/if_ether.h>
 #include <netinet/ip6.h>
 #include <netinet/udp.h>
 #include <ifaddrs.h>
@@ -9,7 +11,9 @@
 #include <string>
 #include <vector>
 #include <event2/util.h>
-
+#include "dbconnector.h"
+#include "table.h"
+#include "sender.h"
 
 #define PACKED __attribute__ ((packed))
 
@@ -60,14 +64,9 @@ struct relay_config {
     std::vector<sockaddr_in6> servers_sock;
     bool is_option_79;
     bool is_interface_id;
-};
-
-struct database {
+    std::shared_ptr<swss::Table> mux_table;
     std::shared_ptr<swss::DBConnector> config_db;
-    std::shared_ptr<swss::Table> muxTable;
-    std::shared_ptr<swss::Table> counterTable;
 };
-
 
 /* DHCPv6 messages and options */
 
@@ -357,17 +356,53 @@ const struct dhcpv6_relay_msg *parse_dhcpv6_relay(const uint8_t *buffer);
 const struct dhcpv6_option *parse_dhcpv6_opt(const uint8_t *buffer, const uint8_t **out_end);
 
 /**
- * @code                            void send_udp(int sock, uint8_t *buffer, struct sockaddr_in6 target, uint32_t n, relay_config *config, uint8_t msg_type);
+ * @code                callback(evutil_socket_t fd, short event, void *arg);
  *
- * @brief                           send udp packet
+ * @brief               callback for libevent that is called everytime data is received at the filter socket
  *
- * @param *buffer                   message buffer
- * @param sockaddr_in6 target       target socket
- * @param n                         length of message
- * @param relay_config *config      pointer to relay_config
- * @param uint8_t msg_type          message type of dhcpv6 option of relayed message
- * 
- * @return dhcpv6_option   end of dhcpv6 message option
+ * @param fd            filter socket
+ * @param event         libevent triggered event
+ * @param arg           callback argument provided by user
+ *
+ * @return              none
  */
-void send_udp(int sock, uint8_t *buffer, struct sockaddr_in6 target, uint32_t n, relay_config *config, uint8_t msg_type);
+void callback(evutil_socket_t fd, short event, void *arg);
 
+/**
+ * @code                callback_dual_tor(evutil_socket_t fd, short event, void *arg);
+ *
+ * @brief               callback for libevent that is called everytime data is received at the filter socket with dual tor option enabled
+ *
+ * @param fd            filter socket
+ * @param event         libevent triggered event
+ * @param arg           callback argument provided by user
+ *
+ * @return              none
+ */
+void callback_dual_tor(evutil_socket_t fd, short event, void *arg);
+
+/**
+ * @code                void server_callback(evutil_socket_t fd, short event, void *arg);
+ * 
+ * @brief               callback for libevent that is called everytime data is received at the server socket
+ *
+ * @param fd            filter socket
+ * @param event         libevent triggered event  
+ * @param arg           callback argument provided by user
+ *
+ * @return              none
+ */
+void server_callback(evutil_socket_t fd, short event, void *arg);
+
+/**
+ * @code                void server_callback_dual_tor(evutil_socket_t fd, short event, void *arg);
+ * 
+ * @brief               callback for libevent that is called everytime data is received at the server socket
+ *
+ * @param fd            filter socket
+ * @param event         libevent triggered event  
+ * @param arg           callback argument provided by user
+ *
+ * @return              none
+ */
+void server_callback_dual_tor(evutil_socket_t fd, short event, void *arg);

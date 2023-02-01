@@ -22,7 +22,6 @@ struct event *ev_sigterm;
 static std::string vlan_member = "VLAN_MEMBER|";
 
 static std::string counter_table = "DHCPv6_COUNTER_TABLE|";
-struct database redis_db;
 
 /* DHCPv6 filter */
 /* sudo tcpdump -dd "inbound and ip6 dst ff02::1:2 && udp dst port 547" */
@@ -221,24 +220,9 @@ const struct dhcpv6_option *parse_dhcpv6_opt(const uint8_t *buffer, const uint8_
     return option;
 }
 
-/**
- * @code                            void send_udp(int sock, uint8_t *buffer, struct sockaddr_in6 target, uint32_t n, relay_config *config, uint8_t msg_type);
- *
- * @brief                           send udp packet
- *
- * @param *buffer                   message buffer
- * @param sockaddr_in6 target       target socket
- * @param n                         length of message
- * @param relay_config *config      pointer to relay_config
- * @param uint8_t msg_type          message type of dhcpv6 option of relayed message
- * 
- * @return dhcpv6_option   end of dhcpv6 message option
- */
-void send_udp(int sock, uint8_t *buffer, struct sockaddr_in6 target, uint32_t n, relay_config *config, uint8_t msg_type) {
+void process_sent_msg(relay_config *config, uint8_t msg_type) {
     std::string counterVlan = counter_table;
-    if(sendto(sock, buffer, n, 0, (const struct sockaddr *)&target, sizeof(target)) == -1)
-        syslog(LOG_ERR, "sendto: Failed to send to target address\n");
-    else if (counterMap.find(msg_type) != counterMap.end()) {
+    if (counterMap.find(msg_type) != counterMap.end()) {
         counters[msg_type]++;
         update_counter(config->state_db, counterVlan.append(config->interface), msg_type);
     } else {
@@ -497,7 +481,9 @@ void relay_client(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *ip_h
     current_buffer_position += dhcp_message_length + sizeof(dhcpv6_option);
 
     for(auto server: config->servers_sock) {
-        send_udp(sock, buffer, server, current_buffer_position - buffer, config, new_message.msg_type);
+        if(send_udp(sock, buffer, server, current_buffer_position - buffer)) {
+            process_sent_msg(config, new_message.msg_type);
+        }
     }
 }
 
@@ -537,7 +523,9 @@ void relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *
     current_buffer_position += dhcp_message_length + sizeof(dhcpv6_option);
 
     for(auto server: config->servers_sock) {
-        send_udp(sock, buffer, server, current_buffer_position - buffer, config, new_message.msg_type);
+        if(send_udp(sock, buffer, server, current_buffer_position - buffer)) {
+            process_sent_msg(config, new_message.msg_type);
+        }
     }
 }
 
@@ -589,7 +577,9 @@ void relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *
     target_addr.sin6_port = htons(CLIENT_PORT);
     target_addr.sin6_scope_id = if_nametoindex(config->interface.c_str());
 
-    send_udp(sock, buffer, target_addr, current_buffer_position - buffer, config, type);
+    if(send_udp(sock, buffer, target_addr, current_buffer_position - buffer)) {
+        process_sent_msg(config, type);
+    }
 } 
 
 /**
@@ -728,9 +718,9 @@ void callback_dual_tor(evutil_socket_t fd, short event, void *arg) {
 		return;
     std::string state;
     std::string intf(interfaceName);
-    redis_db.muxTable->hget(intf, "state", state);
+    config->mux_table->hget(intf, "state", state);
 
-    if (state != "standby" && redis_db.config_db->exists(key.append(intf))) {
+    if (state != "standby" && config->config_db->exists(key.append(intf))) {
         char* ptr = (char *)message_buffer;
         const uint8_t *current_position = (uint8_t *)ptr;
         const uint8_t *tmp = NULL;
@@ -970,8 +960,6 @@ void loop_relay(std::vector<relay_config> *vlans) {
     std::shared_ptr<swss::Table> mStateDbMuxTablePtr = std::make_shared<swss::Table> (
             state_db.get(), "HW_MUX_CABLE_TABLE"
         );
-    redis_db.config_db = config_db;
-    redis_db.muxTable = mStateDbMuxTablePtr;
 
     int filter = 0;
     filter = sock_open(&ether_relay_fprog);
@@ -981,6 +969,8 @@ void loop_relay(std::vector<relay_config> *vlans) {
         relay_config *config = &vlan;
         int local_sock = 0; 
         int server_sock = 0;
+        config->config_db = config_db;
+        config->mux_table = mStateDbMuxTablePtr;
         config->state_db = state_db;
         config->mux_key = vlan_member + config->interface + "|";
 

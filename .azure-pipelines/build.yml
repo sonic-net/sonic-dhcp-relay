@@ -41,7 +41,12 @@ jobs:
           libnl-3-dev \
           libnl-route-3-dev \
           libnl-genl-3-dev \
-          libnl-nf-3-dev
+          libnl-nf-3-dev \
+          redis-server
+      sudo sed -ri 's/^# unixsocket/unixsocket/' /etc/redis/redis.conf
+      sudo sed -ri 's/^unixsocketperm .../unixsocketperm 777/' /etc/redis/redis.conf
+      sudo sed -ri 's/redis-server.sock/redis.sock/' /etc/redis/redis.conf
+      sudo service redis-server start
 
     displayName: "Install dependencies"
   - checkout: self
@@ -73,9 +78,13 @@ jobs:
   - publish: $(Build.ArtifactStagingDirectory)
     artifact: sonic-dhcp-relay.${{ parameters.arch }}
     displayName: "Archive dhcp-relay debian packages"
+  - task: PublishTestResults@2
+    inputs:
+      testResultsFiles: build-test/dhcp6relay-test-test-result.xml
   - ${{ if and(eq(parameters.arch, 'amd64'), parameters.codeCoverage) }}:
     - task: PublishCodeCoverageResults@1
       inputs:
-        summaryFileLocation: dhcprelay-test-result.xml
+        summaryFileLocation: build-test/dhcp6relay-test-code-coverage.xml
         pathToSources: $(Build.SourcesDirectory)
+        reportDirectory: $(Build.SourcesDirectory)/build-test
         codeCoverageTool: 'Cobertura'
