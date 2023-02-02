@@ -129,8 +129,8 @@ public:
     bool UnmarshalBinary(const uint8_t* packet, uint16_t len);
 
 public:
-    dhcpv6_relay_msg msgHdr;
-    Options optionList;
+    dhcpv6_relay_msg m_msg_hdr;
+    Options m_option_list;
 
 private:
     std::unique_ptr<uint8_t[]> m_buffer;
@@ -147,8 +147,8 @@ public:
     bool UnmarshalBinary(const uint8_t *packet, uint16_t len);
 
 public:
-    dhcpv6_msg msgHdr;
-    Options optionList;
+    dhcpv6_msg m_msg_hdr;
+    Options m_option_list;
 
 private:
     std::unique_ptr<uint8_t[]> m_buffer;
