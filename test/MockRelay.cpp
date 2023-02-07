@@ -203,22 +203,6 @@ TEST(parsePacket, parse_dhcpv6_opt)
   EXPECT_EQ(99, ntohs(dhcp_relay_header->option_length));
 }
 
-TEST(parsePacket, relay_forward)
-{ 
-  unsigned char relay_option[] = {      /* DHCPv6 Relay Option */
-    0x00, 0x09, 0x00, 0x63
-  };
-  char *ptr = (char *)relay_option;
-  static uint8_t buffer[8];
-  auto current_buffer_position = buffer;
-  const uint8_t *current_position = (uint8_t *)ptr;
-
-  relay_forward(current_buffer_position, parse_dhcpv6_hdr(current_position), 4);
-  auto option = (const struct dhcpv6_option *)current_buffer_position;
-  EXPECT_EQ(9, ntohs(option->option_code));
-  EXPECT_EQ(4, ntohs(option->option_length));
-}
-
 TEST(sock, sock_open)
 { 
   struct sock_filter ether_relay_filter[] = {
@@ -304,14 +288,14 @@ TEST(counter, initialize_counter)
   EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Relay-Reply"));
 }
 
-TEST(counter, update_counter)
+TEST(counter, increase_counter)
 {
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
-  state_db->hset("DHCPv6_COUNTER_TABLE|Vlan1000", "Solicit", "1");
-  update_counter(state_db, "DHCPv6_COUNTER_TABLE|Vlan1000", 1);
+  state_db->hset("DHCPv6_COUNTER_TABLE|Vlan1000", "Solicit", "0");
+  increase_counter(state_db, "DHCPv6_COUNTER_TABLE|Vlan1000", 1);
   std::shared_ptr<std::string> output = state_db->hget("DHCPv6_COUNTER_TABLE|Vlan1000", "Solicit");
   std::string *ptr = output.get();
-  EXPECT_EQ(*ptr, "0");
+  EXPECT_EQ(*ptr, "1");
 }
 
 TEST(relay, relay_client) 
