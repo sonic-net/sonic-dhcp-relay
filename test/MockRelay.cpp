@@ -559,3 +559,114 @@ TEST(relay, dhcp6relay_stop) {
   event_base_free(base);
   base = NULL;
 }
+
+TEST(options, Add) {
+  class Options options;
+  option_interface_id intf_id;
+  inet_aton("2001::1000::1", &intf_id.interface_id);
+  EXPECT_TRUE(options.Add(OPTION_INTERFACE_ID, &intf_id, sizeof(option_interface_id)));
+  auto option_get = options.Get(OPTION_INTERFACE_ID);
+  EXPECT_EQ(option_get.size(), sizeof(option_interface_id));
+  EXPECT_EQ(std::memcmp(option_get.data(), &intf_id, sizeof(option_interface_id)), 0);
+}
+
+TEST(options, Delete) {
+  class Options options;
+  EXPECT_FALSE(options.Delete(OPTION_INTERFACE_ID));
+  option_interface_id intf_id;
+  inet_aton("2001::1000::1", &intf_id.interface_id);
+  EXPECT_TRUE(options.Add(OPTION_INTERFACE_ID, &intf_id, sizeof(option_interface_id)));
+  EXPECT_TRUE(options.Delete(OPTION_INTERFACE_ID));
+  EXPECT_EQ(options.Get(OPTION_INTERFACE_ID).size(), 0);
+}
+
+TEST(options, Get) {
+  class Options options;
+  EXPECT_EQ(options.Get(OPTION_INTERFACE_ID).size(), 0);
+}
+
+TEST(options, MarshalBinary) {
+  class Options options;
+  EXPECT_EQ(options.MarshalBinary(), nullptr);
+  option_interface_id intf_id;
+  inet_aton("2001::1000::1", &intf_id.interface_id);
+  options.Add(OPTION_INTERFACE_ID, &intf_id, sizeof(option_interface_id));
+
+  auto op_stream = options.MarshalBinary();
+  EXPECT_EQ(op_stream.size(), sizeof(option_interface_id) + 4);
+
+  auto new_op_stream = options.MarshalBinary();
+  EXPECT_EQ(new_op_stream, op_stream);
+}
+
+TEST(options, UnmarshalBinary) {
+  uint8_t option_cid[] = {
+    0x00, 0x01, 0x00, 0x0e, 0x00, 0x01, 0x00, 0x01,
+    0x1c, 0x39, 0xcf, 0x88, 0x08, 0x00, 0x27, 0xfe,
+    0x8f, 0x95
+  };
+  class Options options;
+  auto result = options.UnmarshalBinary(option_cid, sizeof(option_cid));
+  EXPECT_EQ(result, True);
+  EXPECT_EQ(options.Get(1).size(), sizeof(option_cid) - 4);
+
+  uint8_t option_invalid_type[] = {
+    0x00, 0xff, 0x00, 0x0e, 0x00, 0x01, 0x00, 0x01,
+    0x1c, 0x39, 0xcf, 0x88, 0x08, 0x00, 0x27, 0xfe,
+    0x8f, 0x95
+  };
+  class Options options2;
+  result = options2.UnmarshalBinary(option_invalid_type, sizeof(option_invalid_type));
+  EXPECT_EQ(result, False);
+
+  uint8_t option_invalid_length[] = {
+    0x00, 0x01, 0x00, 0xff, 0x00, 0x01, 0x00, 0x01,
+    0x1c, 0x39, 0xcf, 0x88, 0x08, 0x00, 0x27, 0xfe,
+    0x8f, 0x95
+  };
+  class Options options3;
+  result = options3.UnmarshalBinary(option_invalid_length, sizeof(option_invalid_length));
+  EXPECT_EQ(result, False);
+}
+
+TEST(relay_msg, MarshalBinary) {
+  class RelayMsg relay;
+  uint16_t length = 0;
+
+  auto msg = relay.MarshalBinary(length);
+  EXPECT_EQ(length, sizeof(dhcpv6_relay_msg));
+
+
+
+}
+
+TEST(relay_msg, UnmarshalBinary) {
+  uint8_t relay_forward[] = {
+      0x0c, 0x00, 0xfc, 0x02, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x01, 0xfe, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x9a, 0x03, 0x9b, 0xff, 0xfe, 0x03,
+      0x22, 0x01, 0x00, 0x09, 0x00, 0x36, 0x01, 0x00, 0x30, 0x39, 0x00, 0x03, 0x00, 0x0c, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x02, 0x00, 0x00,
+      0x00, 0x06, 0x00, 0x06, 0x00, 0x17, 0x00, 0x18, 0x00, 0x1d, 0x00, 0x01, 0x00, 0x0e, 0x00, 0x01,
+      0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x98, 0x03, 0x9b, 0x03, 0x22, 0x01, 0x00, 0x4f, 0x00, 0x08,
+      0x00, 0x01, 0x98, 0x03, 0x9b, 0x03, 0x22, 0x01
+  };
+  class RelayMsg relay;
+  auto result = relay.UnmarshalBinary(relay_forward, sizeof(dhcpv6_relay_msg) - 1);
+  EXPECT_FALSE(result);
+
+  result = relay.UnmarshalBinary(relay_forward, sizeof(relay_forward));
+  EXPECT_TRUE(result);
+
+}
+
+TEST(dhcpv6_msg, MarshalBinary) {
+  uint8_t dhcpv6_msg[] = {
+    
+  }
+}
+
+TEST(dhcpv6_msg, UnmarshalBinary) {
+  uint8_t dhcpv6_msg[] = {
+    
+  }
+}
