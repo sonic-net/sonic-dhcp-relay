@@ -10,8 +10,9 @@
 #include <linux/filter.h>
 #include <string>
 #include <vector>
-#include <unordered_map>
+#include <map>
 #include <event2/util.h>
+#include <syslog.h>
 #include "dbconnector.h"
 #include "table.h"
 #include "sender.h"
@@ -24,6 +25,7 @@
 #define DHCPv6_OPTION_LIMIT 62      // DHCPv6 option code greater than 62 are currently unassigned
 #define RAWSOCKET_RECV_SIZE 1048576 // system allowed max size under /proc/sys/net/core/rmem_max
 #define CLIENT_IF_PREFIX "Ethernet"
+#define BUFFER_SIZE 9200
 
 #define lengthof(A) (sizeof (A) / sizeof (A)[0])
 
@@ -75,7 +77,7 @@ struct relay_config {
 
 /* DHCPv6 messages and options */
 
-struct dhcpv6_msg {
+struct PACKED dhcpv6_msg {
     uint8_t msg_type;
     uint8_t xid[3];
 };
@@ -87,22 +89,69 @@ struct PACKED dhcpv6_relay_msg {
     struct in6_addr peer_address;
 };
 
-
-struct dhcpv6_option {
+struct PACKED dhcpv6_option {
     uint16_t option_code;
     uint16_t option_length;
 };
 
-struct linklayer_addr_option  {
-    uint16_t option_code;
-    uint16_t option_length;
+struct PACKED option_linklayer_addr  {
     uint16_t link_layer_type;
+    uint8_t link_layer_addr[6];
 };
 
-struct interface_id_option  {
-    uint16_t option_code;
-    uint16_t option_length;
+struct PACKED option_interface_id  {
     in6_addr interface_id;  // to accomodate dual-tor, this opaque value is set to carry relay interface's global ipv6 address
+};
+
+typedef uint16_t OptionCode;
+
+// DHCPv6 Options Class Definition 
+class Options {
+public:
+    bool Add(OptionCode key, const uint8_t *value, uint16_t len);
+    bool Delete(OptionCode key);
+    std::vector<uint8_t> Get(OptionCode key);
+    std::vector<uint8_t> *MarshalBinary();
+    bool UnmarshalBinary(const uint8_t *packet, uint16_t len);
+
+private:
+    std::map<OptionCode, std::vector<uint8_t>> m_options;
+    std::vector<uint8_t> m_list;
+};
+
+// DHCPv6 Relay Message Class Definition
+class RelayMsg: public Options {
+public:
+    RelayMsg() {
+        m_buffer = nullptr;
+    };
+    uint8_t *MarshalBinary(uint16_t &len);
+    bool UnmarshalBinary(const uint8_t* packet, uint16_t len);
+
+public:
+    dhcpv6_relay_msg m_msg_hdr;
+    Options m_option_list;
+
+private:
+    std::unique_ptr<uint8_t[]> m_buffer;
+};
+
+// DHCPv6 Raw Message Class Definition
+class DHCPv6Msg: public Options {
+public:
+    DHCPv6Msg() {
+        m_buffer = nullptr;
+    };
+
+    uint8_t *MarshalBinary(uint16_t &len);
+    bool UnmarshalBinary(const uint8_t *packet, uint16_t len);
+
+public:
+    dhcpv6_msg m_msg_hdr;
+    Options m_option_list;
+
+private:
+    std::unique_ptr<uint8_t[]> m_buffer;
 };
 
 /**
@@ -142,20 +191,7 @@ void prepare_socket(int *local_sock, int *server_sock, relay_config *config);
 void prepare_relay_config(relay_config &interface_config, int local_sock, int filter);
 
 /**
- * @code                relay_forward(uint8_t *buffer, const struct dhcpv6_msg *msg, uint16_t msg_length);
- *
- * @brief               embed the DHCPv6 message received into DHCPv6 relay forward message
- *
- * @param buffer        pointer to buffer
- * @param msg           pointer to parsed DHCPv6 message
- * @param msg_length    length of DHCPv6 message
- *
- * @return              none
- */
-void relay_forward(uint8_t *buffer, const struct dhcpv6_msg *msg, uint16_t msg_length);
-
-/**
- * @code                 relay_client(int sock, const uint8_t *msg, int32_t len, ip6_hdr *ip_hdr, const ether_header *ether_hdr, relay_config *config);
+ * @code                 relay_client(int sock, const uint8_t *msg, uint16_t len, ip6_hdr *ip_hdr, const ether_header *ether_hdr, relay_config *config);
  * 
  * @brief                construct relay-forward message
  *
@@ -168,7 +204,7 @@ void relay_forward(uint8_t *buffer, const struct dhcpv6_msg *msg, uint16_t msg_l
  *
  * @return none
  */
-void relay_client(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, const ether_header *ether_hdr, relay_config *config);
+void relay_client(int sock, const uint8_t *msg, uint16_t len, const ip6_hdr *ip_hdr, const ether_header *ether_hdr, relay_config *config);
 
 /**
  * @code                 relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, relay_config *config)
@@ -263,17 +299,17 @@ void shutdown();
 void initialize_counter(std::shared_ptr<swss::DBConnector> state_db, std::string counterVlan);
 
 /**
- * @code                void update_counter(shared_ptr<swss::DBConnector>, std::string CounterVlan, uint8_t msg_type);
+ * @code                void increase_counter(shared_ptr<swss::DBConnector>, std::string CounterVlan, uint8_t msg_type);
  *
- * @brief               update the counter in state_db with count of each DHCPv6 message type
+ * @brief               increase the counter in state_db with count of each DHCPv6 message type
  *
  * @param shared_ptr<swss::DBConnector> state_db     state_db connector
  * @param counterVlan   counter table with interface name
- * @param msg_type      dhcpv6 message type to be updated in counter
+ * @param msg_type      dhcpv6 message type to be increased in counter
  * 
  * @return              none
  */
-void update_counter(std::shared_ptr<swss::DBConnector> state_db, std::string counterVlan, uint8_t msg_type);
+void increase_counter(std::shared_ptr<swss::DBConnector> state_db, std::string counterVlan, uint8_t msg_type);
 
 /* Helper functions */
 
