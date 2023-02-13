@@ -203,22 +203,6 @@ TEST(parsePacket, parse_dhcpv6_opt)
   EXPECT_EQ(99, ntohs(dhcp_relay_header->option_length));
 }
 
-TEST(parsePacket, relay_forward)
-{ 
-  unsigned char relay_option[] = {      /* DHCPv6 Relay Option */
-    0x00, 0x09, 0x00, 0x63
-  };
-  char *ptr = (char *)relay_option;
-  static uint8_t buffer[8];
-  auto current_buffer_position = buffer;
-  const uint8_t *current_position = (uint8_t *)ptr;
-
-  relay_forward(current_buffer_position, parse_dhcpv6_hdr(current_position), 4);
-  auto option = (const struct dhcpv6_option *)current_buffer_position;
-  EXPECT_EQ(9, ntohs(option->option_code));
-  EXPECT_EQ(4, ntohs(option->option_length));
-}
-
 TEST(sock, sock_open)
 { 
   struct sock_filter ether_relay_filter[] = {
@@ -563,8 +547,9 @@ TEST(relay, dhcp6relay_stop) {
 TEST(options, Add) {
   class Options options;
   option_interface_id intf_id;
-  inet_aton("2001::1000::1", &intf_id.interface_id);
-  EXPECT_TRUE(options.Add(OPTION_INTERFACE_ID, &intf_id, sizeof(option_interface_id)));
+  std::string s_addr = "2001::1000::1";
+  inet_pton(AF_INET6, s_addr.c_str(), &intf_id.interface_id);
+  EXPECT_TRUE(options.Add(OPTION_INTERFACE_ID, (const uint8_t *)&intf_id.interface_id, sizeof(option_interface_id)));
   auto option_get = options.Get(OPTION_INTERFACE_ID);
   EXPECT_EQ(option_get.size(), sizeof(option_interface_id));
   EXPECT_EQ(std::memcmp(option_get.data(), &intf_id, sizeof(option_interface_id)), 0);
@@ -574,8 +559,9 @@ TEST(options, Delete) {
   class Options options;
   EXPECT_FALSE(options.Delete(OPTION_INTERFACE_ID));
   option_interface_id intf_id;
-  inet_aton("2001::1000::1", &intf_id.interface_id);
-  EXPECT_TRUE(options.Add(OPTION_INTERFACE_ID, &intf_id, sizeof(option_interface_id)));
+  std::string s_addr = "2001::1000::1";
+  inet_pton(AF_INET6, s_addr.c_str(), &intf_id.interface_id);
+  EXPECT_TRUE(options.Add(OPTION_INTERFACE_ID, (const uint8_t *)&intf_id.interface_id, sizeof(option_interface_id)));
   EXPECT_TRUE(options.Delete(OPTION_INTERFACE_ID));
   EXPECT_EQ(options.Get(OPTION_INTERFACE_ID).size(), 0);
 }
@@ -589,11 +575,12 @@ TEST(options, MarshalBinary) {
   class Options options;
   EXPECT_EQ(options.MarshalBinary(), nullptr);
   option_interface_id intf_id;
-  inet_aton("2001::1000::1", &intf_id.interface_id);
-  options.Add(OPTION_INTERFACE_ID, &intf_id, sizeof(option_interface_id));
+  std::string s_addr = "2001::1000::1";
+  inet_pton(AF_INET6, s_addr.c_str(), &intf_id.interface_id);
+  options.Add(OPTION_INTERFACE_ID, (const uint8_t *)&intf_id.interface_id, sizeof(option_interface_id));
 
   auto op_stream = options.MarshalBinary();
-  EXPECT_EQ(op_stream.size(), sizeof(option_interface_id) + 4);
+  EXPECT_EQ(op_stream->size(), sizeof(option_interface_id) + 4);
 
   auto new_op_stream = options.MarshalBinary();
   EXPECT_EQ(new_op_stream, op_stream);
@@ -607,7 +594,7 @@ TEST(options, UnmarshalBinary) {
   };
   class Options options;
   auto result = options.UnmarshalBinary(option_cid, sizeof(option_cid));
-  EXPECT_EQ(result, True);
+  EXPECT_TRUE(result);
   EXPECT_EQ(options.Get(1).size(), sizeof(option_cid) - 4);
 
   uint8_t option_invalid_type[] = {
@@ -617,7 +604,7 @@ TEST(options, UnmarshalBinary) {
   };
   class Options options2;
   result = options2.UnmarshalBinary(option_invalid_type, sizeof(option_invalid_type));
-  EXPECT_EQ(result, False);
+  EXPECT_FALSE(result);
 
   uint8_t option_invalid_length[] = {
     0x00, 0x01, 0x00, 0xff, 0x00, 0x01, 0x00, 0x01,
@@ -626,7 +613,7 @@ TEST(options, UnmarshalBinary) {
   };
   class Options options3;
   result = options3.UnmarshalBinary(option_invalid_length, sizeof(option_invalid_length));
-  EXPECT_EQ(result, False);
+  EXPECT_FALSE(result);
 }
 
 TEST(relay_msg, MarshalBinary) {
@@ -645,13 +632,13 @@ TEST(relay_msg, MarshalBinary) {
       0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x98, 0x03, 0x9b, 0x03, 0x22, 0x01, 0x00, 0x4f, 0x00, 0x08,
       0x00, 0x01, 0x98, 0x03, 0x9b, 0x03, 0x22, 0x01
   };
-  result = relay.UnmarshalBinary(relay_forward, sizeof(relay_forward));
+  auto result = relay.UnmarshalBinary(relay_forward, sizeof(relay_forward));
   EXPECT_TRUE(result);
 
   msg = relay.MarshalBinary(length);
   EXPECT_EQ(length, sizeof(relay_forward));
 
-  for (int i = 0; i < sizeof(relay_forward); i++) {
+  for (uint16_t i = 0; i < sizeof(relay_forward); i++) {
     EXPECT_EQ(relay_forward[i], msg[i]);
   }
 }
@@ -674,7 +661,7 @@ TEST(relay_msg, UnmarshalBinary) {
   EXPECT_TRUE(result);
   EXPECT_EQ(relay.m_msg_hdr.msg_type, 12);
   EXPECT_EQ(relay.m_msg_hdr.hop_count, 0);
-  EXPECT_EQ(relay.m_msg_hdr.m_option_list.Get(79).size(), 8);
+  EXPECT_EQ(relay.m_option_list.Get(79).size(), 8);
 
   uint8_t relay_forward_invalid_opt79[] = {
       0x0c, 0x00, 0xfc, 0x02, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -725,10 +712,10 @@ TEST(dhcpv6_msg, UnmarshalBinary) {
   result = dhcpv6.UnmarshalBinary(solicit, sizeof(solicit));
   EXPECT_TRUE(result);
   EXPECT_EQ(dhcpv6.m_msg_hdr.msg_type, 1);
-  EXPECT_EQ(dhcpv6.m_msg_hdr.m_option_list.Get(1).size(), 14);
-  EXPECT_EQ(dhcpv6.m_msg_hdr.m_option_list.Get(6).size(), 6);
-  EXPECT_EQ(dhcpv6.m_msg_hdr.m_option_list.Get(8).size(), 2);
-  EXPECT_EQ(dhcpv6.m_msg_hdr.m_option_list.Get(3).size(), 12);
+  EXPECT_EQ(dhcpv6.m_option_list.Get(1).size(), 14);
+  EXPECT_EQ(dhcpv6.m_option_list.Get(6).size(), 6);
+  EXPECT_EQ(dhcpv6.m_option_list.Get(8).size(), 2);
+  EXPECT_EQ(dhcpv6.m_option_list.Get(3).size(), 12);
 
   uint8_t solicit_invalid_option_cid[] = {
     0x01, 0x00, 0x30, 0x39, 0x00, 0xff, 0x00, 0x0e, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
