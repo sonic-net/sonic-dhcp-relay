@@ -683,6 +683,7 @@ TEST(dhcpv6_msg, MarshalBinary) {
   uint16_t length = 0;
 
   auto msg = dhcpv6.MarshalBinary(length);
+  EXPECT_TRUE(msg);
   EXPECT_EQ(length, sizeof(dhcpv6_msg));
 
   uint8_t solicit[] = {
@@ -695,6 +696,7 @@ TEST(dhcpv6_msg, MarshalBinary) {
   EXPECT_TRUE(result);
 
   msg = dhcpv6.MarshalBinary(length);
+  EXPECT_TRUE(msg);
   EXPECT_EQ(length, sizeof(solicit));
 }
 

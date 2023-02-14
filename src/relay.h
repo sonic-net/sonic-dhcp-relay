@@ -22,7 +22,8 @@
 #define RELAY_PORT 547
 #define CLIENT_PORT 546
 #define HOP_LIMIT 8     //HOP_LIMIT reduced from 32 to 8 as stated in RFC8415
-#define DHCPv6_OPTION_LIMIT 62      // DHCPv6 option code greater than 62 are currently unassigned
+#define DHCPv6_OPTION_LIMIT 147  // follow Option Codes in
+                                 // http://www.iana.org/assignments/dhcpv6-parameters/dhcpv6-parameters.xhtml
 #define RAWSOCKET_RECV_SIZE 1048576 // system allowed max size under /proc/sys/net/core/rmem_max
 #define CLIENT_IF_PREFIX "Ethernet"
 #define BUFFER_SIZE 9200
