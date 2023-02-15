@@ -269,6 +269,31 @@ TEST(prepareConfig, prepare_relay_config)
   EXPECT_EQ("fc02:2000::2", s2);
 }
 
+TEST(prepareConfig, prepare_socket)
+{
+  struct relay_config config{};
+  config.is_option_79 = true;
+  config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x01;
+
+  struct ip6_hdr ip_hdr;
+  std::string s_addr = "fe80::1";
+  inet_pton(AF_INET6, s_addr.c_str(), &ip_hdr.ip6_src);
+
+  config.servers.push_back("fc02:2000::1");
+  config.servers.push_back("fc02:2000::2");
+
+  config.interface = "Vlan1000";
+  std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+  config.state_db = state_db;
+
+  int local_sock = -1, server_sock = -1;
+  prepare_socket(local_sock, server_sock, config);
+
+  EXPECT_GE(local_sock, 0);
+
+  EXPECT_GE(server_sock, 0);
+}
+
 
 TEST(counter, initialize_counter)
 {
@@ -534,7 +559,7 @@ TEST(relay, signal_callback) {
 
 TEST(relay, dhcp6relay_stop) {
   int filter = 1;
-  std::unordered_map<std::string, relay_config> vlans;
+  std::unordered_map<std::string, struct relay_config> vlans;
   base = event_base_new();
   struct event* event = event_new(base, filter, EV_READ|EV_PERSIST, client_callback,
                                   reinterpret_cast<void *>(&vlans));
@@ -542,6 +567,76 @@ TEST(relay, dhcp6relay_stop) {
   event_free(event);
   event_base_free(base);
   base = NULL;
+}
+
+TEST(relay, update_vlan_mapping) {
+  std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+  config_db->hset("VLAN_MEMBER|Vlan1000|Ethernet19", "tagging_mode", "untagged");
+  config_db->hset("VLAN_MEMBER|Vlan1000|Ethernet20", "tagging_mode", "untagged");
+  std::string vlan = "Vlan1000";
+  update_vlan_mapping(vlan, config_db);
+
+  auto output = config_db->hget("VLAN_MEMBER|Vlan1000|Ethernet19", "tagging_mode");
+  std::string *ptr = output.get();
+  EXPECT_EQ(*ptr, "untagged");
+}
+
+
+TEST(relay, client_callback) {
+  std::unordered_map<std::string, struct relay_config> vlans;
+
+  client_callback(1, 0, &vlans);
+}
+
+TEST(relay, client_packet_handler) {
+  struct relay_config config{};
+  config.is_option_79 = true;
+  config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x01;
+
+  struct ip6_hdr ip_hdr;
+  std::string s_addr = "fe80::1";
+  inet_pton(AF_INET6, s_addr.c_str(), &ip_hdr.ip6_src);
+
+  config.servers.push_back("fc02:2000::1");
+  config.servers.push_back("fc02:2000::2");
+  config.interface = "Vlan1000";
+
+  std::string ifname = "Ethernet19";
+
+  uint8_t client_raw_solicit[] = {
+    0x33, 0x33, 0x00, 0x01, 0x00, 0x02, 0x08, 0x00, 0x27, 0xfe, 0x8f, 0x95, 0x86, 0xdd, 0x60, 0x00,
+    0x00, 0x00, 0x00, 0x3c, 0x11, 0x01, 0xfe, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0a, 0x00,
+    0x27, 0xff, 0xfe, 0xfe, 0x8f, 0x95, 0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x02, 0x02, 0x22, 0x02, 0x23, 0x00, 0x3c, 0xad, 0x08, 0x01, 0x10,
+    0x08, 0x74, 0x00, 0x01, 0x00, 0x0e, 0x00, 0x01, 0x00, 0x01, 0x1c, 0x39, 0xcf, 0x88, 0x08, 0x00,
+    0x27, 0xfe, 0x8f, 0x95, 0x00, 0x06, 0x00, 0x04, 0x00, 0x17, 0x00, 0x18, 0x00, 0x08, 0x00, 0x02,
+    0x00, 0x00, 0x00, 0x19, 0x00, 0x0c, 0x27, 0xfe, 0x8f, 0x95, 0x00, 0x00, 0x0e, 0x10, 0x00, 0x00,
+    0x15, 0x18
+  };
+
+  // invalid packet length
+  client_packet_handler(client_raw_solicit, 4, &config, ifname);
+
+  client_packet_handler(client_raw_solicit, sizeof(client_raw_solicit), &config, ifname);
+
+  uint8_t client_raw_solicit_invalid_type[] = {
+    0x33, 0x33, 0x00, 0x01, 0x00, 0x02, 0x08, 0x00, 0x27, 0xfe, 0x8f, 0x95, 0x86, 0xdd, 0x60, 0x00,
+    0x00, 0x00, 0x00, 0x3c, 0x11, 0x01, 0xfe, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0a, 0x00,
+    0x27, 0xff, 0xfe, 0xfe, 0x8f, 0x95, 0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x02, 0x02, 0x22, 0x02, 0x23, 0x00, 0x3c, 0xad, 0x08, 0x00, 0x10,
+    0x08, 0x74, 0x00, 0x01, 0x00, 0x0e, 0x00, 0x01, 0x00, 0x01, 0x1c, 0x39, 0xcf, 0x88, 0x08, 0x00,
+    0x27, 0xfe, 0x8f, 0x95, 0x00, 0x06, 0x00, 0x04, 0x00, 0x17, 0x00, 0x18, 0x00, 0x08, 0x00, 0x02,
+    0x00, 0x00, 0x00, 0x19, 0x00, 0x0c, 0x27, 0xfe, 0x8f, 0x95, 0x00, 0x00, 0x0e, 0x10, 0x00, 0x00,
+    0x15, 0x18
+  };
+  client_packet_handler(client_raw_solicit_invalid_type, sizeof(client_raw_solicit_invalid_type), &config, ifname);
+}
+
+
+TEST(relay, server_callback) {
+  struct relay_config cfg;
+  // negative test
+  server_callback(1, 0, &cfg);
 }
 
 TEST(options, Add) {
@@ -729,3 +824,4 @@ TEST(dhcpv6_msg, UnmarshalBinary) {
   EXPECT_FALSE(result);
   EXPECT_EQ(dhcpv6.m_msg_hdr.msg_type, 1);
 }
+
