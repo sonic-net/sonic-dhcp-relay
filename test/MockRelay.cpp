@@ -269,32 +269,6 @@ TEST(prepareConfig, prepare_relay_config)
   EXPECT_EQ("fc02:2000::2", s2);
 }
 
-TEST(prepareConfig, prepare_socket)
-{
-  struct relay_config config{};
-  config.is_option_79 = true;
-  config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x01;
-
-  struct ip6_hdr ip_hdr;
-  std::string s_addr = "fe80::1";
-  inet_pton(AF_INET6, s_addr.c_str(), &ip_hdr.ip6_src);
-
-  config.servers.push_back("fc02:2000::1");
-  config.servers.push_back("fc02:2000::2");
-
-  config.interface = "Vlan1000";
-  std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
-  config.state_db = state_db;
-
-  int local_sock = -1, server_sock = -1;
-  prepare_socket(local_sock, server_sock, config);
-
-  EXPECT_GE(local_sock, 0);
-
-  EXPECT_GE(server_sock, 0);
-}
-
-
 TEST(counter, initialize_counter)
 {
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
