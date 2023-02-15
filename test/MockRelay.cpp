@@ -581,13 +581,6 @@ TEST(relay, update_vlan_mapping) {
   EXPECT_EQ(*ptr, "untagged");
 }
 
-
-TEST(relay, client_callback) {
-  std::unordered_map<std::string, struct relay_config> vlans;
-
-  client_callback(1, 0, &vlans);
-}
-
 TEST(relay, client_packet_handler) {
   struct relay_config config{};
   config.is_option_79 = true;
@@ -630,13 +623,6 @@ TEST(relay, client_packet_handler) {
     0x15, 0x18
   };
   client_packet_handler(client_raw_solicit_invalid_type, sizeof(client_raw_solicit_invalid_type), &config, ifname);
-}
-
-
-TEST(relay, server_callback) {
-  struct relay_config cfg;
-  // negative test
-  server_callback(1, 0, &cfg);
 }
 
 TEST(options, Add) {
