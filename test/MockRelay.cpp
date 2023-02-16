@@ -677,15 +677,14 @@ TEST(relay, client_callback) {
 
 TEST(relay, loop_relay) {
   std::unordered_map<std::string, relay_config> vlans;
-  pid_t pid = fork();
   
-  if (pid == -1) {
-    EXPECT_TRUE(false);
-    return;
-  } else if (pid > 0) {
-    sleep(2);
-  } else {
+  signal_init();
+  EXPECT_NE((uintptr_t)ev_sigint, NULL);
+  EXPECT_NE((uintptr_t)ev_sigterm, NULL);
+  try {
     loop_relay(vlans);
+  }
+  catch (const std::exception& e) {
     EXPECT_TRUE(false);
   }
 }
