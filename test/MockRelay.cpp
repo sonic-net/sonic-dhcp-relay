@@ -584,7 +584,7 @@ TEST(relay, update_vlan_mapping) {
 TEST(relay, client_packet_handler) {
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   initialize_counter(state_db, "DHCPv6_COUNTER_TABLE|Vlan1000");
-  
+
   struct relay_config config{};
   config.is_option_79 = true;
   config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x01;
@@ -596,6 +596,7 @@ TEST(relay, client_packet_handler) {
   config.servers.push_back("fc02:2000::1");
   config.servers.push_back("fc02:2000::2");
   config.interface = "Vlan1000";
+  config.state_db = state_db;
 
   std::string ifname = "Ethernet19";
 
