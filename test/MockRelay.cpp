@@ -588,11 +588,6 @@ TEST(relay, client_packet_handler) {
   struct relay_config config{};
   config.is_option_79 = true;
   config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x01;
-
-  struct ip6_hdr ip_hdr;
-  std::string s_addr = "fe80::1";
-  inet_pton(AF_INET6, s_addr.c_str(), &ip_hdr.ip6_src);
-
   config.servers.push_back("fc02:2000::1");
   config.servers.push_back("fc02:2000::2");
   config.interface = "Vlan1000";
@@ -627,6 +622,50 @@ TEST(relay, client_packet_handler) {
     0x15, 0x18
   };
   client_packet_handler(client_raw_solicit_invalid_type, sizeof(client_raw_solicit_invalid_type), &config, ifname);
+}
+
+TEST(relay, server_callback) {
+  std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+  initialize_counter(state_db, "DHCPv6_COUNTER_TABLE|Vlan1000");
+
+  struct relay_config config{};
+  config.is_option_79 = true;
+  config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x01;
+  config.servers.push_back("fc02:2000::1");
+  config.servers.push_back("fc02:2000::2");
+  config.interface = "Vlan1000";
+  config.state_db = state_db;
+  config.local_sock = -1;
+
+  // negative case testing
+  try {
+    server_callback(0, 0, &config);
+  }
+  catch (const std::exception& e) {
+    EXPECT_TRUE(false);
+  }
+}
+
+TEST(relay, client_callback) {
+  std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+  initialize_counter(state_db, "DHCPv6_COUNTER_TABLE|Vlan1000");
+
+  struct relay_config config{};
+  config.is_option_79 = true;
+  config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x01;
+  config.servers.push_back("fc02:2000::1");
+  config.servers.push_back("fc02:2000::2");
+  config.interface = "Vlan1000";
+  config.state_db = state_db;
+  config.local_sock = -1;
+
+  // negative case testing
+  try {
+    client_callback(-1, 0, &config);
+  }
+  catch (const std::exception& e) {
+    EXPECT_TRUE(false);
+  }
 }
 
 TEST(options, Add) {
