@@ -686,7 +686,12 @@ TEST(relay, shutdown) {
   catch (const std::exception& e) {
     EXPECT_TRUE(false);
   }
+}
 
+TEST(relay, initialize_swss) {
+  std::unordered_map<std::string, relay_config> vlans;
+  initialize_swss(vlans);
+  EXPECT_FALSE(vlans.size());
 }
 
 TEST(options, Add) {
