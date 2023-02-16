@@ -675,18 +675,18 @@ TEST(relay, client_callback) {
   }
 }
 
-TEST(relay, loop_relay) {
-  std::unordered_map<std::string, relay_config> vlans;
-  
+TEST(relay, shutdown) {
   signal_init();
   EXPECT_NE((uintptr_t)ev_sigint, NULL);
   EXPECT_NE((uintptr_t)ev_sigterm, NULL);
+
   try {
-    loop_relay(vlans);
+    shutdown();
   }
   catch (const std::exception& e) {
     EXPECT_TRUE(false);
   }
+
 }
 
 TEST(options, Add) {
