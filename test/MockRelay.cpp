@@ -606,11 +606,6 @@ TEST(relay, client_packet_handler) {
     0x15, 0x18
   };
 
-  // invalid packet length
-  client_packet_handler(client_raw_solicit, 4, &config, ifname);
-
-  client_packet_handler(client_raw_solicit, sizeof(client_raw_solicit), &config, ifname);
-
   uint8_t client_raw_solicit_invalid_type[] = {
     0x33, 0x33, 0x00, 0x01, 0x00, 0x02, 0x08, 0x00, 0x27, 0xfe, 0x8f, 0x95, 0x86, 0xdd, 0x60, 0x00,
     0x00, 0x00, 0x00, 0x3c, 0x11, 0x01, 0xfe, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0a, 0x00,
@@ -621,7 +616,18 @@ TEST(relay, client_packet_handler) {
     0x00, 0x00, 0x00, 0x19, 0x00, 0x0c, 0x27, 0xfe, 0x8f, 0x95, 0x00, 0x00, 0x0e, 0x10, 0x00, 0x00,
     0x15, 0x18
   };
-  client_packet_handler(client_raw_solicit_invalid_type, sizeof(client_raw_solicit_invalid_type), &config, ifname);
+
+  try {
+    // invalid packet length
+    client_packet_handler(client_raw_solicit, 4, &config, ifname);
+
+    client_packet_handler(client_raw_solicit, sizeof(client_raw_solicit), &config, ifname);
+  
+    client_packet_handler(client_raw_solicit_invalid_type, sizeof(client_raw_solicit_invalid_type), &config, ifname);
+  }
+  catch (const std::exception& e) {
+    EXPECT_TRUE(false);
+  }
 }
 
 TEST(relay, server_callback) {
@@ -662,6 +668,16 @@ TEST(relay, client_callback) {
   // negative case testing
   try {
     client_callback(-1, 0, &config);
+  }
+  catch (const std::exception& e) {
+    EXPECT_TRUE(false);
+  }
+}
+
+TEST(relay, loop_relay) {
+  std::unordered_map<std::string, relay_config> vlans;
+  try {
+    loop_relay(vlans);
   }
   catch (const std::exception& e) {
     EXPECT_TRUE(false);
