@@ -22,7 +22,8 @@
 #define RELAY_PORT 547
 #define CLIENT_PORT 546
 #define HOP_LIMIT 8     //HOP_LIMIT reduced from 32 to 8 as stated in RFC8415
-#define DHCPv6_OPTION_LIMIT 62      // DHCPv6 option code greater than 62 are currently unassigned
+#define DHCPv6_OPTION_LIMIT 147  // follow Option Codes in
+                                 // http://www.iana.org/assignments/dhcpv6-parameters/dhcpv6-parameters.xhtml
 #define RAWSOCKET_RECV_SIZE 1048576 // system allowed max size under /proc/sys/net/core/rmem_max
 #define CLIENT_IF_PREFIX "Ethernet"
 #define BUFFER_SIZE 9200
@@ -166,16 +167,16 @@ private:
 int sock_open(const struct sock_fprog *fprog);
 
 /**
- * @code                prepare_socket(int *local_sock, int *server_sock, relay_config *config);
+ * @code                prepare_socket(int &local_sock, int &server_sock, relay_config &config);
  * 
  * @brief               prepare L3 socket for sending
  *
  * @param local_sock    pointer to socket binded to global address for relaying client message to server and listening for server message
- * @param server_sock       pointer to socket binded to link_local address for relaying server message to client
+ * @param server_sock   pointer to socket binded to link_local address for relaying server message to client
  *
  * @return              none
  */
-void prepare_socket(int *local_sock, int *server_sock, relay_config *config);
+void prepare_socket(int &local_sock, int &server_sock, relay_config &config);
 
 /**
  * @code                        prepare_relay_config(relay_config &interface_config, int local_sock, int filter);

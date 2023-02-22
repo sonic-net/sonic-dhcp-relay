@@ -518,7 +518,7 @@ void prepare_relay_config(relay_config &interface_config, int local_sock, int fi
  * @brief               prepare L3 socket for sending
  *
  * @param local_sock    pointer to socket binded to global address for relaying client message to server and listening for server message
- * @param server_sock       pointer to socket binded to link_local address for relaying server message to client
+ * @param server_sock   pointer to socket binded to link_local address for relaying server message to client
  *
  * @return              none
  */
