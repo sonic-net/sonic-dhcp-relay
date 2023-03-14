@@ -1,12 +1,11 @@
 #include <sstream>
 #include <syslog.h>
 #include <algorithm>
-#include "configInterface.h"
+#include "config_interface.h"
 
 constexpr auto DEFAULT_TIMEOUT_MSEC = 1000;
 
 bool pollSwssNotifcation = true;
-std::shared_ptr<boost::thread> mSwssThreadPtr;
 swss::Select swssSelect;
 
 /**
@@ -30,6 +29,17 @@ void initialize_swss(std::unordered_map<std::string, relay_config> &vlans)
 }
 
 /**
+*@code      stopSwssNotificationPoll
+*
+*@brief     stop SWSS listening thread
+*
+*@return    none
+*/
+static void stopSwssNotificationPoll() {
+    pollSwssNotifcation = false;
+};
+
+/**
  * @code                void deinitialize_swss()
  * 
  * @brief               deinitialize DB interface and join SWSS listening thread
@@ -39,11 +49,7 @@ void initialize_swss(std::unordered_map<std::string, relay_config> &vlans)
 void deinitialize_swss()
 {
     stopSwssNotificationPoll();
-    if (mSwssThreadPtr != nullptr) {
-        mSwssThreadPtr->interrupt();
-    }
 }
-
 
 /**
 
@@ -58,6 +64,7 @@ void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::Subscr
     int ret = swssSelect.select(&selectable, DEFAULT_TIMEOUT_MSEC);
     if (ret == swss::Select::ERROR) {
         syslog(LOG_WARNING, "Select: returned ERROR");
+        return;
     } else if (ret == swss::Select::TIMEOUT) {
     } 
     if (selectable == static_cast<swss::Selectable *> (ipHelpersTable)) {
@@ -67,21 +74,6 @@ void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::Subscr
             syslog(LOG_WARNING, "relay config changed, "
                    "need restart container to take effect");
         }
-    }
-}
-/**
- * @code                void handleSwssNotification(std::vector<relay_config> *vlans)
- * 
- * @brief               main thread for handling SWSS notification
- *
- * @param context       map of vlans/argument config that contains strings of server and option
- *
- * @return              none
- */
-void handleSwssNotification(swssNotification test)
-{
-    while (pollSwssNotifcation) {
-        get_dhcp(test.vlans, test.ipHelpersTable, true);
     }
 }
 
@@ -152,14 +144,3 @@ void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries,
         vlans[vlan] = intf;
     }
 }
-
-/**
-*@code      stopSwssNotificationPoll
-*
-*@brief     stop SWSS listening thread
-*
-*@return    none
-*/
-void stopSwssNotificationPoll() {
-    pollSwssNotifcation = false;
-};

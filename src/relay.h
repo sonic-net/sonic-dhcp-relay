@@ -285,7 +285,7 @@ void signal_callback(evutil_socket_t fd, short event, void *arg);
  *
  * @brief free signals and terminate threads
  */
-void shutdown();
+void shutdown_relay();
 
 /**
  * @code                void initialize_counter(std::shared_ptr<swss::Table> state_db, std::string counterVlan);

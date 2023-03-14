@@ -1,6 +1,11 @@
+.ONESHELL:
+SHELL = /bin/bash
+
 RM := rm -rf
 BUILD_DIR := build
 BUILD_TEST_DIR := build-test
+GMOCK_GLOBAL_DIR := gmock-global
+GMOCK_GLOBAL_INC_PATH := /usr/include/gmock-global
 DHCP6RELAY_TARGET := $(BUILD_DIR)/dhcp6relay
 DHCP6RELAY_TEST_TARGET := $(BUILD_TEST_DIR)/dhcp6relay-test
 CP := cp
@@ -11,9 +16,17 @@ GCOVR := gcovr
 override LDLIBS += -levent -lhiredis -lswsscommon -pthread -lboost_thread -lboost_system
 override CPPFLAGS += -Wall -std=c++17 -fPIE -I/usr/include/swss
 override CPPFLAGS += -MMD -MP -MF"$(@:%.o=%.d)" -MT"$(@)"
-CPPFLAGS_TEST := --coverage -fprofile-arcs -ftest-coverage -fprofile-generate -fsanitize=address
-LDLIBS_TEST := --coverage -lgtest -pthread -lstdc++fs -fsanitize=address
+CPPFLAGS_TEST := -I$(GMOCK_GLOBAL_INC_PATH) --coverage -fprofile-arcs -ftest-coverage -fprofile-generate -fsanitize=address
+LDLIBS_TEST := --coverage -lgtest -lgmock -pthread -lstdc++fs -fsanitize=address
 PWD := $(shell pwd)
+
+$(addprefix $(DEST)/, $(BUILD_TEST_DIR)): $(DEST)/% :
+	if [ ! -d ${GMOCK_GLOBAL_DIR} ]
+	then
+		git clone https://github.com/apriorit/gmock-global.git $(GMOCK_GLOBAL_DIR)
+	fi
+	sudo cp -r $(GMOCK_GLOBAL_DIR)/include/gmock-global /usr/include/
+
 
 all: $(DHCP6RELAY_TARGET) $(DHCP6RELAY_TEST_TARGET)
 
