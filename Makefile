@@ -1,3 +1,6 @@
+.ONESHELL:
+SHELL = /bin/bash
+
 RM := rm -rf
 BUILD_DIR := build
 BUILD_TEST_DIR := build-test
