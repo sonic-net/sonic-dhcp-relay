@@ -8,8 +8,9 @@ MKDIR := mkdir
 MV := mv
 FIND := find
 GCOVR := gcovr
+#GMOCK_GLOBAL_URL = https://github.com/apriorit/gmock-global.git
 override LDLIBS += -levent -lhiredis -lswsscommon -pthread -lboost_thread -lboost_system
-override CPPFLAGS += -Wall -std=c++17 -fPIE -I/usr/include/swss
+override CPPFLAGS += -Wall -std=c++17 -fPIE -I/usr/include/swss -I /usr/include/gmock-global
 override CPPFLAGS += -MMD -MP -MF"$(@:%.o=%.d)" -MT"$(@)"
 CPPFLAGS_TEST := --coverage -fprofile-arcs -ftest-coverage -fprofile-generate -fsanitize=address
 LDLIBS_TEST := --coverage -lgtest -lgmock -pthread -lstdc++fs -fsanitize=address
@@ -19,6 +20,8 @@ all: $(DHCP6RELAY_TARGET) $(DHCP6RELAY_TEST_TARGET)
 
 -include src/subdir.mk
 -include test/subdir.mk
+
+#git clone $GMOCK_GLOBAL_URL; mv gmock-global/include/gmock-global /usr/include;
 
 # Use different build directories based on whether it's a regular build or a
 # test build. This is because in the test build, code coverage is enabled,

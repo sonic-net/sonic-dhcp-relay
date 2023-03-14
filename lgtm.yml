@@ -24,7 +24,7 @@ extraction:
     - "git clone https://github.com/Azure/sonic-swss-common; pushd sonic-swss-common; ./autogen.sh; fakeroot dpkg-buildpackage -us -uc -b; popd"
     - "dpkg-deb -x libswsscommon_1.0.0_amd64.deb $LGTM_WORKSPACE"
     - "dpkg-deb -x libswsscommon-dev_1.0.0_amd64.deb $LGTM_WORKSPACE"
-    - "git clone git@github.com:iovisor/bcc.git; mkdir bcc/build; cd bcc/build; cmake -DCMAKE_INSTALL_PREFIX=${LGTM_WORKSPACE}/usr/include/bcc ..; make; make install"
+    - "git clone https://github.com/apriorit/gmock-global.git; pushd gmock-global; cp -r ./include/gmock-global ${LGTM_WORKSPACE}/usr/include; popd"
     index:
       build_command:
         - "make all LDFLAGS=\"-L${LGTM_WORKSPACE}/usr/lib/x86_64-linux-gnu\" CPPFLAGS=\"-I${LGTM_WORKSPACE}/usr/include -I${LGTM_WORKSPACE}/usr/include/swss\""

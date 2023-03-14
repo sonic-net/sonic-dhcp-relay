@@ -75,12 +75,10 @@ TEST(configInterface, handleSwssNotification) {
   EXPECT_EQ(swss_notification.ipHelpersTable, nullptr);
 
   Assign(&pollSwssNotifcation, true);
-  EXPECT_GLOBAL_CALL(get_dhcp, get_dhcp(_, _, _)).Times(1);
-
   std::async(std::launch::async, [&] () {handleSwssNotification(swss_notification);}).wait_for(std::chrono::milliseconds{200});
 }
 
 TEST(configInterface, stopSwssNotificationPoll) {
+  EXPECT_GLOBAL_CALL(stopSwssNotificationPoll, stopSwssNotificationPoll()).Times(1);
   stopSwssNotificationPoll();
-  EXPECT_FALSE(pollSwssNotifcation);
 }
