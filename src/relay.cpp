@@ -9,7 +9,7 @@
 #include "configdb.h"
 #include "sonicv2connector.h"
 #include "dbconnector.h" 
-#include "configInterface.h"
+#include "config_interface.h"
 
 struct event *listen_event;
 struct event *server_listen_event;

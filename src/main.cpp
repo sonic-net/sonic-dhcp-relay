@@ -1,7 +1,7 @@
 #include <stdlib.h>
 #include <syslog.h>
 #include <unordered_map>
-#include "configInterface.h"
+#include "config_interface.h"
 
 bool dual_tor_sock = false;
 

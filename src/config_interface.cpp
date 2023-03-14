@@ -1,13 +1,37 @@
 #include <sstream>
 #include <syslog.h>
 #include <algorithm>
-#include "configInterface.h"
+#include "config_interface.h"
 
 constexpr auto DEFAULT_TIMEOUT_MSEC = 1000;
 
 bool pollSwssNotifcation = true;
-std::shared_ptr<boost::thread> mSwssThreadPtr;
 swss::Select swssSelect;
+
+/**
+
+ * @code                void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic)
+ * 
+ * @brief               initialize and get vlan table information from DHCP_RELAY
+ *
+ * @return              none
+ */
+static void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic) {
+    swss::Selectable *selectable;
+    int ret = swssSelect.select(&selectable, DEFAULT_TIMEOUT_MSEC);
+    if (ret == swss::Select::ERROR) {
+        syslog(LOG_WARNING, "Select: returned ERROR");
+    } else if (ret == swss::Select::TIMEOUT) {
+    } 
+    if (selectable == static_cast<swss::Selectable *> (ipHelpersTable)) {
+        if (!dynamic) {
+            handleRelayNotification(*ipHelpersTable, vlans);
+        } else {
+            syslog(LOG_WARNING, "relay config changed, "
+                   "need restart container to take effect");
+        }
+    }
+}
 
 /**
  * @code                void initialize_swss()
@@ -39,36 +63,8 @@ void initialize_swss(std::unordered_map<std::string, relay_config> &vlans)
 void deinitialize_swss()
 {
     stopSwssNotificationPoll();
-    if (mSwssThreadPtr != nullptr) {
-        mSwssThreadPtr->interrupt();
-    }
 }
 
-
-/**
-
- * @code                void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic)
- * 
- * @brief               initialize and get vlan table information from DHCP_RELAY
- *
- * @return              none
- */
-void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic) {
-    swss::Selectable *selectable;
-    int ret = swssSelect.select(&selectable, DEFAULT_TIMEOUT_MSEC);
-    if (ret == swss::Select::ERROR) {
-        syslog(LOG_WARNING, "Select: returned ERROR");
-    } else if (ret == swss::Select::TIMEOUT) {
-    } 
-    if (selectable == static_cast<swss::Selectable *> (ipHelpersTable)) {
-        if (!dynamic) {
-            handleRelayNotification(*ipHelpersTable, vlans);
-        } else {
-            syslog(LOG_WARNING, "relay config changed, "
-                   "need restart container to take effect");
-        }
-    }
-}
 /**
  * @code                void handleSwssNotification(std::vector<relay_config> *vlans)
  * 
