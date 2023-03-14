@@ -1,6 +1,8 @@
 RM := rm -rf
 BUILD_DIR := build
 BUILD_TEST_DIR := build-test
+GMOCK_GLOBAL_DIR := gmock-global
+GMOCK_GLOBAL_INC_PATH := /usr/include/gmock-global
 DHCP6RELAY_TARGET := $(BUILD_DIR)/dhcp6relay
 DHCP6RELAY_TEST_TARGET := $(BUILD_TEST_DIR)/dhcp6relay-test
 CP := cp
@@ -8,20 +10,26 @@ MKDIR := mkdir
 MV := mv
 FIND := find
 GCOVR := gcovr
-#GMOCK_GLOBAL_URL = https://github.com/apriorit/gmock-global.git
 override LDLIBS += -levent -lhiredis -lswsscommon -pthread -lboost_thread -lboost_system
-override CPPFLAGS += -Wall -std=c++17 -fPIE -I/usr/include/swss -I /usr/include/gmock-global
+override CPPFLAGS += -Wall -std=c++17 -fPIE -I/usr/include/swss -I$(GMOCK_GLOBAL_INC_PATH)
 override CPPFLAGS += -MMD -MP -MF"$(@:%.o=%.d)" -MT"$(@)"
 CPPFLAGS_TEST := --coverage -fprofile-arcs -ftest-coverage -fprofile-generate -fsanitize=address
 LDLIBS_TEST := --coverage -lgtest -lgmock -pthread -lstdc++fs -fsanitize=address
 PWD := $(shell pwd)
 
+.DEFAULT:
+	sudo rm -rf $(GMOCK_GLOBAL_DIR)
+	sudo rm -rf $(GMOCK_GLOBAL_INC_PATH)
+	git clone https://github.com/apriorit/gmock-global.git
+	pushd $(GMOCK_GLOBAL_DIR)
+	sudo cp -r ./include/gmock-global /usr/include/
+	popd
+
 all: $(DHCP6RELAY_TARGET) $(DHCP6RELAY_TEST_TARGET)
+
 
 -include src/subdir.mk
 -include test/subdir.mk
-
-#git clone $GMOCK_GLOBAL_URL; mv gmock-global/include/gmock-global /usr/include;
 
 # Use different build directories based on whether it's a regular build or a
 # test build. This is because in the test build, code coverage is enabled,
@@ -60,7 +68,7 @@ uninstall:
 	$(RM) $(DESTDIR)/usr/sbin/$(notdir $(DHCP6RELAY_TARGET))
 
 clean:
-	-$(RM) $(BUILD_DIR) $(BUILD_TEST_DIR) *.html *.xml
+	-$(RM) $(BUILD_DIR) $(BUILD_TEST_DIR) $(GMOCK_GLOBAL_DIR) *.html *.xml
 	$(FIND) . -name *.gcda -exec rm -f {} \;
 	$(FIND) . -name *.gcno -exec rm -f {} \;
 	$(FIND) . -name *.gcov -exec rm -f {} \;
