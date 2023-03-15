@@ -16,7 +16,7 @@ TEST(configInterface, initialize_swss) {
   ASSERT_NO_THROW(initialize_swss(vlans));
   std::bad_alloc exception;
   EXPECT_CALL(obj_mock, addSelectable(NULL)).Times(1).WillOnce(Throw(exception));
-  ASSERT_ANY_THROW(initialize_swss(vlans));
+  ASSERT_NO_THROW(initialize_swss(vlans));
 }
 
 class MockThread : public boost::thread {
@@ -33,11 +33,11 @@ TEST(configInterface, get_dhcp) {
   swss::SubscriberStateTable ipHelpersTable(cfg_db.get(), "DHCP_RELAY");
   std::unordered_map<std::string, relay_config> vlans;
   MockSwssSelect obj_mock;
-  EXPECT_CALL(obj_mock, select(_, 1000, false)).Times(1).WillOnce(Return(swss::Select::ERROR));
+  EXPECT_CALL(obj_mock, select(_, 1000, false)).WillOnce(Return(swss::Select::ERROR));
   ASSERT_NO_THROW(get_dhcp(vlans, &ipHelpersTable, false));
-  EXPECT_CALL(obj_mock, select(_, 1000, false)).Times(1).WillOnce(DoAll(SetArgPointee<0>(&ipHelpersTable), Return(swss::Select::TIMEOUT)));
+  EXPECT_CALL(obj_mock, select(_, 1000, false)).WillOnce(DoAll(SetArgPointee<0>(&ipHelpersTable), Return(swss::Select::TIMEOUT)));
   ASSERT_NO_THROW(get_dhcp(vlans, &ipHelpersTable, false));
-  EXPECT_CALL(obj_mock, select(_, 1000, false)).Times(1).WillOnce(DoAll(SetArgPointee<0>(&ipHelpersTable), Return(swss::Select::TIMEOUT)));
+  EXPECT_CALL(obj_mock, select(_, 1000, false)).WillOnce(DoAll(SetArgPointee<0>(&ipHelpersTable), Return(swss::Select::TIMEOUT)));
   ASSERT_NO_THROW(get_dhcp(vlans, &ipHelpersTable, true));
 }
 

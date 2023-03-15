@@ -11,6 +11,8 @@
 
 #include "mock_relay.h"
 
+using namespace ::testing;
+
 bool dual_tor_sock = false;
 extern struct event_base *base;
 extern struct event *ev_sigint;
@@ -873,4 +875,32 @@ TEST(dhcpv6_msg, UnmarshalBinary) {
   EXPECT_FALSE(result);
   EXPECT_EQ(dhcpv6.m_msg_hdr.msg_type, 1);
 }
+
+namespace TestRelayLoop {
+  MOCK_GLOBAL_FUNC0(signal_init, int(void));
+  MOCK_GLOBAL_FUNC0(signal_start, int(void));
+  MOCK_GLOBAL_FUNC0(event_base_new, event_base*(void));
+  MOCK_GLOBAL_FUNC1(sock_open, int(struct sock_fprog *));
+
+  TEST(relay, loop_relay) {
+    std::unordered_map<std::string, relay_config> vlans;
+    std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+    
+    struct relay_config config{
+      .state_db = state_db,
+      .interface = "Vlan1000",
+      .is_option_79 = true
+    };
+    vlans["Vlan1000"] = config;
+    EXPECT_GLOBAL_CALL(event_base_new, event_base_new()).Times(1).WillOnce(Return(nullptr));
+    EXPECT_EXIT(loop_relay(vlans), ::testing::ExitedWithCode(EXIT_FAILURE), "success");
+
+    EXPECT_GLOBAL_CALL(sock_open, sock_open(_)).Times(1).WillOnce(Return(-1));
+    EXPECT_EXIT(loop_relay(vlans), ::testing::ExitedWithCode(EXIT_FAILURE), "success");
+
+    EXPECT_GLOBAL_CALL(signal_init, signal_init()).Times(1).WillOnce(Return(0));
+    ASSERT_NO_THROW(loop_relay(vlans));
+  }
+}
+
 
