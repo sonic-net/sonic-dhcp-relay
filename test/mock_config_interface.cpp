@@ -4,24 +4,23 @@ using namespace ::testing;
 
 class MockSwssSelect : public swss::Select {
 public:
-  MOCK_METHOD1(void, addSelectable, (swss::Selectable *));
-  MOCK_METHOD3(int, select, (swss::Selectable **c, int timeout,
-               bool interrupt_on_signal));
+  MOCK_METHOD1(addSelectable, void(swss::Selectable *));
+  MOCK_METHOD3(select, int(swss::Selectable **, int, bool));
 };
 
 TEST(configInterface, initialize_swss) {
   std::unordered_map<std::string, relay_config> vlans;
   MockSwssSelect obj_mock;
-  EXPECT_CALL(obj_mock, addSelectable(NULL)).Times(1);
+  EXPECT_CALL(obj_mock, addSelectable(NULL));
   ASSERT_NO_THROW(initialize_swss(vlans));
   std::bad_alloc exception;
-  EXPECT_CALL(obj_mock, addSelectable(NULL)).Times(1).WillOnce(Throw(exception));
+  EXPECT_CALL(obj_mock, addSelectable(NULL)).WillOnce(Throw(exception));
   ASSERT_NO_THROW(initialize_swss(vlans));
 }
 
 class MockThread : public boost::thread {
 public:
-  MOCK_METHOD(void, interrupt, ());
+  MOCK_METHOD0(interrupt, void(void));
 };
 
 TEST(configInterface, deinitialize_swss) {

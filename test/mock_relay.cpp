@@ -569,7 +569,7 @@ namespace Test_signal_callback {
 
   TEST(relay, signal_callback) {
     ASSERT_NO_THROW(signal_callback(1, 1, &base));
-    EXPECT_GLOBAL_CALL(dhcp6relay_stop, dhcp6relay_stop(void));
+    EXPECT_GLOBAL_CALL(dhcp6relay_stop, dhcp6relay_stop());
     signal_callback(SIGTERM, 1, &base);
   }
 }

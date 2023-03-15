@@ -14,22 +14,17 @@ MV := mv
 FIND := find
 GCOVR := gcovr
 override LDLIBS += -levent -lhiredis -lswsscommon -pthread -lboost_thread -lboost_system
-override CPPFLAGS += -Wall -std=c++17 -fPIE -I/usr/include/swss -I$(GMOCK_GLOBAL_INC_PATH)
+override CPPFLAGS += -Wall -std=c++17 -fPIE -I/usr/include/swss
 override CPPFLAGS += -MMD -MP -MF"$(@:%.o=%.d)" -MT"$(@)"
-CPPFLAGS_TEST := --coverage -fprofile-arcs -ftest-coverage -fprofile-generate -fsanitize=address
+CPPFLAGS_TEST := -I$(GMOCK_GLOBAL_INC_PATH) --coverage -fprofile-arcs -ftest-coverage -fprofile-generate -fsanitize=address
 LDLIBS_TEST := --coverage -lgtest -lgmock -pthread -lstdc++fs -fsanitize=address
 PWD := $(shell pwd)
 
 .DEFAULT:
-	sudo rm -rf $(GMOCK_GLOBAL_DIR)
-	sudo rm -rf $(GMOCK_GLOBAL_INC_PATH)
-	git clone https://github.com/apriorit/gmock-global.git
-	pushd $(GMOCK_GLOBAL_DIR)
-	sudo cp -r ./include/gmock-global /usr/include/
-	popd
+	git clone https://github.com/apriorit/gmock-global.git $(GMOCK_GLOBAL_DIR)
+	sudo cp -r $(GMOCK_GLOBAL_DIR)/include/gmock-global /usr/include/
 
 all: $(DHCP6RELAY_TARGET) $(DHCP6RELAY_TEST_TARGET)
-
 
 -include src/subdir.mk
 -include test/subdir.mk
