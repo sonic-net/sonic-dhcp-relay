@@ -955,7 +955,7 @@ void server_callback(evutil_socket_t fd, short event, void *arg) {
  */
 int signal_init() {
     int rv = -1;
-     do {
+    do {
         ev_sigint = evsignal_new(base, SIGINT, signal_callback, base);
         if (ev_sigint == NULL) {
             syslog(LOG_ERR, "Could not create SIGINT libevent signal\n");

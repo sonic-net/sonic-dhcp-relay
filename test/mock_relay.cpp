@@ -880,6 +880,7 @@ namespace TestRelayLoop {
   MOCK_GLOBAL_FUNC0(signal_init, int(void));
   MOCK_GLOBAL_FUNC0(signal_start, int(void));
   MOCK_GLOBAL_FUNC0(event_base_new, event_base*(void));
+  MOCK_GLOBAL_FUNC0(shutdown, void(void));
   MOCK_GLOBAL_FUNC1(sock_open, int(struct sock_fprog *));
 
   TEST(relay, loop_relay) {
@@ -900,8 +901,11 @@ namespace TestRelayLoop {
 
     EXPECT_GLOBAL_CALL(signal_init, signal_init()).Times(1).WillOnce(Return(0));
     EXPECT_GLOBAL_CALL(signal_start, signal_start()).Times(1).WillOnce(Return(0));
+    EXPECT_GLOBAL_CALL(shutdown, shutdown()).Times(1);
     ASSERT_NO_THROW(loop_relay(vlans));
   }
 }
+
+
 
 
