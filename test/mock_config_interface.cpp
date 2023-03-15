@@ -70,10 +70,10 @@ TEST(configInterface, processRelayNotification) {
 TEST(configInterface, handleSwssNotification) {
   Assign(&pollSwssNotifcation, false);
   swssNotification swss_notification;
-  swss_notification.ipHelpersTable = NULL;
+  swss_notification.ipHelpersTable = nullptr;
   handleSwssNotification(swss_notification);
   EXPECT_EQ(swss_notification.vlans.size(), 0);
-  EXPECT_EQ(swss_notification.ipHelpersTable, NULL);
+  EXPECT_EQ(swss_notification.ipHelpersTable, nullptr);
 
   Assign(&pollSwssNotifcation, true);
   std::async(std::launch::async, [&] () {handleSwssNotification(swss_notification);}).wait_for(std::chrono::milliseconds{200});
