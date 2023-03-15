@@ -556,9 +556,9 @@ namespace Test_signal_start {
   TEST(relay, signal_start) {
     EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).WillOnce(Return(-1));
     EXPECT_EQ(signal_start(), -1);
-    EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).WillOnce(Return(0)).WillOnce(Return(-1));
+    EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(2).WillOnce(Return(0)).WillOnce(Return(-1));
     EXPECT_EQ(signal_start(), -1);
-    EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).WillOnce(Return(0)).WillOnce(Return(0));
+    EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(2).WillRepeatedly(Return(0));
     EXPECT_GLOBAL_CALL(event_base_dispatch, event_base_dispatch(_)).WillOnce(Return(-1));
     EXPECT_EQ(signal_start(), 0);
   }
@@ -569,8 +569,8 @@ namespace Test_signal_callback {
 
   TEST(relay, signal_callback) {
     ASSERT_NO_THROW(signal_callback(1, 1, &base));
-    EXPECT_GLOBAL_CALL(dhcp6relay_stop, dhcp6relay_stop());
-    ASSERT_NO_THROW(signal_callback(SIGTERM, 1, &base));
+    EXPECT_GLOBAL_CALL(dhcp6relay_stop, dhcp6relay_stop(void));
+    signal_callback(SIGTERM, 1, &base);
   }
 }
 
@@ -666,7 +666,7 @@ namespace Test_server_callback {
     // cover buffer_sz <= 0
     server_callback(0, 0, &config);
     // cover 0 < buffer_sz < sizeof(struct dhcpv6_msg)
-    EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).WillOnce(Return(2));
+    EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(1).WillOnce(Return(2));
     server_callback(0, 0, &config);
 
     uint8_t msg[] = {
@@ -921,7 +921,6 @@ TEST(dhcpv6_msg, UnmarshalBinary) {
 }
 
 namespace TestRelayLoop {
-  MOCK_GLOBAL_FUNC0(signal_init, int(void));
   MOCK_GLOBAL_FUNC0(signal_start, int(void));
   MOCK_GLOBAL_FUNC0(event_base_new, event_base*());
   MOCK_GLOBAL_FUNC0(shutdown, void(void));
@@ -945,11 +944,10 @@ namespace TestRelayLoop {
     EXPECT_GLOBAL_CALL(sock_open, sock_open(_)).Times(1).WillOnce(Return(-1));
     EXPECT_EXIT(loop_relay(vlans), ::testing::ExitedWithCode(EXIT_FAILURE), "success");
 
-    EXPECT_GLOBAL_CALL(signal_init, signal_init()).WillRepeatedly(Return(0));
     EXPECT_GLOBAL_CALL(signal_start, signal_start()).WillRepeatedly(Return(0));
     EXPECT_GLOBAL_CALL(shutdown, shutdown());
 
-    ASSERT_NO_THROW(loop_relay(vlans));
+    loop_relay(vlans);
   }
 }
 

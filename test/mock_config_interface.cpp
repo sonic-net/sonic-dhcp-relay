@@ -4,9 +4,9 @@ using namespace ::testing;
 
 class MockSwssSelect : public swss::Select {
 public:
-  MOCK_METHOD(void, addSelectable, (swss::Selectable *));
-  MOCK_METHOD(int, select, (swss::Selectable **c, int timeout,
-              bool interrupt_on_signal));
+  MOCK_METHOD1(void, addSelectable, (swss::Selectable *));
+  MOCK_METHOD3(int, select, (swss::Selectable **c, int timeout,
+               bool interrupt_on_signal));
 };
 
 TEST(configInterface, initialize_swss) {
