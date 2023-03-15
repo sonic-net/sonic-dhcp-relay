@@ -21,7 +21,10 @@ LDLIBS_TEST := --coverage -lgtest -lgmock -pthread -lstdc++fs -fsanitize=address
 PWD := $(shell pwd)
 
 .DEFAULT:
-	git clone https://github.com/apriorit/gmock-global.git $(GMOCK_GLOBAL_DIR)
+	if [ ! -d ${GMOCK_GLOBAL_DIR} ]
+	then
+		git clone https://github.com/apriorit/gmock-global.git $(GMOCK_GLOBAL_DIR)
+	fi
 	sudo cp -r $(GMOCK_GLOBAL_DIR)/include/gmock-global /usr/include/
 
 all: $(DHCP6RELAY_TARGET) $(DHCP6RELAY_TEST_TARGET)
