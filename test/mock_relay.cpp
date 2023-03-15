@@ -901,7 +901,7 @@ namespace TestRelayLoop {
 
     EXPECT_GLOBAL_CALL(signal_init, signal_init()).Times(1).WillOnce(Return(0));
     EXPECT_GLOBAL_CALL(signal_start, signal_start()).Times(1).WillOnce(Return(0));
-    EXPECT_GLOBAL_CALL(shutdown, shutdown()).Times(1);
+    EXPECT_GLOBAL_CALL(shutdown, shutdown()).Times(1).WillOnce(Return());
     ASSERT_NO_THROW(loop_relay(vlans));
   }
 }

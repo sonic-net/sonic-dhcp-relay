@@ -79,6 +79,8 @@ TEST(configInterface, handleSwssNotification) {
   std::async(std::launch::async, [&] () {handleSwssNotification(swss_notification);}).wait_for(std::chrono::milliseconds{200});
 }
 
+MOCK_GLOBAL_FUNC0(stopSwssNotificationPoll, void(void));
+
 TEST(configInterface, stopSwssNotificationPoll) {
   EXPECT_GLOBAL_CALL(stopSwssNotificationPoll, stopSwssNotificationPoll()).Times(1);
   stopSwssNotificationPoll();

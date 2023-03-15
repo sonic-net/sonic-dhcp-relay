@@ -11,6 +11,3 @@
 extern std::shared_ptr<boost::thread> mSwssThreadPtr;
 extern bool pollSwssNotifcation;
 extern swss::Select swssSelect;
-
-MOCK_GLOBAL_FUNC0(stopSwssNotificationPoll, void(void));
-

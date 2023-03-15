@@ -1103,9 +1103,9 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
         syslog(LOG_INFO, "libevent: Add server listen socket for %s\n", vlan.first.c_str());
     }
 
-    if((signal_init() == 0) && signal_start() == 0) {
+    if(signal_init() == 0 && signal_start() == 0) {
         shutdown();
-        for(std::size_t i = 0; i<sockets.size(); i++) {
+        for(std::size_t i = 0; i < sockets.size(); i++) {
             close(sockets.at(i));
         }
     }
@@ -1119,7 +1119,7 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
 void shutdown() {
     event_del(ev_sigint);
     event_del(ev_sigterm);
-    event_free(ev_sigint); 
+    event_free(ev_sigint);
     event_free(ev_sigterm);
     event_base_free(base);
     deinitialize_swss();
