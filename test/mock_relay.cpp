@@ -879,7 +879,7 @@ TEST(dhcpv6_msg, UnmarshalBinary) {
 namespace TestRelayLoop {
   MOCK_GLOBAL_FUNC0(signal_init, int(void));
   MOCK_GLOBAL_FUNC0(signal_start, int(void));
-  MOCK_GLOBAL_FUNC0(event_base_new, event_base*(void));
+  MOCK_GLOBAL_FUNC0(event_base_new, event_base*());
   MOCK_GLOBAL_FUNC0(shutdown, void(void));
   MOCK_GLOBAL_FUNC1(sock_open, int(struct sock_fprog *));
 
@@ -894,7 +894,7 @@ namespace TestRelayLoop {
     };
     vlans["Vlan1000"] = config;
 
-    EXPECT_GLOBAL_CALL(event_base_new, event_base_new()).Times(1).WillOnce(Return(NULL));
+    EXPECT_GLOBAL_CALL(event_base_new, event_base_new()).Times(1).WillOnce(Return(nullptr));
     EXPECT_EXIT(loop_relay(vlans), ::testing::ExitedWithCode(EXIT_FAILURE), "success");
 
     EXPECT_GLOBAL_CALL(sock_open, sock_open(_)).Times(1).WillOnce(Return(-1));
