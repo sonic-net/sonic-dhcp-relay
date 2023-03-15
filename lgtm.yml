@@ -17,9 +17,6 @@ extraction:
       - "libzmq3-dev"
       - "libyang"
       - "libyang-dev"
-      - "llvm-dev"
-      - "libelf-dev"
-      - "libclang-dev"
     after_prepare:
     - "git clone https://github.com/Azure/sonic-swss-common; pushd sonic-swss-common; ./autogen.sh; fakeroot dpkg-buildpackage -us -uc -b; popd"
     - "dpkg-deb -x libswsscommon_1.0.0_amd64.deb $LGTM_WORKSPACE"

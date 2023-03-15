@@ -899,6 +899,7 @@ namespace TestRelayLoop {
     EXPECT_EXIT(loop_relay(vlans), ::testing::ExitedWithCode(EXIT_FAILURE), "success");
 
     EXPECT_GLOBAL_CALL(signal_init, signal_init()).Times(1).WillOnce(Return(0));
+    EXPECT_GLOBAL_CALL(signal_start, signal_start()).Times(1).WillOnce(Return(0));
     ASSERT_NO_THROW(loop_relay(vlans));
   }
 }
