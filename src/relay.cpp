@@ -1041,7 +1041,7 @@ void dhcp6relay_stop()
 void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
     std::vector<int> sockets;
     base = event_base_new();
-    if(base == NULL) {
+    if(base == nullptr) {
         syslog(LOG_ERR, "libevent: Failed to create base\n");
         exit(EXIT_FAILURE);
     }

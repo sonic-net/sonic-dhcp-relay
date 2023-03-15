@@ -83,5 +83,5 @@ MOCK_GLOBAL_FUNC0(stopSwssNotificationPoll, void(void));
 
 TEST(configInterface, stopSwssNotificationPoll) {
   EXPECT_GLOBAL_CALL(stopSwssNotificationPoll, stopSwssNotificationPoll()).Times(1);
-  stopSwssNotificationPoll();
+  ASSERT_NO_THROW(stopSwssNotificationPoll());
 }
