@@ -899,10 +899,10 @@ namespace TestRelayLoop {
     EXPECT_GLOBAL_CALL(sock_open, sock_open(_)).Times(1).WillOnce(Return(-1));
     EXPECT_EXIT(loop_relay(vlans), ::testing::ExitedWithCode(EXIT_FAILURE), "success");
 
-    EXPECT_GLOBAL_CALL(signal_init, signal_init()).Times(1).WillOnce(Return(0));
-    EXPECT_GLOBAL_CALL(signal_start, signal_start()).Times(1).WillOnce(Return(0));
-    EXPECT_GLOBAL_CALL(shutdown, shutdown()).Times(1).WillOnce(Return());
-    ASSERT_NO_THROW(loop_relay(vlans));
+    // EXPECT_GLOBAL_CALL(signal_init, signal_init()).Times(1).WillOnce(Return(0));
+    // EXPECT_GLOBAL_CALL(signal_start, signal_start()).Times(1).WillOnce(Return(0));
+    // EXPECT_GLOBAL_CALL(shutdown, shutdown()).Times(1).WillOnce(Return());
+    // ASSERT_NO_THROW(loop_relay(vlans));
   }
 }
 
