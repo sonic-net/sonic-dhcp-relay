@@ -894,15 +894,15 @@ namespace TestRelayLoop {
     };
     vlans["Vlan1000"] = config;
 
-    EXPECT_GLOBAL_CALL(signal_init, signal_init()).WillRepeatedly(Return(0));
-    EXPECT_GLOBAL_CALL(signal_start, signal_start()).WillRepeatedly(Return(0));
-    EXPECT_GLOBAL_CALL(shutdown, shutdown()).WillRepeatedly(Return());
-
-    EXPECT_GLOBAL_CALL(event_base_new, event_base_new()).Times(1).WillOnce(Return(nullptr));
+    EXPECT_GLOBAL_CALL(event_base_new, event_base_new()).Times(1).WillOnce(Return(NULL));
     EXPECT_EXIT(loop_relay(vlans), ::testing::ExitedWithCode(EXIT_FAILURE), "success");
 
     EXPECT_GLOBAL_CALL(sock_open, sock_open(_)).Times(1).WillOnce(Return(-1));
     EXPECT_EXIT(loop_relay(vlans), ::testing::ExitedWithCode(EXIT_FAILURE), "success");
+
+    EXPECT_GLOBAL_CALL(signal_init, signal_init()).WillRepeatedly(Return(0));
+    EXPECT_GLOBAL_CALL(signal_start, signal_start()).WillRepeatedly(Return(0));
+    EXPECT_GLOBAL_CALL(shutdown, shutdown()).WillRepeatedly(Return());
 
     ASSERT_NO_THROW(loop_relay(vlans));
   }
