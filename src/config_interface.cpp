@@ -78,22 +78,6 @@ void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::Subscr
 }
 
 /**
- * @code                void handleSwssNotification(std::vector<relay_config> *vlans)
- * 
- * @brief               main thread for handling SWSS notification
- *
- * @param context       map of vlans/argument config that contains strings of server and option
- *
- * @return              none
- */
-void handleSwssNotification(swssNotification test)
-{
-    while (pollSwssNotifcation) {
-        get_dhcp(test.vlans, test.ipHelpersTable, true);
-    }
-}
-
-/**
  * @code                    void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::unordered_map<std::string, relay_config> &vlans)
  * 
  * @brief                   handles DHCPv6 relay configuration change notification
