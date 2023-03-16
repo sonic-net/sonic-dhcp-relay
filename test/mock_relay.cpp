@@ -656,7 +656,7 @@ TEST(relay, server_callback) {
   server_callback(0, 0, &config);
   // cover 0 < buffer_sz < sizeof(struct dhcpv6_msg)
   server_callback(0, 0, &config);
-
+  // same name to override static global variable 
   uint8_t server_recv_buffer[] = {
     0x0d, 0x00, 0x20, 0x01, 0x0d, 0xb8, 0x01, 0x5a,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -676,12 +676,11 @@ TEST(relay, server_callback) {
     0x3a, 0x32, 0x33, 0x50, 0xe5, 0x49, 0x50, 0x9e,
     0x40
   };
-  server_recv_buffer[0] = 0x0e;
   auto msg_len = sizeof(server_recv_buffer);
   EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(2).WillOnce(Return(msg_len)).WillOnce(Return(0));
   server_callback(0, 0, &config);
 
-  server_recv_buffer[0] = 0x0d;
+  server_recv_buffer[0] = 0x0e;
   EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(2).WillOnce(Return(msg_len)).WillOnce(Return(0));
   server_callback(0, 0, &config);
 }
@@ -917,6 +916,9 @@ TEST(relay, loop_relay) {
   };
   std::unordered_map<std::string, relay_config> vlans;
   vlans["Vlan1000"] = config;
+  config.interface = "Vlan2000";
+  vlans["Vlan2000"] = config;
+  EXPECT_EQ(vlans.size(), 2);
 
-  std::async(std::launch::async, [&] () {loop_relay(vlans);}).wait_for(std::chrono::milliseconds{100});
+  std::async(std::launch::async, [&] () {loop_relay(vlans);}).wait_for(std::chrono::milliseconds{1000});
 }
