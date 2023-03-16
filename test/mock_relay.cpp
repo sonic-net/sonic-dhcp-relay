@@ -636,7 +636,7 @@ TEST(relay, client_packet_handler) {
   }
 }
 
-MOCK_GLOBAL_FUNC6(recvfrom, ssize_t(int, char *, size_t, int, struct sockaddr *, socklen_t *));
+MOCK_GLOBAL_FUNC6(recvfrom, ssize_t(int, void *, size_t, int, struct sockaddr *, socklen_t *));
 
 TEST(relay, server_callback) {
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
@@ -657,7 +657,7 @@ TEST(relay, server_callback) {
   // cover 0 < buffer_sz < sizeof(struct dhcpv6_msg)
   server_callback(0, 0, &config);
 
-  uint8_t msg[] = {
+  uint8_t server_recv_buffer[] = {
     0x0d, 0x00, 0x20, 0x01, 0x0d, 0xb8, 0x01, 0x5a,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x01, 0xfe, 0x80, 0x00, 0x00, 0x00, 0x00,
@@ -676,13 +676,13 @@ TEST(relay, server_callback) {
     0x3a, 0x32, 0x33, 0x50, 0xe5, 0x49, 0x50, 0x9e,
     0x40
   };
-  msg[0] = 0x0e;
-  auto msg_len = sizeof(msg);
-  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).WillOnce(DoAll(SetArrayArgument<1>(msg, msg + msg_len), Return(msg_len)));
+  server_recv_buffer[0] = 0x0e;
+  auto msg_len = sizeof(server_recv_buffer);
+  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).WillOnce(Return(msg_len));
   server_callback(0, 0, &config);
 
-  msg[0] = 0x0d;
-  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).WillOnce(DoAll(SetArrayArgument<1>(msg, msg + msg_len), Return(msg_len)));
+  server_recv_buffer[0] = 0x0d;
+  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).WillOnce(Return(msg_len));
   server_callback(0, 0, &config);
 }
 
@@ -919,12 +919,16 @@ TEST(relay, loop_relay) {
   };
   std::unordered_map<std::string, relay_config> vlans;
   vlans["Vlan1000"] = config;
+
+  EXPECT_GLOBAL_CALL(event_base_dispatch, event_base_dispatch(_)).WillOnce(Return(0));
+  testing::Mock::AllowLeak(gmock_globalmock_event_base_dispatch_instance.get());
+  loop_relay(vlans);
+
   EXPECT_GLOBAL_CALL(event_base_new, event_base_new()).WillOnce(Return(nullptr));
+  testing::Mock::AllowLeak(gmock_globalmock_event_base_new_instance.get());
   EXPECT_EXIT(loop_relay(vlans), ::testing::ExitedWithCode(EXIT_FAILURE), "");
 
   EXPECT_GLOBAL_CALL(sock_open, sock_open(_)).WillOnce(Return(-1));
+  testing::Mock::AllowLeak(gmock_globalmock_sock_open_instance.get());
   EXPECT_EXIT(loop_relay(vlans), ::testing::ExitedWithCode(EXIT_FAILURE), "");
-
-  EXPECT_GLOBAL_CALL(event_base_dispatch, event_base_dispatch(_)).WillOnce(Return(0));
-  loop_relay(vlans);
 }
