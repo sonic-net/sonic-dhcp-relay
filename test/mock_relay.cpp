@@ -920,13 +920,9 @@ TEST(dhcpv6_msg, UnmarshalBinary) {
   EXPECT_EQ(dhcpv6.m_msg_hdr.msg_type, 1);
 }
 
-namespace TestRelayLoop {
-  MOCK_GLOBAL_FUNC0(signal_start, int(void));
-  MOCK_GLOBAL_FUNC0(event_base_new, event_base*());
-  MOCK_GLOBAL_FUNC0(shutdown_relay, void(void));
-  MOCK_GLOBAL_FUNC1(sock_open, int(struct sock_fprog *));
+MOCK_GLOBAL_FUNC0(event_base_new, event_base*());
 
-  TEST(relay, loop_relay1) {
+ TEST(relay, loop_relay1) {
     std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
     struct relay_config config{
       .state_db = state_db,
@@ -938,6 +934,13 @@ namespace TestRelayLoop {
     EXPECT_GLOBAL_CALL(event_base_new, event_base_new()).WillOnce(Return(nullptr));
     EXPECT_EXIT(loop_relay(vlans), ::testing::ExitedWithCode(EXIT_FAILURE), "success");
   }
+
+namespace TestRelayLoop {
+  MOCK_GLOBAL_FUNC0(signal_start, int(void));
+  MOCK_GLOBAL_FUNC0(shutdown_relay, void(void));
+  MOCK_GLOBAL_FUNC1(sock_open, int(struct sock_fprog *));
+
+ 
   TEST(relay, loop_relay2) {
     std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
     struct relay_config config{
