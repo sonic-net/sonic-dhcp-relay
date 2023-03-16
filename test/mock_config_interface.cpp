@@ -1,5 +1,10 @@
 #include "mock_config_interface.h"
 
+extern bool pollSwssNotifcation;
+extern swss::Select swssSelect;
+
+namespace Test_config_interface {
+
 using namespace ::testing;
 
 class MockSwssSelect : public swss::Select {
@@ -67,14 +72,14 @@ TEST(configInterface, processRelayNotification) {
 }
 
 TEST(configInterface, handleSwssNotification) {
-  Assign(&pollSwssNotifcation, false);
+  pollSwssNotifcation = false;
   swssNotification swss_notification;
   swss_notification.ipHelpersTable = nullptr;
   handleSwssNotification(swss_notification);
   EXPECT_EQ(swss_notification.vlans.size(), 0);
   EXPECT_EQ(swss_notification.ipHelpersTable, nullptr);
 
-  Assign(&pollSwssNotifcation, true);
+  pollSwssNotifcation = true;
   std::async(std::launch::async, [&] () {handleSwssNotification(swss_notification);}).wait_for(std::chrono::milliseconds{200});
 }
 
@@ -83,4 +88,6 @@ MOCK_GLOBAL_FUNC0(stopSwssNotificationPoll, void(void));
 TEST(configInterface, stopSwssNotificationPoll) {
   EXPECT_GLOBAL_CALL(stopSwssNotificationPoll, stopSwssNotificationPoll()).Times(1);
   ASSERT_NO_THROW(stopSwssNotificationPoll());
+}
+
 }
