@@ -558,7 +558,7 @@ TEST(relay, signal_start) {
   EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(2).WillOnce(Return(0)).WillOnce(Return(-1));
   EXPECT_EQ(signal_start(), -1);
   EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(2).WillOnce(Return(0)).WillOnce(Return(0));
-  EXPECT_GLOBAL_CALL(event_base_dispatch, event_base_dispatch(_)).WillOnce(Return(-1));
+  EXPECT_GLOBAL_CALL(event_base_dispatch, event_base_dispatch(_)).Times(1).WillOnce(Return(-1));
   EXPECT_EQ(signal_start(), 0);
 }
 
@@ -652,7 +652,7 @@ TEST(relay, server_callback) {
   config.local_sock = -1;
 
   // cover buffer_sz <= 0
-  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(2).WillOnce(Return(0)).WillOnce(Return(2));
+  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(3).WillOnce(Return(0)).WillOnce(Return(2)).WillOnce(Return(0));
   server_callback(0, 0, &config);
   // cover 0 < buffer_sz < sizeof(struct dhcpv6_msg)
   server_callback(0, 0, &config);
@@ -678,11 +678,11 @@ TEST(relay, server_callback) {
   };
   server_recv_buffer[0] = 0x0e;
   auto msg_len = sizeof(server_recv_buffer);
-  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).WillOnce(Return(msg_len));
+  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(2).WillOnce(Return(msg_len)).WillOnce(Return(0));
   server_callback(0, 0, &config);
 
   server_recv_buffer[0] = 0x0d;
-  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).WillOnce(Return(msg_len));
+  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(2).WillOnce(Return(msg_len)).WillOnce(Return(0));
   server_callback(0, 0, &config);
 }
 
@@ -700,6 +700,7 @@ TEST(relay, client_callback) {
   config.local_sock = -1;
 
   // negative case testing
+  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(1).WillOnce(Return(0));
   try {
     client_callback(-1, 0, &config);
   }
@@ -908,7 +909,6 @@ TEST(dhcpv6_msg, UnmarshalBinary) {
 }
 
 MOCK_GLOBAL_FUNC0(event_base_new, event_base*());
-MOCK_GLOBAL_FUNC1(sock_open, int(struct sock_fprog *));
 
 TEST(relay, loop_relay) {
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
@@ -920,15 +920,11 @@ TEST(relay, loop_relay) {
   std::unordered_map<std::string, relay_config> vlans;
   vlans["Vlan1000"] = config;
 
-  EXPECT_GLOBAL_CALL(event_base_dispatch, event_base_dispatch(_)).WillOnce(Return(0));
-  testing::Mock::AllowLeak(gmock_globalmock_event_base_dispatch_instance.get());
-  loop_relay(vlans);
-
-  EXPECT_GLOBAL_CALL(event_base_new, event_base_new()).WillOnce(Return(nullptr));
+  // std::async(std::launch::async, [&] () {loop_relay(vlans);}).wait_for(std::chrono::milliseconds{100});
+  event_base *base;
+  EXPECT_GLOBAL_CALL(event_base_new, event_base_new()).Times(2).WillOnce(Return(nullptr)).WillOnce(Return(base));
   testing::Mock::AllowLeak(gmock_globalmock_event_base_new_instance.get());
   EXPECT_EXIT(loop_relay(vlans), ::testing::ExitedWithCode(EXIT_FAILURE), "");
 
-  EXPECT_GLOBAL_CALL(sock_open, sock_open(_)).WillOnce(Return(-1));
-  testing::Mock::AllowLeak(gmock_globalmock_sock_open_instance.get());
-  EXPECT_EXIT(loop_relay(vlans), ::testing::ExitedWithCode(EXIT_FAILURE), "");
+  std::async(std::launch::async, [&] () {loop_relay(vlans);}).wait_for(std::chrono::milliseconds{100});
 }

@@ -64,6 +64,7 @@ void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::Subscr
     int ret = swssSelect.select(&selectable, DEFAULT_TIMEOUT_MSEC);
     if (ret == swss::Select::ERROR) {
         syslog(LOG_WARNING, "Select: returned ERROR");
+        return;
     } else if (ret == swss::Select::TIMEOUT) {
     } 
     if (selectable == static_cast<swss::Selectable *> (ipHelpersTable)) {
