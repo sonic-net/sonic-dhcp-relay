@@ -14,18 +14,19 @@ MV := mv
 FIND := find
 GCOVR := gcovr
 override LDLIBS += -levent -lhiredis -lswsscommon -pthread -lboost_thread -lboost_system
-override CPPFLAGS += -Wall -std=c++17 -fPIE -I/usr/include/swss -I$(GMOCK_GLOBAL_INC_PATH)
+override CPPFLAGS += -Wall -std=c++17 -fPIE -I/usr/include/swss
 override CPPFLAGS += -MMD -MP -MF"$(@:%.o=%.d)" -MT"$(@)"
-CPPFLAGS_TEST := --coverage -fprofile-arcs -ftest-coverage -fprofile-generate -fsanitize=address
+CPPFLAGS_TEST := -I$(GMOCK_GLOBAL_INC_PATH) --coverage -fprofile-arcs -ftest-coverage -fprofile-generate -fsanitize=address
 LDLIBS_TEST := --coverage -lgtest -lgmock -pthread -lstdc++fs -fsanitize=address
 PWD := $(shell pwd)
 
-.DEFAULT:
+$(addprefix $(DEST)/, $(BUILD_TEST_DIR)): $(DEST)/% :
 	if [ ! -d ${GMOCK_GLOBAL_DIR} ]
 	then
 		git clone https://github.com/apriorit/gmock-global.git $(GMOCK_GLOBAL_DIR)
 	fi
 	sudo cp -r $(GMOCK_GLOBAL_DIR)/include/gmock-global /usr/include/
+
 
 all: $(DHCP6RELAY_TARGET) $(DHCP6RELAY_TEST_TARGET)
 
@@ -69,7 +70,7 @@ uninstall:
 	$(RM) $(DESTDIR)/usr/sbin/$(notdir $(DHCP6RELAY_TARGET))
 
 clean:
-	-$(RM) $(BUILD_DIR) $(BUILD_TEST_DIR) $(GMOCK_GLOBAL_DIR) *.html *.xml
+	-$(RM) $(BUILD_DIR) $(BUILD_TEST_DIR) *.html *.xml
 	$(FIND) . -name *.gcda -exec rm -f {} \;
 	$(FIND) . -name *.gcno -exec rm -f {} \;
 	$(FIND) . -name *.gcov -exec rm -f {} \;
