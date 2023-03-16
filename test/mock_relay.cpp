@@ -623,6 +623,18 @@ TEST(relay, client_packet_handler) {
     0x15, 0x18
   };
 
+  uint8_t client_raw_solicit_with_externsion[] = {
+    0x33, 0x33, 0x00, 0x01, 0x00, 0x02, 0x08, 0x00, 0x27, 0xfe, 0x8f, 0x95, 0x86, 0xdd, 0x60, 0x00,
+    0x00, 0x00, 0x00, 0x44, 0x2c, 0x01, 0xfe, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0a, 0x00,
+    0x27, 0xff, 0xfe, 0xfe, 0x8f, 0x95, 0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x02, 0x11, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03,
+    0x02, 0x22, 0x02, 0x23, 0x00, 0x3c, 0xad, 0x08, 0x01, 0x10,
+    0x08, 0x74, 0x00, 0x01, 0x00, 0x0e, 0x00, 0x01, 0x00, 0x01, 0x1c, 0x39, 0xcf, 0x88, 0x08, 0x00,
+    0x27, 0xfe, 0x8f, 0x95, 0x00, 0x06, 0x00, 0x04, 0x00, 0x17, 0x00, 0x18, 0x00, 0x08, 0x00, 0x02,
+    0x00, 0x00, 0x00, 0x19, 0x00, 0x0c, 0x27, 0xfe, 0x8f, 0x95, 0x00, 0x00, 0x0e, 0x10, 0x00, 0x00,
+    0x15, 0x18
+  };
+
   try {
     // invalid packet length
     client_packet_handler(client_raw_solicit, 4, &config, ifname);
@@ -630,6 +642,8 @@ TEST(relay, client_packet_handler) {
     client_packet_handler(client_raw_solicit, sizeof(client_raw_solicit), &config, ifname);
   
     client_packet_handler(client_raw_solicit_invalid_type, sizeof(client_raw_solicit_invalid_type), &config, ifname);
+
+    client_packet_handler(client_raw_solicit_with_externsion, sizeof(client_raw_solicit_with_externsion), &config, ifname);
   }
   catch (const std::exception& e) {
     EXPECT_TRUE(false);
@@ -907,6 +921,8 @@ TEST(dhcpv6_msg, UnmarshalBinary) {
   EXPECT_EQ(dhcpv6.m_msg_hdr.msg_type, 1);
 }
 
+std::unordered_map<std::string, relay_config> vlans_in_loop;
+
 TEST(relay, loop_relay) {
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   struct relay_config config{
@@ -914,11 +930,13 @@ TEST(relay, loop_relay) {
     .interface = "Vlan1000",
     .is_option_79 = true
   };
-  std::unordered_map<std::string, relay_config> vlans;
-  vlans["Vlan1000"] = config;
+  vlans_in_loop["Vlan1000"] = config;
   config.interface = "Vlan2000";
-  vlans["Vlan2000"] = config;
-  EXPECT_EQ(vlans.size(), 2);
+  vlans_in_loop["Vlan2000"] = config;
+  EXPECT_EQ(vlans_in_loop.size(), 2);
 
-  std::async(std::launch::async, [&] () {loop_relay(vlans);}).wait_for(std::chrono::milliseconds{1000});
+  EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).WillOnce(Return(-1));
+  ASSERT_NO_THROW(loop_relay(vlans_in_loop));
+
+  std::async(std::launch::async, [&] () {loop_relay(vlans_in_loop);}).wait_for(std::chrono::milliseconds{1000});
 }
