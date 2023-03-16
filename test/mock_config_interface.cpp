@@ -20,16 +20,20 @@ TEST(configInterface, deinitialize_swss) {
 }
 
 TEST(configInterface, get_dhcp) {
-  std::shared_ptr<swss::DBConnector> cfg_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
-  swss::SubscriberStateTable ipHelpersTable(cfg_db.get(), "DHCP_RELAY");
+  std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+  config_db->hset("DHCP_RELAY|Vlan1000", "dhcpv6_servers@", "fc02:2000::1,fc02:2000::2,fc02:2000::3,fc02:2000::4");
+  config_db->hset("DHCP_RELAY|Vlan1000", "dhcpv6_option|rfc6939_support", "false");
+  config_db->hset("DHCP_RELAY|Vlan1000", "dhcpv6_option|interface_id", "true");
+  swss::SubscriberStateTable ipHelpersTable(config_db.get(), "DHCP_RELAY");
   std::unordered_map<std::string, relay_config> vlans;
-  MockSwssSelect obj_mock;
-  EXPECT_CALL(obj_mock, select(_, 1000, false)).WillOnce(Return(swss::Select::ERROR));
+  
   ASSERT_NO_THROW(get_dhcp(vlans, &ipHelpersTable, false));
-  EXPECT_CALL(obj_mock, select(_, 1000, false)).WillOnce(DoAll(SetArgPointee<0>(&ipHelpersTable), Return(swss::Select::TIMEOUT)));
+  EXPECT_EQ(vlans.size(), 0);
+
+  swssSelect.addSelectable(&ipHelpersTable);
+
   ASSERT_NO_THROW(get_dhcp(vlans, &ipHelpersTable, false));
-  EXPECT_CALL(obj_mock, select(_, 1000, false)).WillOnce(DoAll(SetArgPointee<0>(&ipHelpersTable), Return(swss::Select::TIMEOUT)));
-  ASSERT_NO_THROW(get_dhcp(vlans, &ipHelpersTable, true));
+  EXPECT_EQ(vlans.size(), 1);
 }
 
 TEST(configInterface, handleRelayNotification) {
