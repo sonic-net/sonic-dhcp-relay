@@ -549,29 +549,25 @@ TEST(relay, signal_init) {
   EXPECT_NE((uintptr_t)ev_sigterm, NULL);
 }
 
-namespace Test_signal_start {
-  MOCK_GLOBAL_FUNC1(event_base_dispatch, int(struct event_base *));
-  MOCK_GLOBAL_FUNC2(event_add, int(struct event *, const struct timeval *));
+MOCK_GLOBAL_FUNC1(event_base_dispatch, int(struct event_base *));
+MOCK_GLOBAL_FUNC2(event_add, int(struct event *, const struct timeval *));
 
-  TEST(relay, signal_start) {
-    EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).WillOnce(Return(-1));
-    EXPECT_EQ(signal_start(), -1);
-    EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(2).WillOnce(Return(0)).WillOnce(Return(-1));
-    EXPECT_EQ(signal_start(), -1);
-    EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(2).WillRepeatedly(Return(0));
-    EXPECT_GLOBAL_CALL(event_base_dispatch, event_base_dispatch(_)).WillOnce(Return(-1));
-    EXPECT_EQ(signal_start(), 0);
-  }
+TEST(relay, signal_start) {
+  EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).WillOnce(Return(-1));
+  EXPECT_EQ(signal_start(), -1);
+  EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(2).WillOnce(Return(0)).WillOnce(Return(-1));
+  EXPECT_EQ(signal_start(), -1);
+  EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(2).WillOnce(Return(0));
+  EXPECT_GLOBAL_CALL(event_base_dispatch, event_base_dispatch(_)).WillOnce(Return(-1));
+  EXPECT_EQ(signal_start(), 0);
 }
 
-namespace Test_signal_callback {
-  MOCK_GLOBAL_FUNC0(dhcp6relay_stop, void(void));
+MOCK_GLOBAL_FUNC2(event_base_loopexit, int(struct event_base *, const struct timeval *));
 
-  TEST(relay, signal_callback) {
-    ASSERT_NO_THROW(signal_callback(1, 1, &base));
-    EXPECT_GLOBAL_CALL(dhcp6relay_stop, dhcp6relay_stop());
-    signal_callback(SIGTERM, 1, &base);
-  }
+TEST(relay, signal_callback) {
+  ASSERT_NO_THROW(signal_callback(1, 1, &base));
+  EXPECT_GLOBAL_CALL(event_base_loopexit, event_base_loopexit(_, _));
+  signal_callback(SIGTERM, 1, &base);
 }
 
 TEST(relay, dhcp6relay_stop) {
@@ -647,56 +643,54 @@ TEST(relay, client_packet_handler) {
   }
 }
 
-namespace Test_server_callback {
-  MOCK_GLOBAL_FUNC6(recvfrom, ssize_t(int, char *, size_t, int, struct sockaddr *, socklen_t *));
+MOCK_GLOBAL_FUNC6(recvfrom, ssize_t(int, char *, size_t, int, struct sockaddr *, socklen_t *));
 
-  TEST(relay, server_callback) {
-    std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
-    initialize_counter(state_db, "DHCPv6_COUNTER_TABLE|Vlan1000");
+TEST(relay, server_callback) {
+  std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+  initialize_counter(state_db, "DHCPv6_COUNTER_TABLE|Vlan1000");
 
-    struct relay_config config{};
-    config.is_option_79 = true;
-    config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x01;
-    config.servers.push_back("fc02:2000::1");
-    config.servers.push_back("fc02:2000::2");
-    config.interface = "Vlan1000";
-    config.state_db = state_db;
-    config.local_sock = -1;
+  struct relay_config config{};
+  config.is_option_79 = true;
+  config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x01;
+  config.servers.push_back("fc02:2000::1");
+  config.servers.push_back("fc02:2000::2");
+  config.interface = "Vlan1000";
+  config.state_db = state_db;
+  config.local_sock = -1;
 
-    // cover buffer_sz <= 0
-    server_callback(0, 0, &config);
-    // cover 0 < buffer_sz < sizeof(struct dhcpv6_msg)
-    EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(1).WillOnce(Return(2));
-    server_callback(0, 0, &config);
+  // cover buffer_sz <= 0
+  server_callback(0, 0, &config);
+  // cover 0 < buffer_sz < sizeof(struct dhcpv6_msg)
+  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(1).WillOnce(Return(2));
+  server_callback(0, 0, &config);
 
-    uint8_t msg[] = {
-      0x0d, 0x00, 0x20, 0x01, 0x0d, 0xb8, 0x01, 0x5a,
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x01, 0xfe, 0x80, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x01, 0x00, 0x12, 0x00, 0x03, 0x47, 0x69,
-      0x32, 0x00, 0x09, 0x00, 0x54, 0x07, 0x4f, 0x6d,
-      0x04, 0x00, 0x03, 0x00, 0x28, 0xb0, 0x12, 0xe8,
-      0xb4, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x05, 0x00, 0x18, 0x20, 0x01, 0x0d,
-      0xb8, 0x01, 0x5a, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x01, 0x78, 0x00, 0x00, 0x1c,
-      0x20, 0x00, 0x00, 0x1d, 0x4c, 0x00, 0x01, 0x00,
-      0x0e, 0x00, 0x01, 0x00, 0x01, 0x25, 0x3a, 0x37,
-      0xb9, 0x5a, 0xc6, 0xb0, 0x12, 0xe8, 0xb4, 0x00,
-      0x02, 0x00, 0x0e, 0x00, 0x01, 0x00, 0x01, 0x25,
-      0x3a, 0x32, 0x33, 0x50, 0xe5, 0x49, 0x50, 0x9e,
-      0x40
-    };
-    msg[0] = 0x0e;
-    auto msg_len = sizeof(msg);
-    EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).WillOnce(DoAll(SetArrayArgument<1>(msg, msg + msg_len), Return(msg_len)));
-    server_callback(0, 0, &config);
+  uint8_t msg[] = {
+    0x0d, 0x00, 0x20, 0x01, 0x0d, 0xb8, 0x01, 0x5a,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x01, 0xfe, 0x80, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x01, 0x00, 0x12, 0x00, 0x03, 0x47, 0x69,
+    0x32, 0x00, 0x09, 0x00, 0x54, 0x07, 0x4f, 0x6d,
+    0x04, 0x00, 0x03, 0x00, 0x28, 0xb0, 0x12, 0xe8,
+    0xb4, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x05, 0x00, 0x18, 0x20, 0x01, 0x0d,
+    0xb8, 0x01, 0x5a, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x01, 0x78, 0x00, 0x00, 0x1c,
+    0x20, 0x00, 0x00, 0x1d, 0x4c, 0x00, 0x01, 0x00,
+    0x0e, 0x00, 0x01, 0x00, 0x01, 0x25, 0x3a, 0x37,
+    0xb9, 0x5a, 0xc6, 0xb0, 0x12, 0xe8, 0xb4, 0x00,
+    0x02, 0x00, 0x0e, 0x00, 0x01, 0x00, 0x01, 0x25,
+    0x3a, 0x32, 0x33, 0x50, 0xe5, 0x49, 0x50, 0x9e,
+    0x40
+  };
+  msg[0] = 0x0e;
+  auto msg_len = sizeof(msg);
+  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).WillOnce(DoAll(SetArrayArgument<1>(msg, msg + msg_len), Return(msg_len)));
+  server_callback(0, 0, &config);
 
-    msg[0] = 0x0d;
-    EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).WillOnce(DoAll(SetArrayArgument<1>(msg, msg + msg_len), Return(msg_len)));
-    server_callback(0, 0, &config);
-  }
+  msg[0] = 0x0d;
+  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).WillOnce(DoAll(SetArrayArgument<1>(msg, msg + msg_len), Return(msg_len)));
+  server_callback(0, 0, &config);
 }
 
 TEST(relay, client_callback) {
@@ -921,50 +915,23 @@ TEST(dhcpv6_msg, UnmarshalBinary) {
 }
 
 MOCK_GLOBAL_FUNC0(event_base_new, event_base*());
+MOCK_GLOBAL_FUNC1(sock_open, int(struct sock_fprog *));
 
- TEST(relay, loop_relay1) {
-    std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
-    struct relay_config config{
-      .state_db = state_db,
-      .interface = "Vlan1000",
-      .is_option_79 = true
-    };
-    std::unordered_map<std::string, relay_config> vlans;
-    vlans["Vlan1000"] = config;
-    EXPECT_GLOBAL_CALL(event_base_new, event_base_new()).WillOnce(Return(nullptr));
-    EXPECT_EXIT(loop_relay(vlans), ::testing::ExitedWithCode(EXIT_FAILURE), "success");
-  }
+TEST(relay, loop_relay1) {
+  std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+  struct relay_config config{
+    .state_db = state_db,
+    .interface = "Vlan1000",
+    .is_option_79 = true
+  };
+  std::unordered_map<std::string, relay_config> vlans;
+  vlans["Vlan1000"] = config;
+  EXPECT_GLOBAL_CALL(event_base_new, event_base_new()).WillOnce(Return(nullptr));
+  EXPECT_EXIT(loop_relay(vlans), ::testing::ExitedWithCode(EXIT_FAILURE), "");
 
-namespace TestRelayLoop {
-  MOCK_GLOBAL_FUNC0(signal_start, int(void));
-  MOCK_GLOBAL_FUNC0(shutdown_relay, void(void));
-  MOCK_GLOBAL_FUNC1(sock_open, int(struct sock_fprog *));
+  EXPECT_GLOBAL_CALL(sock_open, sock_open(_)).WillOnce(Return(-1));
+  EXPECT_EXIT(loop_relay(vlans), ::testing::ExitedWithCode(EXIT_FAILURE), "");
 
- 
-  TEST(relay, loop_relay2) {
-    std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
-    struct relay_config config{
-      .state_db = state_db,
-      .interface = "Vlan1000",
-      .is_option_79 = true
-    };
-    std::unordered_map<std::string, relay_config> vlans;
-    vlans["Vlan1000"] = config;
-    EXPECT_GLOBAL_CALL(sock_open, sock_open(_)).WillOnce(Return(-1));
-    EXPECT_EXIT(loop_relay(vlans), ::testing::ExitedWithCode(EXIT_FAILURE), "success");
-  }
-  TEST(relay, loop_relay3) {
-    std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
-    struct relay_config config{
-      .state_db = state_db,
-      .interface = "Vlan1000",
-      .is_option_79 = true
-    };
-    std::unordered_map<std::string, relay_config> vlans;
-    vlans["Vlan1000"] = config;
-    signal_init();
-    EXPECT_GLOBAL_CALL(signal_start, signal_start()).WillRepeatedly(Return(0));
-    EXPECT_GLOBAL_CALL(shutdown_relay, shutdown_relay());
-    loop_relay(vlans);
-  }
+  EXPECT_GLOBAL_CALL(event_base_dispatch, event_base_dispatch(_)).WillOnce(Return(0));
+  loop_relay(vlans);
 }

@@ -3,8 +3,6 @@
 extern bool pollSwssNotifcation;
 extern swss::Select swssSelect;
 
-namespace Test_config_interface {
-
 using namespace ::testing;
 
 class MockSwssSelect : public swss::Select {
@@ -88,6 +86,4 @@ MOCK_GLOBAL_FUNC0(stopSwssNotificationPoll, void(void));
 TEST(configInterface, stopSwssNotificationPoll) {
   EXPECT_GLOBAL_CALL(stopSwssNotificationPoll, stopSwssNotificationPoll()).Times(1);
   ASSERT_NO_THROW(stopSwssNotificationPoll());
-}
-
 }
