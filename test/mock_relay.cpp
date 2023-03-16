@@ -953,11 +953,3 @@ namespace TestRelayLoop {
     loop_relay(vlans);
   }
 }
-
-
-
-
-
-
-
-
