@@ -9,7 +9,7 @@ public:
     // Override this to define how to set up the environment.
     void SetUp() override {
         // by default , init should be false
-        // EXPECT_FALSE(swss::SonicDBConfig::isInit());
+        EXPECT_FALSE(swss::SonicDBConfig::isInit());
 
         // load local config file, init should be true
         swss::SonicDBConfig::initialize(database_config);
