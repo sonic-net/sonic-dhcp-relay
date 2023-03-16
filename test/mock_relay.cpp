@@ -721,13 +721,13 @@ TEST(relay, client_callback) {
   }
 }
 
-TEST(relay, shutdown) {
+TEST(relay, shutdown_relay) {
   signal_init();
   EXPECT_NE((uintptr_t)ev_sigint, NULL);
   EXPECT_NE((uintptr_t)ev_sigterm, NULL);
 
   try {
-    shutdown();
+    shutdown_relay();
   }
   catch (const std::exception& e) {
     EXPECT_TRUE(false);
@@ -923,7 +923,7 @@ TEST(dhcpv6_msg, UnmarshalBinary) {
 namespace TestRelayLoop {
   MOCK_GLOBAL_FUNC0(signal_start, int(void));
   MOCK_GLOBAL_FUNC0(event_base_new, event_base*());
-  MOCK_GLOBAL_FUNC0(shutdown, void(void));
+  MOCK_GLOBAL_FUNC0(shutdown_relay, void(void));
   MOCK_GLOBAL_FUNC1(sock_open, int(struct sock_fprog *));
 
   std::unordered_map<std::string, relay_config> vlans;
@@ -949,7 +949,7 @@ namespace TestRelayLoop {
     vlans["Vlan1000"] = config;
     signal_init();
     EXPECT_GLOBAL_CALL(signal_start, signal_start()).WillRepeatedly(Return(0));
-    EXPECT_GLOBAL_CALL(shutdown, shutdown());
+    EXPECT_GLOBAL_CALL(shutdown_relay, shutdown_relay());
     loop_relay(vlans);
   }
 }

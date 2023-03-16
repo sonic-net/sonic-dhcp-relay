@@ -1104,7 +1104,7 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
     }
 
     if(signal_init() == 0 && signal_start() == 0) {
-        shutdown();
+        shutdown_relay();
         for(std::size_t i = 0; i < sockets.size(); i++) {
             close(sockets.at(i));
         }
@@ -1112,11 +1112,11 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
 }
 
 /**
- * @code shutdown();
+ * @code shutdown_relay();
  *
  * @brief free signals and terminate threads
  */
-void shutdown() {
+void shutdown_relay() {
     event_del(ev_sigint);
     event_del(ev_sigterm);
     event_free(ev_sigint);
