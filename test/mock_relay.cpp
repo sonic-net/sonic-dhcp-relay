@@ -926,26 +926,38 @@ namespace TestRelayLoop {
   MOCK_GLOBAL_FUNC0(shutdown_relay, void(void));
   MOCK_GLOBAL_FUNC1(sock_open, int(struct sock_fprog *));
 
-  std::unordered_map<std::string, relay_config> vlans;
-  std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
-    
-  struct relay_config config{
-    .state_db = state_db,
-    .interface = "Vlan1000",
-    .is_option_79 = true
-  };
-
   TEST(relay, loop_relay1) {
+    std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+    struct relay_config config{
+      .state_db = state_db,
+      .interface = "Vlan1000",
+      .is_option_79 = true
+    };
+    std::unordered_map<std::string, relay_config> vlans;
     vlans["Vlan1000"] = config;
     EXPECT_GLOBAL_CALL(event_base_new, event_base_new()).WillOnce(Return(nullptr));
     EXPECT_EXIT(loop_relay(vlans), ::testing::ExitedWithCode(EXIT_FAILURE), "success");
   }
   TEST(relay, loop_relay2) {
+    std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+    struct relay_config config{
+      .state_db = state_db,
+      .interface = "Vlan1000",
+      .is_option_79 = true
+    };
+    std::unordered_map<std::string, relay_config> vlans;
     vlans["Vlan1000"] = config;
     EXPECT_GLOBAL_CALL(sock_open, sock_open(_)).WillOnce(Return(-1));
     EXPECT_EXIT(loop_relay(vlans), ::testing::ExitedWithCode(EXIT_FAILURE), "success");
   }
   TEST(relay, loop_relay3) {
+    std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+    struct relay_config config{
+      .state_db = state_db,
+      .interface = "Vlan1000",
+      .is_option_79 = true
+    };
+    std::unordered_map<std::string, relay_config> vlans;
     vlans["Vlan1000"] = config;
     signal_init();
     EXPECT_GLOBAL_CALL(signal_start, signal_start()).WillRepeatedly(Return(0));

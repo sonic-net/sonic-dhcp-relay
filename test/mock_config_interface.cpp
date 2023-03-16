@@ -13,7 +13,6 @@ public:
   MOCK_METHOD3(select, int(swss::Selectable **, int, bool));
 };
 
-/*
 TEST(configInterface, initialize_swss) {
   std::unordered_map<std::string, relay_config> vlans;
   MockSwssSelect obj_mock;
@@ -22,7 +21,7 @@ TEST(configInterface, initialize_swss) {
   std::bad_alloc exception;
   EXPECT_CALL(obj_mock, addSelectable(NULL)).WillOnce(Throw(exception));
   ASSERT_NO_THROW(initialize_swss(vlans));
-}*/
+}
 
 class MockThread : public boost::thread {
 public:
