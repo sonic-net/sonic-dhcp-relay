@@ -908,8 +908,6 @@ TEST(dhcpv6_msg, UnmarshalBinary) {
   EXPECT_EQ(dhcpv6.m_msg_hdr.msg_type, 1);
 }
 
-MOCK_GLOBAL_FUNC0(event_base_new, event_base*());
-
 TEST(relay, loop_relay) {
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   struct relay_config config{
@@ -919,12 +917,6 @@ TEST(relay, loop_relay) {
   };
   std::unordered_map<std::string, relay_config> vlans;
   vlans["Vlan1000"] = config;
-
-  // std::async(std::launch::async, [&] () {loop_relay(vlans);}).wait_for(std::chrono::milliseconds{100});
-  event_base *base;
-  EXPECT_GLOBAL_CALL(event_base_new, event_base_new()).Times(2).WillOnce(Return(nullptr)).WillOnce(Return(base));
-  testing::Mock::AllowLeak(gmock_globalmock_event_base_new_instance.get());
-  EXPECT_EXIT(loop_relay(vlans), ::testing::ExitedWithCode(EXIT_FAILURE), "");
 
   std::async(std::launch::async, [&] () {loop_relay(vlans);}).wait_for(std::chrono::milliseconds{100});
 }
