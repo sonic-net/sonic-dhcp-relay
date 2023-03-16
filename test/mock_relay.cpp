@@ -557,7 +557,7 @@ TEST(relay, signal_start) {
   EXPECT_EQ(signal_start(), -1);
   EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(2).WillOnce(Return(0)).WillOnce(Return(-1));
   EXPECT_EQ(signal_start(), -1);
-  EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(2).WillOnce(Return(0));
+  EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(2).WillOnce(Return(0)).WillOnce(Return(0));
   EXPECT_GLOBAL_CALL(event_base_dispatch, event_base_dispatch(_)).WillOnce(Return(-1));
   EXPECT_EQ(signal_start(), 0);
 }
@@ -571,15 +571,8 @@ TEST(relay, signal_callback) {
 }
 
 TEST(relay, dhcp6relay_stop) {
-  int filter = 1;
-  std::unordered_map<std::string, struct relay_config> vlans;
-  base = event_base_new();
-  struct event* event = event_new(base, filter, EV_READ|EV_PERSIST, client_callback,
-                                  reinterpret_cast<void *>(&vlans));
-  dhcp6relay_stop();
-  event_free(event);
-  event_base_free(base);
-  base = NULL;
+  EXPECT_GLOBAL_CALL(event_base_loopexit, event_base_loopexit(_, _));
+  ASSERT_NO_THROW(dhcp6relay_stop());
 }
 
 TEST(relay, update_vlan_mapping) {
@@ -659,9 +652,9 @@ TEST(relay, server_callback) {
   config.local_sock = -1;
 
   // cover buffer_sz <= 0
+  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(2).WillOnce(Return(0)).WillOnce(Return(2));
   server_callback(0, 0, &config);
   // cover 0 < buffer_sz < sizeof(struct dhcpv6_msg)
-  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(1).WillOnce(Return(2));
   server_callback(0, 0, &config);
 
   uint8_t msg[] = {
@@ -917,7 +910,7 @@ TEST(dhcpv6_msg, UnmarshalBinary) {
 MOCK_GLOBAL_FUNC0(event_base_new, event_base*());
 MOCK_GLOBAL_FUNC1(sock_open, int(struct sock_fprog *));
 
-TEST(relay, loop_relay1) {
+TEST(relay, loop_relay) {
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   struct relay_config config{
     .state_db = state_db,
