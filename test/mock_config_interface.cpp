@@ -5,26 +5,15 @@ extern swss::Select swssSelect;
 
 using namespace ::testing;
 
-class MockSwssSelect : public swss::Select {
-public:
-  MOCK_METHOD1(addSelectable, void(swss::Selectable *));
-  MOCK_METHOD3(select, int(swss::Selectable **, int, bool));
-};
-
 TEST(configInterface, initialize_swss) {
+  std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+  config_db->hset("DHCP_RELAY|Vlan1000", "dhcpv6_servers@", "fc02:2000::1,fc02:2000::2,fc02:2000::3,fc02:2000::4");
+  config_db->hset("DHCP_RELAY|Vlan1000", "dhcpv6_option|rfc6939_support", "false");
+  config_db->hset("DHCP_RELAY|Vlan1000", "dhcpv6_option|interface_id", "true");
   std::unordered_map<std::string, relay_config> vlans;
-  MockSwssSelect obj_mock;
-  EXPECT_CALL(obj_mock, addSelectable(NULL));
   ASSERT_NO_THROW(initialize_swss(vlans));
-  std::bad_alloc exception;
-  EXPECT_CALL(obj_mock, addSelectable(NULL)).WillOnce(Throw(exception));
-  ASSERT_NO_THROW(initialize_swss(vlans));
+  EXPECT_EQ(vlans.size(), 1);
 }
-
-class MockThread : public boost::thread {
-public:
-  MOCK_METHOD0(interrupt, void(void));
-};
 
 TEST(configInterface, deinitialize_swss) {
   ASSERT_NO_THROW(deinitialize_swss());
@@ -67,18 +56,6 @@ TEST(configInterface, processRelayNotification) {
   EXPECT_FALSE(vlans["Vlan1000"].is_option_79);
   EXPECT_TRUE(vlans["Vlan1000"].is_interface_id);
   EXPECT_FALSE(vlans["Vlan1000"].state_db);
-}
-
-TEST(configInterface, handleSwssNotification) {
-  pollSwssNotifcation = false;
-  swssNotification swss_notification;
-  swss_notification.ipHelpersTable = nullptr;
-  handleSwssNotification(swss_notification);
-  EXPECT_EQ(swss_notification.vlans.size(), 0);
-  EXPECT_EQ(swss_notification.ipHelpersTable, nullptr);
-
-  pollSwssNotifcation = true;
-  std::async(std::launch::async, [&] () {handleSwssNotification(swss_notification);}).wait_for(std::chrono::milliseconds{200});
 }
 
 MOCK_GLOBAL_FUNC0(stopSwssNotificationPoll, void(void));
