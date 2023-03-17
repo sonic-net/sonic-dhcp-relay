@@ -31,7 +31,7 @@ jobs:
       displayName: install .Net
   - script: |
       set -ex
-      sudo apt-get update \
+      sudo apt-get update
       sudo apt-get install -y \
           libboost-system-dev \
           libboost-thread-dev \
