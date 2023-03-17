@@ -776,15 +776,17 @@ TEST(relay, client_callback) {
   vlan_map["Ethernet2"] = vlan2000;
 
   // negative case testing
-  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(7)
+  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(9)
                     .WillOnce(Return(0))
                     .WillOnce(Return(2)).WillOnce(Return(0))
                     .WillOnce(Return(msg_len)).WillOnce(Return(0))
+                    .WillOnce(Return(msg_len)).WillOnce(Return(0))
                     .WillOnce(Return(msg_len)).WillOnce(Return(0));
 
-  EXPECT_GLOBAL_CALL(if_indextoname, if_indextoname(_, _)).Times(3).WillOnce(Return(nullptr))
+  EXPECT_GLOBAL_CALL(if_indextoname, if_indextoname(_, _)).Times(4).WillOnce(Return(nullptr))
                     .WillOnce(DoAll(SetArrayArgument<1>(ethernet1, ethernet1 + IF_NAMESIZE), Return(ptr)))
-                    .WillOnce(DoAll(SetArrayArgument<1>(ethernet2, ethernet2 + IF_NAMESIZE), Return(ptr)));
+                    .WillOnce(DoAll(SetArrayArgument<1>(ethernet2, ethernet2 + IF_NAMESIZE), Return(ptr)))
+                    .WillOnce(DoAll(SetArrayArgument<1>(ethernet1, ethernet1 + IF_NAMESIZE), Return(ptr)));
   // test buffer_sz <=0 early return
   ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
   // test buffer_sz > 0, if_indextoname == null early return
@@ -793,6 +795,12 @@ TEST(relay, client_callback) {
   ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
   // test normal msg and vlan found 
   ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
+
+  dual_tor_sock = true;
+  // test normal msg and vlan found + dual tor
+  ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
+  dual_tor_sock = false;
+
 }
 
 TEST(relay, shutdown_relay) {
