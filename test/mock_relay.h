@@ -7,3 +7,8 @@
 #include <gmock-global/gmock-global.h>
 #include <new>
 #include <future>
+
+extern struct event_base *base;
+extern struct event *ev_sigint;
+extern struct event *ev_sigterm;
+extern std::unordered_map<std::string, std::string> vlan_map;

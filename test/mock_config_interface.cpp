@@ -1,8 +1,5 @@
 #include "mock_config_interface.h"
 
-extern bool pollSwssNotifcation;
-extern swss::Select swssSelect;
-
 using namespace ::testing;
 
 TEST(configInterface, initialize_swss) {

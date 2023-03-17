@@ -7,3 +7,6 @@
 #include <gmock-global/gmock-global.h>
 #include <new>
 #include <future>
+
+extern bool pollSwssNotifcation;
+extern swss::Select swssSelect;
