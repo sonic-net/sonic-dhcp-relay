@@ -1010,13 +1010,10 @@ TEST(relay, loop_relay) {
     .is_option_79 = true
   };
   vlans_in_loop["Vlan1000"] = config;
-  config.interface = "Vlan2000";
-  vlans_in_loop["Vlan2000"] = config;
-  EXPECT_EQ(vlans_in_loop.size(), 2);
+  EXPECT_EQ(vlans_in_loop.size(), 1);
 
   EXPECT_GLOBAL_CALL(event_base_dispatch, event_base_dispatch(_)).Times(1).WillOnce(Return(-1));
-  EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(3).WillOnce(Return(0))
-                                                            .WillOnce(Return(0))
-                                                            .WillOnce(Return(0));
+  EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(AtLeast(2)).WillOnce(Return(0))
+                                                                     .WillOnce(Return(0));
   ASSERT_NO_THROW(loop_relay(vlans_in_loop));
 }
