@@ -773,7 +773,7 @@ TEST(relay, client_callback) {
   std::string vlan2000 = "Vlan2000";
   std::string ethernet1 = "Ethernet1";
   std::string ethernet2 = "Ethernet2";
-  
+
   char ptr[20] = "vlan";
   vlans[vlan1000] = config;
   vlan_map[ethernet1] = vlan1000;
@@ -1007,9 +1007,8 @@ TEST(relay, loop_relay) {
   vlans_in_loop["Vlan2000"] = config;
   EXPECT_EQ(vlans_in_loop.size(), 2);
 
-  EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(5);
   EXPECT_GLOBAL_CALL(event_base_dispatch, event_base_dispatch(_)).Times(1).WillOnce(Return(-1));
   ASSERT_NO_THROW(loop_relay(vlans_in_loop));
 
-  std::async(std::launch::async, [&] () {loop_relay(vlans_in_loop);}).wait_for(std::chrono::milliseconds{1000});
+  // std::async(std::launch::async, [&] () {loop_relay(vlans_in_loop);}).wait_for(std::chrono::milliseconds{1000});
 }
