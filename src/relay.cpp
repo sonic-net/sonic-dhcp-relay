@@ -163,6 +163,11 @@ uint8_t *RelayMsg::MarshalBinary(uint16_t &len) {
 
     auto opt = m_option_list.MarshalBinary();
     if (opt && !opt->empty()) {
+        if (opt->size() + sizeof(dhcpv6_relay_msg) > BUFFER_SIZE) {
+            syslog(LOG_WARNING, "Failed to marshal relay msg, packet size %ld over limit\n",
+                   opt->size() + sizeof(dhcpv6_relay_msg));
+            return nullptr;
+        }
         std::memcpy(ptr + sizeof(dhcpv6_relay_msg), opt->data(), opt->size());
         len += opt->size();
     }
@@ -210,6 +215,11 @@ uint8_t *DHCPv6Msg::MarshalBinary(uint16_t &len) {
 
     auto opt = m_option_list.MarshalBinary();
     if (opt && !opt->empty()) {
+        if (opt->size() + sizeof(dhcpv6_msg) > BUFFER_SIZE) {
+            syslog(LOG_WARNING, "Failed to marshal dhcpv6 msg, packet size %ld over limit\n",
+                   opt->size() + sizeof(dhcpv6_msg));
+            return nullptr;
+        }
         std::memcpy(ptr + sizeof(dhcpv6_msg), opt->data(), opt->size());
         len += opt->size();
     }
@@ -683,7 +693,7 @@ void relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *
 
     /* add relay-msg option */
     relay.m_option_list.Add(OPTION_RELAY_MSG, msg, len);
-    
+
     uint16_t send_buffer_len = 0;
     auto send_buffer = relay.MarshalBinary(send_buffer_len);
     if (!send_buffer_len) {

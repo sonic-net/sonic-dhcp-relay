@@ -373,8 +373,8 @@ TEST(relay, relay_client)
   // invalid msg_len testing
   ASSERT_NO_THROW(relay_client(mock_sock, msg, 2, &ip_hdr, &ether_hdr, &config));
 
-  // normal packet but with a super length
-  ASSERT_NO_THROW(relay_client(mock_sock, msg, 4294967295, &ip_hdr, &ether_hdr, &config));
+  // packet with a super length > sizeof(msg)
+  ASSERT_ANY_THROW(relay_client(mock_sock, msg, 65535, &ip_hdr, &ether_hdr, &config));
 
   // normal packet testing 
   ASSERT_NO_THROW(relay_client(mock_sock, msg, msg_len, &ip_hdr, &ether_hdr, &config));
@@ -453,7 +453,19 @@ TEST(relay, relay_relay_forw) {
   std::string s_addr = "2000::3";
   inet_pton(AF_INET6, s_addr.c_str(), &ip_hdr.ip6_src);
 
-  relay_relay_forw(mock_sock, msg, msg_len, &ip_hdr, &config);
+  // msg with hop count > HOP_LIMIT
+  auto hop = msg[1];
+  msg[1] = 65;
+  ASSERT_NO_THROW(relay_relay_forw(mock_sock, msg, msg_len, &ip_hdr, &config));
+  msg[1] = hop;
+
+  // super frame over size limit for secondary relay
+  uint8_t super_frame[BUFFER_SIZE] = {};
+  ::memcpy(super_frame, msg, msg_len);
+  ASSERT_NO_THROW(relay_relay_forw(mock_sock, super_frame, BUFFER_SIZE, &ip_hdr, &config));
+
+  // normal packet
+  ASSERT_NO_THROW(relay_relay_forw(mock_sock, msg, msg_len, &ip_hdr, &config));
 
   EXPECT_EQ(last_used_sock, 125);
 
@@ -493,7 +505,7 @@ TEST(relay, relay_relay_reply)
       0x02, 0x00, 0x0e, 0x00, 0x01, 0x00, 0x01, 0x25,
       0x3a, 0x32, 0x33, 0x50, 0xe5, 0x49, 0x50, 0x9e,
       0x40
-  }; 
+  };
   int32_t msg_len = sizeof(msg);
 
   struct relay_config config{};
@@ -517,7 +529,34 @@ TEST(relay, relay_relay_reply)
 
   prepare_relay_config(config, local_sock, filter);
 
-  relay_relay_reply(mock_sock, msg, msg_len, &config);
+  // invalid message length
+  ASSERT_NO_THROW(relay_relay_reply(mock_sock, msg, 2, &config));
+
+  // invalid relay msg, without OPTION_RELAY_MSG
+   uint8_t invalid_msg[] = { 
+      0x0d, 0x00, 0x20, 0x01, 0x0d, 0xb8, 0x01, 0x5a,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x01, 0xfe, 0x80, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x01, 0x00, 0x12, 0x00, 0x03, 0x47, 0x69,
+      0x32, 0x00, 0x10, 0x00, 0x54, 0x07, 0x4f, 0x6d,
+      0x04, 0x00, 0x03, 0x00, 0x28, 0xb0, 0x12, 0xe8,
+      0xb4, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x05, 0x00, 0x18, 0x20, 0x01, 0x0d,
+      0xb8, 0x01, 0x5a, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x01, 0x78, 0x00, 0x00, 0x1c,
+      0x20, 0x00, 0x00, 0x1d, 0x4c, 0x00, 0x01, 0x00,
+      0x0e, 0x00, 0x01, 0x00, 0x01, 0x25, 0x3a, 0x37,
+      0xb9, 0x5a, 0xc6, 0xb0, 0x12, 0xe8, 0xb4, 0x00,
+      0x02, 0x00, 0x0e, 0x00, 0x01, 0x00, 0x01, 0x25,
+      0x3a, 0x32, 0x33, 0x50, 0xe5, 0x49, 0x50, 0x9e,
+      0x40
+  };
+  ASSERT_NO_THROW(relay_relay_reply(mock_sock, invalid_msg, msg_len, &config));
+
+
+  // normal message
+  ASSERT_NO_THROW(relay_relay_reply(mock_sock, msg, msg_len, &config));
 
   EXPECT_EQ(last_used_sock, 123);
 
@@ -675,9 +714,9 @@ TEST(relay, server_callback) {
 
   // cover buffer_sz <= 0
   EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(3).WillOnce(Return(0)).WillOnce(Return(2)).WillOnce(Return(0));
-  server_callback(0, 0, &config);
+  ASSERT_NO_THROW(server_callback(0, 0, &config));
   // cover 0 < buffer_sz < sizeof(struct dhcpv6_msg)
-  server_callback(0, 0, &config);
+  ASSERT_NO_THROW(server_callback(0, 0, &config));
   // same name to override static global variable 
   uint8_t server_recv_buffer[] = {
     0x0d, 0x00, 0x20, 0x01, 0x0d, 0xb8, 0x01, 0x5a,
@@ -700,12 +739,14 @@ TEST(relay, server_callback) {
   };
   auto msg_len = sizeof(server_recv_buffer);
   EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, server_recv_buffer, _, _, _, _)).Times(2).WillOnce(Return(msg_len)).WillOnce(Return(0));
-  server_callback(0, 0, &config);
+  ASSERT_NO_THROW(server_callback(0, 0, &config));
 
   server_recv_buffer[0] = 0x0e;
   EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, server_recv_buffer, _, _, _, _)).Times(2).WillOnce(Return(msg_len)).WillOnce(Return(0));
-  server_callback(0, 0, &config);
+  ASSERT_NO_THROW(server_callback(0, 0, &config));
 }
+
+MOCK_GLOBAL_FUNC2(if_indextoname, char*(unsigned int, char *));
 
 TEST(relay, client_callback) {
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
@@ -720,14 +761,36 @@ TEST(relay, client_callback) {
   config.state_db = state_db;
   config.local_sock = -1;
 
+  uint8_t client_recv_buffer[] = {
+    0x33, 0x33, 0x00, 0x01, 0x00, 0x02, 0x08, 0x00, 0x27, 0xfe, 0x8f, 0x95, 0x86, 0xdd, 0x60, 0x00,
+    0x00, 0x00, 0x00, 0x3c, 0x11, 0x01, 0xfe, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0a, 0x00,
+    0x27, 0xff, 0xfe, 0xfe, 0x8f, 0x95, 0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x02, 0x02, 0x22, 0x02, 0x23, 0x00, 0x3c, 0xad, 0x08, 0x01, 0x10,
+    0x08, 0x74, 0x00, 0x01, 0x00, 0x0e, 0x00, 0x01, 0x00, 0x01, 0x1c, 0x39, 0xcf, 0x88, 0x08, 0x00,
+    0x27, 0xfe, 0x8f, 0x95, 0x00, 0x06, 0x00, 0x04, 0x00, 0x17, 0x00, 0x18, 0x00, 0x08, 0x00, 0x02,
+    0x00, 0x00, 0x00, 0x19, 0x00, 0x0c, 0x27, 0xfe, 0x8f, 0x95, 0x00, 0x00, 0x0e, 0x10, 0x00, 0x00,
+    0x15, 0x18
+  };
+  auto msg_len = sizeof(client_recv_buffer); 
+
   // negative case testing
   EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(1).WillOnce(Return(0));
-  try {
-    client_callback(-1, 0, &config);
-  }
-  catch (const std::exception& e) {
-    EXPECT_TRUE(false);
-  }
+  ASSERT_NO_THROW(client_callback(-1, 0, &config));
+
+  EXPECT_GLOBAL_CALL(if_indextoname, if_indextoname(_, _)).Times(1).WillOnce(Return(nullptr));
+  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(2).WillOnce(Return(2)).WillOnce(Return(0));
+  ASSERT_NO_THROW(client_callback(-1, 0, &config));
+
+  std::string vlan2000 = "Vlan2000";
+  char *ptr;
+  EXPECT_GLOBAL_CALL(if_indextoname, if_indextoname(_, _)).Times(1).WillOnce(DoAll(SetArrayArgument<1>(vlan2000.begin(), vlan2000.end()), Return(ptr)));
+  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(2).WillOnce(Return(2)).WillOnce(Return(0));
+  ASSERT_NO_THROW(client_callback(-1, 0, &config));
+
+  std::string vlan1000 = "Vlan1000";
+  EXPECT_GLOBAL_CALL(if_indextoname, if_indextoname(_, _)).Times(1).WillOnce(DoAll(SetArrayArgument<1>(vlan1000.begin(), vlan1000.end()), Return(ptr)));
+  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(2).WillOnce(Return(msg_len)).WillOnce(Return(0));
+  ASSERT_NO_THROW(client_callback(-1, 0, &config));
 }
 
 TEST(relay, shutdown_relay) {
