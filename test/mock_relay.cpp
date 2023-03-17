@@ -971,7 +971,7 @@ TEST(dhcpv6_msg, MarshalBinary) {
   uint8_t super_frame[65530] = {};
 
   dhcpv6_neg.m_option_list.Add(100, super_frame, 65530);
-  msg = dhcpv6.MarshalBinary(length);
+  msg = dhcpv6_neg.MarshalBinary(length);
   EXPECT_FALSE(msg);
   EXPECT_FALSE(length);
 }
@@ -1021,7 +1021,7 @@ TEST(relay, loop_relay) {
   EXPECT_EQ(vlans_in_loop.size(), 2);
 
   EXPECT_GLOBAL_CALL(event_base_dispatch, event_base_dispatch(_)).Times(1).WillOnce(Return(-1));
-  EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(3);
+  EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL));
 
   ASSERT_NO_THROW(loop_relay(vlans_in_loop));
 
