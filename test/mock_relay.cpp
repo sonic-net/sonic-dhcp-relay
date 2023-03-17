@@ -682,19 +682,15 @@ TEST(relay, client_packet_handler) {
     0x15, 0x18
   };
 
-  try {
-    // invalid packet length
-    client_packet_handler(client_raw_solicit, 4, &config, ifname);
+  // invalid packet length
+  ASSERT_NO_THROW(client_packet_handler(client_raw_solicit, 4, &config, ifname));
 
-    client_packet_handler(client_raw_solicit, sizeof(client_raw_solicit), &config, ifname);
+  ASSERT_NO_THROW(client_packet_handler(client_raw_solicit, sizeof(client_raw_solicit), &config, ifname));
   
-    client_packet_handler(client_raw_solicit_invalid_type, sizeof(client_raw_solicit_invalid_type), &config, ifname);
+  ASSERT_NO_THROW(client_packet_handler(client_raw_solicit_invalid_type, sizeof(client_raw_solicit_invalid_type), &config, ifname));
 
-    client_packet_handler(client_raw_solicit_with_externsion, sizeof(client_raw_solicit_with_externsion), &config, ifname);
-  }
-  catch (const std::exception& e) {
-    EXPECT_TRUE(false);
-  }
+  ASSERT_NO_THROW(client_packet_handler(client_raw_solicit_with_externsion, sizeof(client_raw_solicit_with_externsion), &config, ifname));
+
 }
 
 MOCK_GLOBAL_FUNC6(recvfrom, ssize_t(int, void *, size_t, int, struct sockaddr *, socklen_t *));
@@ -712,12 +708,7 @@ TEST(relay, server_callback) {
   config.state_db = state_db;
   config.local_sock = -1;
 
-  // cover buffer_sz <= 0
-  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(3).WillOnce(Return(0)).WillOnce(Return(2)).WillOnce(Return(0));
-  ASSERT_NO_THROW(server_callback(0, 0, &config));
-  // cover 0 < buffer_sz < sizeof(struct dhcpv6_msg)
-  ASSERT_NO_THROW(server_callback(0, 0, &config));
-  // same name to override static global variable 
+   // same name to override static global variable
   uint8_t server_recv_buffer[] = {
     0x0d, 0x00, 0x20, 0x01, 0x0d, 0xb8, 0x01, 0x5a,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -738,11 +729,18 @@ TEST(relay, server_callback) {
     0x40
   };
   auto msg_len = sizeof(server_recv_buffer);
-  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, server_recv_buffer, _, _, _, _)).Times(2).WillOnce(Return(msg_len)).WillOnce(Return(0));
+
+  // cover buffer_sz <= 0
+  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(7).WillOnce(Return(0)).WillOnce(Return(2)).WillOnce(Return(0))
+                                                                   .WillOnce(Return(msg_len)).WillOnce(Return(0))
+                                                                   .WillOnce(Return(msg_len)).WillOnce(Return(0));
+  ASSERT_NO_THROW(server_callback(0, 0, &config));
+  // cover 0 < buffer_sz < sizeof(struct dhcpv6_msg)
+  ASSERT_NO_THROW(server_callback(0, 0, &config));
+ 
   ASSERT_NO_THROW(server_callback(0, 0, &config));
 
   server_recv_buffer[0] = 0x0e;
-  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, server_recv_buffer, _, _, _, _)).Times(2).WillOnce(Return(msg_len)).WillOnce(Return(0));
   ASSERT_NO_THROW(server_callback(0, 0, &config));
 }
 
@@ -798,12 +796,7 @@ TEST(relay, shutdown_relay) {
   EXPECT_NE((uintptr_t)ev_sigint, NULL);
   EXPECT_NE((uintptr_t)ev_sigterm, NULL);
 
-  try {
-    shutdown_relay();
-  }
-  catch (const std::exception& e) {
-    EXPECT_TRUE(false);
-  }
+  ASSERT_NO_THROW(shutdown_relay());
 }
 
 TEST(options, Add) {
@@ -1006,7 +999,7 @@ TEST(relay, loop_relay) {
   vlans_in_loop["Vlan2000"] = config;
   EXPECT_EQ(vlans_in_loop.size(), 2);
 
-  EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).WillOnce(Return(-1));
+  EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(2).WillOnce(Return(-1)).WillOnce(Return(-1));
   ASSERT_NO_THROW(loop_relay(vlans_in_loop));
 
   std::async(std::launch::async, [&] () {loop_relay(vlans_in_loop);}).wait_for(std::chrono::milliseconds{1000});
