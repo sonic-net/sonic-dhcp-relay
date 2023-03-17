@@ -5,7 +5,7 @@
 #include <string>
 #include "../src/sender.h"
 
-extern uint8_t sender_buffer[4096];
+extern uint8_t sender_buffer[65535];
 extern int32_t valid_byte_count;
 extern int last_used_sock;
 extern sockaddr_in6 last_target;
