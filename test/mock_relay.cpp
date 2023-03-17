@@ -689,7 +689,6 @@ TEST(relay, client_packet_handler) {
     0x15, 0x18
   };
 
-
   // invalid packet length
   ASSERT_NO_THROW(client_packet_handler(client_raw_solicit, 4, &config, ifname));
 
@@ -697,8 +696,9 @@ TEST(relay, client_packet_handler) {
   
   ASSERT_NO_THROW(client_packet_handler(client_raw_solicit_invalid_type, sizeof(client_raw_solicit_invalid_type), &config, ifname));
 
-  ASSERT_NO_THROW(client_packet_handler(non_udp_with_externsion, sizeof(non_udp_with_externsion), &config, ifname));
+  ASSERT_NO_THROW(client_packet_handler(client_raw_solicit_with_externsion, sizeof(client_raw_solicit_with_externsion), &config, ifname));
 
+  ASSERT_NO_THROW(client_packet_handler(non_udp_with_externsion, sizeof(non_udp_with_externsion), &config, ifname));
 }
 
 MOCK_GLOBAL_FUNC6(recvfrom, ssize_t(int, void *, size_t, int, struct sockaddr *, socklen_t *));
