@@ -166,6 +166,7 @@ uint8_t *RelayMsg::MarshalBinary(uint16_t &len) {
         if (opt->size() + sizeof(dhcpv6_relay_msg) > BUFFER_SIZE) {
             syslog(LOG_WARNING, "Failed to marshal relay msg, packet size %ld over limit\n",
                    opt->size() + sizeof(dhcpv6_relay_msg));
+            len = 0;
             return nullptr;
         }
         std::memcpy(ptr + sizeof(dhcpv6_relay_msg), opt->data(), opt->size());
@@ -218,6 +219,7 @@ uint8_t *DHCPv6Msg::MarshalBinary(uint16_t &len) {
         if (opt->size() + sizeof(dhcpv6_msg) > BUFFER_SIZE) {
             syslog(LOG_WARNING, "Failed to marshal dhcpv6 msg, packet size %ld over limit\n",
                    opt->size() + sizeof(dhcpv6_msg));
+            len = 0;
             return nullptr;
         }
         std::memcpy(ptr + sizeof(dhcpv6_msg), opt->data(), opt->size());
@@ -647,7 +649,7 @@ void relay_client(int sock, const uint8_t *msg, uint16_t len, const ip6_hdr *ip_
 
     uint16_t relay_pkt_len = 0;
     auto relay_pkt = relay.MarshalBinary(relay_pkt_len);
-    if (!relay_pkt_len) {
+    if (!relay_pkt_len || !relay_pkt) {
         char addr_str[INET6_ADDRSTRLEN];
         inet_ntop(AF_INET6, &ip_hdr->ip6_src, addr_str, INET6_ADDRSTRLEN);
         syslog(LOG_ERR, "Relay-forward marshal error, client dhcpv6 from %s", addr_str);
@@ -696,7 +698,7 @@ void relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *
 
     uint16_t send_buffer_len = 0;
     auto send_buffer = relay.MarshalBinary(send_buffer_len);
-    if (!send_buffer_len) {
+    if (!send_buffer_len || !send_buffer) {
         char addr_str[INET6_ADDRSTRLEN];
         inet_ntop(AF_INET6, &ip_hdr->ip6_src, addr_str, INET6_ADDRSTRLEN);
         syslog(LOG_ERR, "Marshal relay-forward message from %s error", addr_str);
