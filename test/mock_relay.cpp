@@ -961,6 +961,18 @@ TEST(dhcpv6_msg, MarshalBinary) {
   msg = dhcpv6.MarshalBinary(length);
   EXPECT_TRUE(msg);
   EXPECT_EQ(length, sizeof(solicit));
+
+  // negative test for marshal error
+  class DHCPv6Msg dhcpv6_neg;
+  auto result = dhcpv6_neg.UnmarshalBinary(solicit, sizeof(solicit));
+  EXPECT_TRUE(result);
+
+  uint8_t super_frame[65530] = {};
+
+  dhcpv6_neg.m_option_list.Add(100, super_frame, sizeof(super_frame));
+  msg = dhcpv6.MarshalBinary(length);
+  EXPECT_FALSE(msg);
+  EXPECT_FALSE(length);
 }
 
 TEST(dhcpv6_msg, UnmarshalBinary) {
@@ -1008,6 +1020,8 @@ TEST(relay, loop_relay) {
   EXPECT_EQ(vlans_in_loop.size(), 2);
 
   EXPECT_GLOBAL_CALL(event_base_dispatch, event_base_dispatch(_)).Times(1).WillOnce(Return(-1));
+  EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(3);
+
   ASSERT_NO_THROW(loop_relay(vlans_in_loop));
 
   // std::async(std::launch::async, [&] () {loop_relay(vlans_in_loop);}).wait_for(std::chrono::milliseconds{1000});
