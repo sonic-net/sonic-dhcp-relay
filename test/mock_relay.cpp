@@ -374,7 +374,7 @@ TEST(relay, relay_client)
   ASSERT_NO_THROW(relay_client(mock_sock, msg, 2, &ip_hdr, &ether_hdr, &config));
 
   // packet with a super length > sizeof(msg)
-  ASSERT_ANY_THROW(relay_client(mock_sock, msg, 65535, &ip_hdr, &ether_hdr, &config));
+  EXPECT_DEATH(relay_client(mock_sock, msg, 65535, &ip_hdr, &ether_hdr, &config), "");
 
   // normal packet testing 
   ASSERT_NO_THROW(relay_client(mock_sock, msg, msg_len, &ip_hdr, &ether_hdr, &config));
