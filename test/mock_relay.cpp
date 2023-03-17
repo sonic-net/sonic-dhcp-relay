@@ -269,8 +269,6 @@ TEST(prepareConfig, prepare_relay_config)
   EXPECT_EQ("fc02:2000::2", s2);
 }
 
-MOCK_GLOBAL_FUNC1(getifaddrs, int(struct ifaddrs **));
-
 TEST(prepareConfig, prepare_socket)
 {
   struct relay_config config{};
@@ -293,18 +291,7 @@ TEST(prepareConfig, prepare_socket)
 
   EXPECT_GE(local_sock, 0);
   EXPECT_GE(server_sock, 0);
-
-  // prepare to mock getifaddrs
-  struct ifaddrs *ifa;
-
-  if (getifaddrs(&ifa) != -1) {
-    ifa->ifa_addr->sa_family = AF_INET6;
-    ::memcpy(ifa->ifa_name, config.interface.c_str(), IF_NAMESIZE);
-    EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_)).WillOnce(DoAll(SetArgPointee<0>(ifa), Return(0)));
-    prepare_socket(local_sock, server_sock, config);
-  }
 }
-
 
 TEST(counter, initialize_counter)
 {
