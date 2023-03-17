@@ -964,7 +964,7 @@ TEST(dhcpv6_msg, MarshalBinary) {
 
   // negative test for marshal error
   class DHCPv6Msg dhcpv6_neg;
-  auto result = dhcpv6_neg.UnmarshalBinary(solicit, sizeof(solicit));
+  result = dhcpv6_neg.UnmarshalBinary(solicit, sizeof(solicit));
   EXPECT_TRUE(result);
 
   uint8_t super_frame[65530] = {};
