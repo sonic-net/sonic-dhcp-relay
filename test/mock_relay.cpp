@@ -597,11 +597,12 @@ MOCK_GLOBAL_FUNC1(event_base_dispatch, int(struct event_base *));
 MOCK_GLOBAL_FUNC2(event_add, int(struct event *, const struct timeval *));
 
 TEST(relay, signal_start) {
-  EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).WillOnce(Return(-1));
+  EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(5)
+                    .WillOnce(Return(-1))
+                    .WillOnce(Return(0)).WillOnce(Return(-1))
+                    .WillOnce(Return(0)).WillOnce(Return(0));
   EXPECT_EQ(signal_start(), -1);
-  EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(2).WillOnce(Return(0)).WillOnce(Return(-1));
   EXPECT_EQ(signal_start(), -1);
-  EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(2).WillOnce(Return(0)).WillOnce(Return(0));
   EXPECT_GLOBAL_CALL(event_base_dispatch, event_base_dispatch(_)).Times(1).WillOnce(Return(-1));
   EXPECT_EQ(signal_start(), 0);
 }
@@ -771,13 +772,13 @@ TEST(relay, client_callback) {
   auto msg_len = sizeof(client_recv_buffer);
   std::string vlan1000 = "Vlan1000";
   std::string vlan2000 = "Vlan2000";
-  std::string ethernet1 = "Ethernet1";
-  std::string ethernet2 = "Ethernet2";
+  char ethernet1[] = "Ethernet1";
+  char ethernet2[] = "Ethernet2";
 
   char ptr[20] = "vlan";
   vlans[vlan1000] = config;
-  vlan_map[ethernet1] = vlan1000;
-  vlan_map[ethernet2] = vlan2000;
+  vlan_map["Ethernet1"] = vlan1000;
+  vlan_map["Ethernet2"] = vlan2000;
 
   // negative case testing
   EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(7)
@@ -787,8 +788,8 @@ TEST(relay, client_callback) {
                     .WillOnce(Return(msg_len)).WillOnce(Return(0));
 
   EXPECT_GLOBAL_CALL(if_indextoname, if_indextoname(_, _)).Times(3).WillOnce(Return(nullptr))
-                    .WillOnce(DoAll(SetArrayArgument<1>(ethernet1.begin(), ethernet1.end()), Return(ptr)))
-                    .WillOnce(DoAll(SetArrayArgument<1>(ethernet2.begin(), ethernet2.end()), Return(ptr)));
+                    .WillOnce(DoAll(SetArrayArgument<1>(ethernet1, ethernet1 + 9), Return(ptr)))
+                    .WillOnce(DoAll(SetArrayArgument<1>(ethernet2, ethernet2 + 9), Return(ptr)));
   // test buffer_sz <=0 early return
   ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
   // test buffer_sz > 0, if_indextoname == null early return
@@ -969,7 +970,7 @@ TEST(dhcpv6_msg, MarshalBinary) {
 
   uint8_t super_frame[65530] = {};
 
-  dhcpv6_neg.m_option_list.Add(100, super_frame, sizeof(super_frame));
+  dhcpv6_neg.m_option_list.Add(100, super_frame, 65530);
   msg = dhcpv6.MarshalBinary(length);
   EXPECT_FALSE(msg);
   EXPECT_FALSE(length);
