@@ -691,7 +691,7 @@ TEST(relay, client_packet_handler) {
 
 }
 
-MOCK_GLOBAL_FUNC6(recvfrom, ssize_t(int, void *, size_t, int, struct sockaddr *, socklen_t *));
+MOCK_GLOBAL_FUNC6(recvfrom, ssize_t(int, char *, size_t, int, struct sockaddr *, socklen_t *));
 
 TEST(relay, server_callback) {
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
@@ -707,7 +707,7 @@ TEST(relay, server_callback) {
   config.local_sock = -1;
 
    // same name to override static global variable
-  uint8_t server_recv_buffer[] = {
+  uint8_t server_recv_buffer[BUFFER_SIZE] = {
     0x0d, 0x00, 0x20, 0x01, 0x0d, 0xb8, 0x01, 0x5a,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x01, 0xfe, 0x80, 0x00, 0x00, 0x00, 0x00,
@@ -729,16 +729,16 @@ TEST(relay, server_callback) {
   auto msg_len = sizeof(server_recv_buffer);
 
   // cover buffer_sz <= 0
-  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(7).WillOnce(Return(0)).WillOnce(Return(2)).WillOnce(Return(0))
-                                                                   .WillOnce(Return(msg_len)).WillOnce(Return(0))
-                                                                   .WillOnce(Return(msg_len)).WillOnce(Return(0));
+  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(7).WillOnce(Return(0))
+    .WillOnce(Return(2)).WillOnce(Return(0))
+    .WillOnce(DoAll(SetArrayArgument<1>(server_recv_buffer, server_recv_buffer + BUFFER_SIZE), Return(msg_len))).WillOnce(Return(0))
+    .WillOnce(Return(msg_len)).WillOnce(Return(0));
   ASSERT_NO_THROW(server_callback(0, 0, &config));
   // cover 0 < buffer_sz < sizeof(struct dhcpv6_msg)
   ASSERT_NO_THROW(server_callback(0, 0, &config));
- 
+  // 
   ASSERT_NO_THROW(server_callback(0, 0, &config));
 
-  server_recv_buffer[0] = 0x0e;
   ASSERT_NO_THROW(server_callback(0, 0, &config));
 }
 
@@ -772,8 +772,8 @@ TEST(relay, client_callback) {
   auto msg_len = sizeof(client_recv_buffer);
   std::string vlan1000 = "Vlan1000";
   std::string vlan2000 = "Vlan2000";
-  char ethernet1[] = "Ethernet1";
-  char ethernet2[] = "Ethernet2";
+  char ethernet1[IF_NAMESIZE] = "Ethernet1";
+  char ethernet2[IF_NAMESIZE] = "Ethernet2";
 
   char ptr[20] = "vlan";
   vlans[vlan1000] = config;
@@ -788,8 +788,8 @@ TEST(relay, client_callback) {
                     .WillOnce(Return(msg_len)).WillOnce(Return(0));
 
   EXPECT_GLOBAL_CALL(if_indextoname, if_indextoname(_, _)).Times(3).WillOnce(Return(nullptr))
-                    .WillOnce(DoAll(SetArrayArgument<1>(ethernet1, ethernet1 + 9), Return(ptr)))
-                    .WillOnce(DoAll(SetArrayArgument<1>(ethernet2, ethernet2 + 9), Return(ptr)));
+                    .WillOnce(DoAll(SetArrayArgument<1>(ethernet1, ethernet1 + IF_NAMESIZE), Return(ptr)))
+                    .WillOnce(DoAll(SetArrayArgument<1>(ethernet2, ethernet2 + IF_NAMESIZE), Return(ptr)));
   // test buffer_sz <=0 early return
   ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
   // test buffer_sz > 0, if_indextoname == null early return
