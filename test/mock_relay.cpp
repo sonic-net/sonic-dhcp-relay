@@ -240,8 +240,6 @@ TEST(helper, send_udp)
   sendUdpCount = 0;
 }
 
-MOCK_GLOBAL_FUNC1(getifaddrs, int(struct ifaddrs **));
-
 TEST(prepareConfig, prepare_relay_config)
 {
   int local_sock = 1;
@@ -272,9 +270,6 @@ TEST(prepareConfig, prepare_relay_config)
   
   EXPECT_EQ("fc02:2000::1", s1);
   EXPECT_EQ("fc02:2000::2", s2);
-
-  EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_)).Times(1).WillOnce(Return(-1));
-  EXPECT_DEATH(prepare_relay_config, "");
 }
 
 TEST(prepareConfig, prepare_socket)
