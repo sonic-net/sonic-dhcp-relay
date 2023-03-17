@@ -769,25 +769,28 @@ TEST(relay, client_callback) {
     0x00, 0x00, 0x00, 0x19, 0x00, 0x0c, 0x27, 0xfe, 0x8f, 0x95, 0x00, 0x00, 0x0e, 0x10, 0x00, 0x00,
     0x15, 0x18
   };
-  auto msg_len = sizeof(client_recv_buffer); 
+  auto msg_len = sizeof(client_recv_buffer);
+  std::string vlan1000 = "Vlan1000";
+  std::string vlan2000 = "Vlan2000";
+  char ptr[20] = "vlan";
 
   // negative case testing
-  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(1).WillOnce(Return(0));
-  ASSERT_NO_THROW(client_callback(-1, 0, &config));
+  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(7)
+                    .WillOnce(Return(0))
+                    .WillOnce(Return(2)).WillOnce(Return(0))
+                    .WillOnce(Return(msg_len)).WillOnce(Return(0))
+                    .WillOnce(Return(msg_len)).WillOnce(Return(0));
 
-  EXPECT_GLOBAL_CALL(if_indextoname, if_indextoname(_, _)).Times(1).WillOnce(Return(nullptr));
-  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(2).WillOnce(Return(2)).WillOnce(Return(0));
+  EXPECT_GLOBAL_CALL(if_indextoname, if_indextoname(_, _)).Times(3).WillOnce(Return(nullptr))
+                    .WillOnce(DoAll(SetArrayArgument<1>(vlan2000.begin(), vlan2000.end()), Return(ptr)))
+                    .WillOnce(DoAll(SetArrayArgument<1>(vlan1000.begin(), vlan1000.end()), Return(ptr)));
+  // test buffer_sz <=0 early return
   ASSERT_NO_THROW(client_callback(-1, 0, &config));
-
-  std::string vlan2000 = "Vlan2000";
-  char *ptr;
-  EXPECT_GLOBAL_CALL(if_indextoname, if_indextoname(_, _)).Times(1).WillOnce(DoAll(SetArrayArgument<1>(vlan2000.begin(), vlan2000.end()), Return(ptr)));
-  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(2).WillOnce(Return(2)).WillOnce(Return(0));
+  // test buffer_sz > 0, if_indextoname == null early return
   ASSERT_NO_THROW(client_callback(-1, 0, &config));
-
-  std::string vlan1000 = "Vlan1000";
-  EXPECT_GLOBAL_CALL(if_indextoname, if_indextoname(_, _)).Times(1).WillOnce(DoAll(SetArrayArgument<1>(vlan1000.begin(), vlan1000.end()), Return(ptr)));
-  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(2).WillOnce(Return(msg_len)).WillOnce(Return(0));
+  // test normal msg but vlan not found
+  ASSERT_NO_THROW(client_callback(-1, 0, &config));
+  // test normal msg and vlan found 
   ASSERT_NO_THROW(client_callback(-1, 0, &config));
 }
 
@@ -999,7 +1002,7 @@ TEST(relay, loop_relay) {
   vlans_in_loop["Vlan2000"] = config;
   EXPECT_EQ(vlans_in_loop.size(), 2);
 
-  EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(2).WillOnce(Return(-1)).WillOnce(Return(-1));
+  EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(4);
   ASSERT_NO_THROW(loop_relay(vlans_in_loop));
 
   std::async(std::launch::async, [&] () {loop_relay(vlans_in_loop);}).wait_for(std::chrono::milliseconds{1000});
