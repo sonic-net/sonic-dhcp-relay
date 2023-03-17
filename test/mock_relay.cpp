@@ -240,6 +240,8 @@ TEST(helper, send_udp)
   sendUdpCount = 0;
 }
 
+MOCK_GLOBAL_FUNC1(getifaddrs, int(struct ifaddrs **));
+
 TEST(prepareConfig, prepare_relay_config)
 {
   int local_sock = 1;
@@ -270,6 +272,9 @@ TEST(prepareConfig, prepare_relay_config)
   
   EXPECT_EQ("fc02:2000::1", s1);
   EXPECT_EQ("fc02:2000::2", s2);
+
+  EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_)).Times(1).WillOnce(Return(-1));
+  EXPECT_DEATH(prepare_relay_config, "");
 }
 
 TEST(prepareConfig, prepare_socket)
@@ -343,6 +348,7 @@ TEST(relay, relay_client)
 
   struct relay_config config{};
   config.is_option_79 = true;
+  config.is_interface_id = true;
   std::vector<std::string> servers;
   servers.push_back("fc02:2000::1");
   servers.push_back("fc02:2000::2");
@@ -369,7 +375,14 @@ TEST(relay, relay_client)
   ip6_hdr ip_hdr;
   std::string s_addr = "2000::3";
 
-  relay_client(mock_sock, msg, msg_len, &ip_hdr, &ether_hdr, &config);
+  // invalid msg_len testing
+  ASSERT_NO_THROW(relay_client(mock_sock, msg, 2, &ip_hdr, &ether_hdr, &config));
+
+  // normal packet but with a super length
+  ASSERT_NO_THROW(relay_client(mock_sock, msg, 4294967295, &ip_hdr, &ether_hdr, &config));
+
+  // normal packet testing 
+  ASSERT_NO_THROW(relay_client(mock_sock, msg, msg_len, &ip_hdr, &ether_hdr, &config));
 
   EXPECT_EQ(last_used_sock, 124);
 
@@ -691,11 +704,11 @@ TEST(relay, server_callback) {
     0x40
   };
   auto msg_len = sizeof(server_recv_buffer);
-  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(2).WillOnce(Return(msg_len)).WillOnce(Return(0));
+  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, server_recv_buffer, _, _, _, _)).Times(2).WillOnce(Return(msg_len)).WillOnce(Return(0));
   server_callback(0, 0, &config);
 
   server_recv_buffer[0] = 0x0e;
-  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(2).WillOnce(Return(msg_len)).WillOnce(Return(0));
+  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, server_recv_buffer, _, _, _, _)).Times(2).WillOnce(Return(msg_len)).WillOnce(Return(0));
   server_callback(0, 0, &config);
 }
 
