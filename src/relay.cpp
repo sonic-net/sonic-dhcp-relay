@@ -164,7 +164,7 @@ uint8_t *RelayMsg::MarshalBinary(uint16_t &len) {
     auto opt = m_option_list.MarshalBinary();
     if (opt && !opt->empty()) {
         if (opt->size() + sizeof(dhcpv6_relay_msg) > BUFFER_SIZE) {
-            syslog(LOG_WARNING, "Failed to marshal relay msg, packet size %ld over limit\n",
+            syslog(LOG_WARNING, "Failed to marshal relay msg, packet size %lu over limit\n",
                    opt->size() + sizeof(dhcpv6_relay_msg));
             len = 0;
             return nullptr;
@@ -217,7 +217,7 @@ uint8_t *DHCPv6Msg::MarshalBinary(uint16_t &len) {
     auto opt = m_option_list.MarshalBinary();
     if (opt && !opt->empty()) {
         if (opt->size() + sizeof(dhcpv6_msg) > BUFFER_SIZE) {
-            syslog(LOG_WARNING, "Failed to marshal dhcpv6 msg, packet size %ld over limit\n",
+            syslog(LOG_WARNING, "Failed to marshal dhcpv6 msg, packet size %lu over limit\n",
                    opt->size() + sizeof(dhcpv6_msg));
             len = 0;
             return nullptr;
@@ -941,7 +941,7 @@ void server_callback(evutil_socket_t fd, short event, void *arg) {
         }
 
         if (buffer_sz < (int32_t)sizeof(struct dhcpv6_msg)) {
-            syslog(LOG_WARNING, "Invalid DHCPv6 packet length %ld, no space for dhcpv6 msg header\n", buffer_sz);
+            syslog(LOG_WARNING, "Invalid DHCPv6 packet length %zd, no space for dhcpv6 msg header\n", buffer_sz);
             continue;
         }
 
