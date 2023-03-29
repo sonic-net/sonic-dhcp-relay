@@ -917,9 +917,9 @@ void server_callback(evutil_socket_t fd, short event, void *arg) {
     sockaddr_in6 from;
     socklen_t len = sizeof(from);
     int32_t pkts_num = 0;
-    std::string counterVlan = counter_table;
 
     while (pkts_num++ < BATCH_SIZE) {
+        std::string counterVlan = counter_table;
         auto buffer_sz = recvfrom(config->local_sock, server_recv_buffer, BUFFER_SIZE, 0, (sockaddr *)&from, &len);
         if (buffer_sz <= 0) {
             if (errno != EAGAIN) {
