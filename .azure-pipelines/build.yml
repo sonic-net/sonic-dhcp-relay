@@ -84,8 +84,7 @@ jobs:
         artifact: sonic-swss-common
       ${{ else }}:
         artifact: sonic-swss-common.${{ parameters.arch }}
-      runVersion: 'specific'
-      runId: 128696
+      runVersion: 'latestFromBranch'
       runBranch: 'refs/heads/master'
       path: '$(Build.SourcesDirectory)/sonic-swss-common'
     displayName: "Download sonic swss common deb packages"
