@@ -1,7 +1,7 @@
 #include "mock_send.h"
 #include <cstring>
 
-uint8_t sender_buffer[4096];
+uint8_t sender_buffer[65535];
 int32_t valid_byte_count;
 int last_used_sock;
 sockaddr_in6 last_target;

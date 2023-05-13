@@ -9,12 +9,11 @@
 #include "gtest/gtest.h"
 #include "gmock/gmock.h"
 
-#include "MockRelay.h"
+#include "mock_relay.h"
+
+using namespace ::testing;
 
 bool dual_tor_sock = false;
-extern struct event_base *base;
-extern struct event *ev_sigint;
-extern struct event *ev_sigterm;
 
 static struct sock_filter ether_relay_filter[] = {
 
@@ -291,10 +290,8 @@ TEST(prepareConfig, prepare_socket)
   prepare_socket(local_sock, server_sock, config);
 
   EXPECT_GE(local_sock, 0);
-
   EXPECT_GE(server_sock, 0);
 }
-
 
 TEST(counter, initialize_counter)
 {
@@ -341,6 +338,7 @@ TEST(relay, relay_client)
 
   struct relay_config config{};
   config.is_option_79 = true;
+  config.is_interface_id = true;
   std::vector<std::string> servers;
   servers.push_back("fc02:2000::1");
   servers.push_back("fc02:2000::2");
@@ -367,7 +365,14 @@ TEST(relay, relay_client)
   ip6_hdr ip_hdr;
   std::string s_addr = "2000::3";
 
-  relay_client(mock_sock, msg, msg_len, &ip_hdr, &ether_hdr, &config);
+  // invalid msg_len testing
+  ASSERT_NO_THROW(relay_client(mock_sock, msg, 2, &ip_hdr, &ether_hdr, &config));
+
+  // packet with a super length > sizeof(msg)
+  EXPECT_DEATH(relay_client(mock_sock, msg, 65535, &ip_hdr, &ether_hdr, &config), "");
+
+  // normal packet testing 
+  ASSERT_NO_THROW(relay_client(mock_sock, msg, msg_len, &ip_hdr, &ether_hdr, &config));
 
   EXPECT_EQ(last_used_sock, 124);
 
@@ -443,7 +448,19 @@ TEST(relay, relay_relay_forw) {
   std::string s_addr = "2000::3";
   inet_pton(AF_INET6, s_addr.c_str(), &ip_hdr.ip6_src);
 
-  relay_relay_forw(mock_sock, msg, msg_len, &ip_hdr, &config);
+  // msg with hop count > HOP_LIMIT
+  auto hop = msg[1];
+  msg[1] = 65;
+  ASSERT_NO_THROW(relay_relay_forw(mock_sock, msg, msg_len, &ip_hdr, &config));
+  msg[1] = hop;
+
+  // super frame over size limit for secondary relay
+  uint8_t super_frame[BUFFER_SIZE] = {};
+  ::memcpy(super_frame, msg, msg_len);
+  ASSERT_NO_THROW(relay_relay_forw(mock_sock, super_frame, BUFFER_SIZE, &ip_hdr, &config));
+
+  // normal packet
+  ASSERT_NO_THROW(relay_relay_forw(mock_sock, msg, msg_len, &ip_hdr, &config));
 
   EXPECT_EQ(last_used_sock, 125);
 
@@ -483,7 +500,7 @@ TEST(relay, relay_relay_reply)
       0x02, 0x00, 0x0e, 0x00, 0x01, 0x00, 0x01, 0x25,
       0x3a, 0x32, 0x33, 0x50, 0xe5, 0x49, 0x50, 0x9e,
       0x40
-  }; 
+  };
   int32_t msg_len = sizeof(msg);
 
   struct relay_config config{};
@@ -507,7 +524,34 @@ TEST(relay, relay_relay_reply)
 
   prepare_relay_config(config, local_sock, filter);
 
-  relay_relay_reply(mock_sock, msg, msg_len, &config);
+  // invalid message length
+  ASSERT_NO_THROW(relay_relay_reply(mock_sock, msg, 2, &config));
+
+  // invalid relay msg, without OPTION_RELAY_MSG
+   uint8_t invalid_msg[] = { 
+      0x0d, 0x00, 0x20, 0x01, 0x0d, 0xb8, 0x01, 0x5a,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x01, 0xfe, 0x80, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x01, 0x00, 0x12, 0x00, 0x03, 0x47, 0x69,
+      0x32, 0x00, 0x10, 0x00, 0x54, 0x07, 0x4f, 0x6d,
+      0x04, 0x00, 0x03, 0x00, 0x28, 0xb0, 0x12, 0xe8,
+      0xb4, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x05, 0x00, 0x18, 0x20, 0x01, 0x0d,
+      0xb8, 0x01, 0x5a, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x01, 0x78, 0x00, 0x00, 0x1c,
+      0x20, 0x00, 0x00, 0x1d, 0x4c, 0x00, 0x01, 0x00,
+      0x0e, 0x00, 0x01, 0x00, 0x01, 0x25, 0x3a, 0x37,
+      0xb9, 0x5a, 0xc6, 0xb0, 0x12, 0xe8, 0xb4, 0x00,
+      0x02, 0x00, 0x0e, 0x00, 0x01, 0x00, 0x01, 0x25,
+      0x3a, 0x32, 0x33, 0x50, 0xe5, 0x49, 0x50, 0x9e,
+      0x40
+  };
+  ASSERT_NO_THROW(relay_relay_reply(mock_sock, invalid_msg, msg_len, &config));
+
+
+  // normal message
+  ASSERT_NO_THROW(relay_relay_reply(mock_sock, msg, msg_len, &config));
 
   EXPECT_EQ(last_used_sock, 123);
 
@@ -547,27 +591,31 @@ TEST(relay, signal_init) {
   EXPECT_NE((uintptr_t)ev_sigterm, NULL);
 }
 
+MOCK_GLOBAL_FUNC1(event_base_dispatch, int(struct event_base *));
+MOCK_GLOBAL_FUNC2(event_add, int(struct event *, const struct timeval *));
+
 TEST(relay, signal_start) {
-  signal_init();
-  EXPECT_NE((uintptr_t)ev_sigint, NULL);
-  EXPECT_NE((uintptr_t)ev_sigterm, NULL);
-  signal_start();
+  EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(5)
+                    .WillOnce(Return(-1))
+                    .WillOnce(Return(0)).WillOnce(Return(-1))
+                    .WillOnce(Return(0)).WillOnce(Return(0));
+  EXPECT_EQ(signal_start(), -1);
+  EXPECT_EQ(signal_start(), -1);
+  EXPECT_GLOBAL_CALL(event_base_dispatch, event_base_dispatch(_)).Times(1).WillOnce(Return(-1));
+  EXPECT_EQ(signal_start(), 0);
 }
 
+MOCK_GLOBAL_FUNC2(event_base_loopexit, int(struct event_base *, const struct timeval *));
+
 TEST(relay, signal_callback) {
-  signal_callback(1, 1, &base);
+  ASSERT_NO_THROW(signal_callback(1, 1, &base));
+  EXPECT_GLOBAL_CALL(event_base_loopexit, event_base_loopexit(_, _));
+  signal_callback(SIGTERM, 1, &base);
 }
 
 TEST(relay, dhcp6relay_stop) {
-  int filter = 1;
-  std::unordered_map<std::string, struct relay_config> vlans;
-  base = event_base_new();
-  struct event* event = event_new(base, filter, EV_READ|EV_PERSIST, client_callback,
-                                  reinterpret_cast<void *>(&vlans));
-  dhcp6relay_stop();
-  event_free(event);
-  event_base_free(base);
-  base = NULL;
+  EXPECT_GLOBAL_CALL(event_base_loopexit, event_base_loopexit(_, _));
+  ASSERT_NO_THROW(dhcp6relay_stop());
 }
 
 TEST(relay, update_vlan_mapping) {
@@ -618,18 +666,44 @@ TEST(relay, client_packet_handler) {
     0x15, 0x18
   };
 
-  try {
-    // invalid packet length
-    client_packet_handler(client_raw_solicit, 4, &config, ifname);
+  uint8_t client_raw_solicit_with_externsion[] = {
+    0x33, 0x33, 0x00, 0x01, 0x00, 0x02, 0x08, 0x00, 0x27, 0xfe, 0x8f, 0x95, 0x86, 0xdd, 0x60, 0x00,
+    0x00, 0x00, 0x00, 0x44, 0x2c, 0x01, 0xfe, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0a, 0x00,
+    0x27, 0xff, 0xfe, 0xfe, 0x8f, 0x95, 0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x02, 0x11, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03,
+    0x02, 0x22, 0x02, 0x23, 0x00, 0x3c, 0xad, 0x08, 0x01, 0x10,
+    0x08, 0x74, 0x00, 0x01, 0x00, 0x0e, 0x00, 0x01, 0x00, 0x01, 0x1c, 0x39, 0xcf, 0x88, 0x08, 0x00,
+    0x27, 0xfe, 0x8f, 0x95, 0x00, 0x06, 0x00, 0x04, 0x00, 0x17, 0x00, 0x18, 0x00, 0x08, 0x00, 0x02,
+    0x00, 0x00, 0x00, 0x19, 0x00, 0x0c, 0x27, 0xfe, 0x8f, 0x95, 0x00, 0x00, 0x0e, 0x10, 0x00, 0x00,
+    0x15, 0x18
+  };
+  uint8_t non_udp_with_externsion[] = {
+    0x33, 0x33, 0x00, 0x01, 0x00, 0x02, 0x08, 0x00, 0x27, 0xfe, 0x8f, 0x95, 0x86, 0xdd, 0x60, 0x00,
+    0x00, 0x00, 0x00, 0x44, 0x2c, 0x01, 0xfe, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0a, 0x00,
+    0x27, 0xff, 0xfe, 0xfe, 0x8f, 0x95, 0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x02, 
+    0x2c, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03,
+    0x11, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03,
+    0x02, 0x22, 0x02, 0x23, 0x00, 0x3c, 0xad, 0x08, 0x01, 0x10,
+    0x08, 0x74, 0x00, 0x01, 0x00, 0x0e, 0x00, 0x01, 0x00, 0x01, 0x1c, 0x39, 0xcf, 0x88, 0x08, 0x00,
+    0x27, 0xfe, 0x8f, 0x95, 0x00, 0x06, 0x00, 0x04, 0x00, 0x17, 0x00, 0x18, 0x00, 0x08, 0x00, 0x02,
+    0x00, 0x00, 0x00, 0x19, 0x00, 0x0c, 0x27, 0xfe, 0x8f, 0x95, 0x00, 0x00, 0x0e, 0x10, 0x00, 0x00,
+    0x15, 0x18
+  };
 
-    client_packet_handler(client_raw_solicit, sizeof(client_raw_solicit), &config, ifname);
+  // invalid packet length
+  ASSERT_NO_THROW(client_packet_handler(client_raw_solicit, 4, &config, ifname));
+
+  ASSERT_NO_THROW(client_packet_handler(client_raw_solicit, sizeof(client_raw_solicit), &config, ifname));
   
-    client_packet_handler(client_raw_solicit_invalid_type, sizeof(client_raw_solicit_invalid_type), &config, ifname);
-  }
-  catch (const std::exception& e) {
-    EXPECT_TRUE(false);
-  }
+  ASSERT_NO_THROW(client_packet_handler(client_raw_solicit_invalid_type, sizeof(client_raw_solicit_invalid_type), &config, ifname));
+
+  ASSERT_NO_THROW(client_packet_handler(client_raw_solicit_with_externsion, sizeof(client_raw_solicit_with_externsion), &config, ifname));
+
+  ASSERT_NO_THROW(client_packet_handler(non_udp_with_externsion, sizeof(non_udp_with_externsion), &config, ifname));
 }
+
+MOCK_GLOBAL_FUNC6(recvfrom, ssize_t(int, void *, size_t, int, struct sockaddr *, socklen_t *));
 
 TEST(relay, server_callback) {
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
@@ -643,18 +717,27 @@ TEST(relay, server_callback) {
   config.interface = "Vlan1000";
   config.state_db = state_db;
   config.local_sock = -1;
+  // simulator normal dhcpv6 packet length
+  ssize_t msg_len = 129;
 
-  // negative case testing
-  try {
-    server_callback(0, 0, &config);
-  }
-  catch (const std::exception& e) {
-    EXPECT_TRUE(false);
-  }
+  // cover buffer_sz <= 0
+  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(5).WillOnce(Return(0))
+    .WillOnce(Return(2)).WillOnce(Return(0))
+    .WillOnce(Return(msg_len)).WillOnce(Return(0));
+  ASSERT_NO_THROW(server_callback(0, 0, &config));
+  // cover 0 < buffer_sz < sizeof(struct dhcpv6_msg)
+  ASSERT_NO_THROW(server_callback(0, 0, &config));
+
+  ASSERT_NO_THROW(server_callback(0, 0, &config));
 }
+
+MOCK_GLOBAL_FUNC2(if_indextoname, char*(unsigned int, char *));
 
 TEST(relay, client_callback) {
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+  std::shared_ptr<swss::Table> mux_table = std::make_shared<swss::Table> (
+        state_db.get(), "HW_MUX_CABLE_TABLE"
+  );
   initialize_counter(state_db, "DHCPv6_COUNTER_TABLE|Vlan1000");
 
   struct relay_config config{};
@@ -664,34 +747,61 @@ TEST(relay, client_callback) {
   config.servers.push_back("fc02:2000::2");
   config.interface = "Vlan1000";
   config.state_db = state_db;
+  config.mux_table = mux_table;
   config.local_sock = -1;
 
+  std::unordered_map<std::string, struct relay_config> vlans;
+  // mock normal dhcpv6 packet length
+  ssize_t msg_len = 114;
+  std::string vlan1000 = "Vlan1000";
+  std::string vlan2000 = "Vlan2000";
+  char ethernet1[IF_NAMESIZE] = "Ethernet1";
+  char ethernet2[IF_NAMESIZE] = "Ethernet2";
+  char ethernet3[IF_NAMESIZE] = "Ethernet3";
+
+  char ptr[20] = "vlan";
+  vlans[vlan1000] = config;
+  vlan_map["Ethernet1"] = vlan1000;
+  vlan_map["Ethernet2"] = vlan2000;
+
   // negative case testing
-  try {
-    client_callback(-1, 0, &config);
-  }
-  catch (const std::exception& e) {
-    EXPECT_TRUE(false);
-  }
+  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(11)
+                    .WillOnce(Return(0))
+                    .WillOnce(Return(2)).WillOnce(Return(0))
+                    .WillOnce(Return(msg_len)).WillOnce(Return(0))
+                    .WillOnce(Return(msg_len)).WillOnce(Return(0))
+                    .WillOnce(Return(msg_len)).WillOnce(Return(0))
+                    .WillOnce(Return(msg_len)).WillOnce(Return(0));
+
+  EXPECT_GLOBAL_CALL(if_indextoname, if_indextoname(_, _)).Times(5).WillOnce(Return(nullptr))
+                    .WillOnce(DoAll(SetArrayArgument<1>(ethernet1, ethernet1 + IF_NAMESIZE), Return(ptr)))
+                    .WillOnce(DoAll(SetArrayArgument<1>(ethernet2, ethernet2 + IF_NAMESIZE), Return(ptr)))
+                    .WillOnce(DoAll(SetArrayArgument<1>(ethernet1, ethernet1 + IF_NAMESIZE), Return(ptr)))
+                    .WillOnce(DoAll(SetArrayArgument<1>(ethernet3, ethernet3 + IF_NAMESIZE), Return(ptr)));
+  // test buffer_sz <=0 early return
+  ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
+  // test buffer_sz > 0, if_indextoname == null early return
+  ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
+  // test normal msg but vlan not found
+  ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
+  // test normal msg and vlan found 
+  ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
+
+  dual_tor_sock = true;
+  // test normal msg and vlan found + dual tor
+  ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
+  dual_tor_sock = false;
+  
+  // normal msg but interface mapping missing
+  ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
 }
 
-TEST(relay, shutdown) {
+TEST(relay, shutdown_relay) {
   signal_init();
   EXPECT_NE((uintptr_t)ev_sigint, NULL);
   EXPECT_NE((uintptr_t)ev_sigterm, NULL);
 
-  try {
-    shutdown();
-  }
-  catch (const std::exception& e) {
-    EXPECT_TRUE(false);
-  }
-}
-
-TEST(relay, initialize_swss) {
-  std::unordered_map<std::string, relay_config> vlans;
-  initialize_swss(vlans);
-  EXPECT_FALSE(vlans.size());
+  ASSERT_NO_THROW(shutdown_relay());
 }
 
 TEST(options, Add) {
@@ -848,6 +958,18 @@ TEST(dhcpv6_msg, MarshalBinary) {
   msg = dhcpv6.MarshalBinary(length);
   EXPECT_TRUE(msg);
   EXPECT_EQ(length, sizeof(solicit));
+
+  // negative test for marshal error
+  class DHCPv6Msg dhcpv6_neg;
+  result = dhcpv6_neg.UnmarshalBinary(solicit, sizeof(solicit));
+  EXPECT_TRUE(result);
+
+  uint8_t super_frame[65530] = {};
+
+  dhcpv6_neg.m_option_list.Add(100, super_frame, 65530);
+  msg = dhcpv6_neg.MarshalBinary(length);
+  EXPECT_FALSE(msg);
+  EXPECT_FALSE(length);
 }
 
 TEST(dhcpv6_msg, UnmarshalBinary) {
@@ -880,3 +1002,19 @@ TEST(dhcpv6_msg, UnmarshalBinary) {
   EXPECT_EQ(dhcpv6.m_msg_hdr.msg_type, 1);
 }
 
+TEST(relay, loop_relay) {
+  std::unordered_map<std::string, relay_config> vlans_in_loop;
+  std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+  struct relay_config config{
+    .state_db = state_db,
+    .interface = "Vlan1000",
+    .is_option_79 = true
+  };
+  vlans_in_loop["Vlan1000"] = config;
+  EXPECT_EQ(vlans_in_loop.size(), 1);
+
+  EXPECT_GLOBAL_CALL(event_base_dispatch, event_base_dispatch(_)).Times(1).WillOnce(Return(-1));
+  EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(AtLeast(2)).WillOnce(Return(0))
+                                                                     .WillOnce(Return(0));
+  ASSERT_NO_THROW(loop_relay(vlans_in_loop));
+}

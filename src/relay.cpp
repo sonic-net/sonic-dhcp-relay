@@ -9,7 +9,7 @@
 #include "configdb.h"
 #include "sonicv2connector.h"
 #include "dbconnector.h" 
-#include "configInterface.h"
+#include "config_interface.h"
 
 struct event *listen_event;
 struct event *server_listen_event;
@@ -163,6 +163,12 @@ uint8_t *RelayMsg::MarshalBinary(uint16_t &len) {
 
     auto opt = m_option_list.MarshalBinary();
     if (opt && !opt->empty()) {
+        if (opt->size() + sizeof(dhcpv6_relay_msg) > BUFFER_SIZE) {
+            syslog(LOG_WARNING, "Failed to marshal relay msg, packet size %lu over limit\n",
+                   opt->size() + sizeof(dhcpv6_relay_msg));
+            len = 0;
+            return nullptr;
+        }
         std::memcpy(ptr + sizeof(dhcpv6_relay_msg), opt->data(), opt->size());
         len += opt->size();
     }
@@ -210,6 +216,12 @@ uint8_t *DHCPv6Msg::MarshalBinary(uint16_t &len) {
 
     auto opt = m_option_list.MarshalBinary();
     if (opt && !opt->empty()) {
+        if (opt->size() + sizeof(dhcpv6_msg) > BUFFER_SIZE) {
+            syslog(LOG_WARNING, "Failed to marshal dhcpv6 msg, packet size %lu over limit\n",
+                   opt->size() + sizeof(dhcpv6_msg));
+            len = 0;
+            return nullptr;
+        }
         std::memcpy(ptr + sizeof(dhcpv6_msg), opt->data(), opt->size());
         len += opt->size();
     }
@@ -637,7 +649,7 @@ void relay_client(int sock, const uint8_t *msg, uint16_t len, const ip6_hdr *ip_
 
     uint16_t relay_pkt_len = 0;
     auto relay_pkt = relay.MarshalBinary(relay_pkt_len);
-    if (!relay_pkt_len) {
+    if (!relay_pkt_len || !relay_pkt) {
         char addr_str[INET6_ADDRSTRLEN];
         inet_ntop(AF_INET6, &ip_hdr->ip6_src, addr_str, INET6_ADDRSTRLEN);
         syslog(LOG_ERR, "Relay-forward marshal error, client dhcpv6 from %s", addr_str);
@@ -683,10 +695,10 @@ void relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *
 
     /* add relay-msg option */
     relay.m_option_list.Add(OPTION_RELAY_MSG, msg, len);
-    
+
     uint16_t send_buffer_len = 0;
     auto send_buffer = relay.MarshalBinary(send_buffer_len);
-    if (!send_buffer_len) {
+    if (!send_buffer_len || !send_buffer) {
         char addr_str[INET6_ADDRSTRLEN];
         inet_ntop(AF_INET6, &ip_hdr->ip6_src, addr_str, INET6_ADDRSTRLEN);
         syslog(LOG_ERR, "Marshal relay-forward message from %s error", addr_str);
@@ -929,7 +941,7 @@ void server_callback(evutil_socket_t fd, short event, void *arg) {
         }
 
         if (buffer_sz < (int32_t)sizeof(struct dhcpv6_msg)) {
-            syslog(LOG_WARNING, "Invalid DHCPv6 packet length %ld, no space for dhcpv6 msg header\n", buffer_sz);
+            syslog(LOG_WARNING, "Invalid DHCPv6 packet length %zd, no space for dhcpv6 msg header\n", buffer_sz);
             continue;
         }
 
@@ -955,7 +967,7 @@ void server_callback(evutil_socket_t fd, short event, void *arg) {
  */
 int signal_init() {
     int rv = -1;
-     do {
+    do {
         ev_sigint = evsignal_new(base, SIGINT, signal_callback, base);
         if (ev_sigint == NULL) {
             syslog(LOG_ERR, "Could not create SIGINT libevent signal\n");
@@ -1043,13 +1055,14 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
     base = event_base_new();
     if(base == NULL) {
         syslog(LOG_ERR, "libevent: Failed to create base\n");
+        exit(EXIT_FAILURE);
     }
 
     std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
     std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
     std::shared_ptr<swss::Table> mStateDbMuxTablePtr = std::make_shared<swss::Table> (
-            state_db.get(), "HW_MUX_CABLE_TABLE"
-        );
+        state_db.get(), "HW_MUX_CABLE_TABLE"
+    );
 
     auto filter = sock_open(&ether_relay_fprog);
     if (filter != -1) {
@@ -1102,23 +1115,23 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
         syslog(LOG_INFO, "libevent: Add server listen socket for %s\n", vlan.first.c_str());
     }
 
-    if((signal_init() == 0) && signal_start() == 0) {
-        shutdown();
-        for(std::size_t i = 0; i<sockets.size(); i++) {
+    if(signal_init() == 0 && signal_start() == 0) {
+        shutdown_relay();
+        for(std::size_t i = 0; i < sockets.size(); i++) {
             close(sockets.at(i));
         }
     }
 }
 
 /**
- * @code shutdown();
+ * @code shutdown_relay();
  *
  * @brief free signals and terminate threads
  */
-void shutdown() {
+void shutdown_relay() {
     event_del(ev_sigint);
     event_del(ev_sigterm);
-    event_free(ev_sigint); 
+    event_free(ev_sigint);
     event_free(ev_sigterm);
     event_base_free(base);
     deinitialize_swss();

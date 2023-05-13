@@ -53,7 +53,13 @@ jobs:
     displayName: "Install dependencies"
   - checkout: self
     clean: true
-    submodules: true
+    submodules: recursive
+  - script: |
+      git submodule foreach --recursive 'git clean -xfdf || true'
+      git submodule foreach --recursive 'git reset --hard || true'
+      git submodule foreach --recursive 'git remote update || true'
+      git submodule update --init --recursive
+    displayName: 'Reset submodules'
   - task: DownloadPipelineArtifact@2
     inputs:
       source: specific

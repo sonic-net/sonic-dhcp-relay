@@ -37,16 +37,6 @@ void deinitialize_swss();
  * @return              none
  */
 void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic);
-/**
- * @code                void swssNotification test
- * 
- * @brief               main thread for handling SWSS notification
- *
- * @param test          swssNotification that includes list of vlans/argument config that contains strings of server and option
- *
- * @return              none
- */
-void handleSwssNotification(swssNotification test);
 
 /**
  * @code                    void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::unordered_map<std::string, relay_config> &vlans)
@@ -71,12 +61,3 @@ void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::un
  * @return                  none
  */
 void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries, std::unordered_map<std::string, relay_config> &vlans);
-
-/**
-*@code      stopSwssNotificationPoll
-*
-*@brief     stop SWSS listening thread
-*
-*@return    none
-*/
-void stopSwssNotificationPoll();
