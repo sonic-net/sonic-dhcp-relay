@@ -296,7 +296,8 @@ TEST(prepareConfig, prepare_socket)
 TEST(counter, initialize_counter)
 {
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
-  initialize_counter(state_db, "DHCPv6_COUNTER_TABLE|Vlan1000");
+  std::string ifname = "Vlan1000";
+  initialize_counter(state_db, ifname);
   EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Unknown"));
   EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Solicit"));
   EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Advertise"));
@@ -315,7 +316,8 @@ TEST(counter, increase_counter)
 {
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   state_db->hset("DHCPv6_COUNTER_TABLE|Vlan1000", "Solicit", "0");
-  increase_counter(state_db, "DHCPv6_COUNTER_TABLE|Vlan1000", 1);
+  std::string ifname = "Vlan1000";
+  increase_counter(state_db, ifname, 1);
   std::shared_ptr<std::string> output = state_db->hget("DHCPv6_COUNTER_TABLE|Vlan1000", "Solicit");
   std::string *ptr = output.get();
   EXPECT_EQ(*ptr, "1");
@@ -632,7 +634,8 @@ TEST(relay, update_vlan_mapping) {
 
 TEST(relay, client_packet_handler) {
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
-  initialize_counter(state_db, "DHCPv6_COUNTER_TABLE|Vlan1000");
+  std::string vlan_name = "Vlan1000";
+  initialize_counter(state_db, vlan_name);
 
   struct relay_config config{};
   config.is_option_79 = true;
@@ -707,7 +710,8 @@ MOCK_GLOBAL_FUNC6(recvfrom, ssize_t(int, void *, size_t, int, struct sockaddr *,
 
 TEST(relay, server_callback) {
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
-  initialize_counter(state_db, "DHCPv6_COUNTER_TABLE|Vlan1000");
+  std::string ifname = "Vlan1000";
+  initialize_counter(state_db, ifname);
 
   struct relay_config config{};
   config.is_option_79 = true;
@@ -738,7 +742,8 @@ TEST(relay, client_callback) {
   std::shared_ptr<swss::Table> mux_table = std::make_shared<swss::Table> (
         state_db.get(), "HW_MUX_CABLE_TABLE"
   );
-  initialize_counter(state_db, "DHCPv6_COUNTER_TABLE|Vlan1000");
+  std::string ifname = "Vlan1000";
+  initialize_counter(state_db, ifname);
 
   struct relay_config config{};
   config.is_option_79 = true;

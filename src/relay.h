@@ -288,29 +288,29 @@ void signal_callback(evutil_socket_t fd, short event, void *arg);
 void shutdown_relay();
 
 /**
- * @code                void initialize_counter(std::shared_ptr<swss::Table> state_db, std::string counterVlan);
+ * @code                void initialize_counter(std::shared_ptr<swss::Table> state_db, std::string &ifname);
  *
- * @brief               initialize the counter by each Vlan
+ * @brief               initialize the counter for interface
  *
  * @param std::shared_ptr<swss::Table> state_db     state_db connector
- * @param counterVlan   counter table with interface name
+ * @param ifname        interface name
  * 
  * @return              none
  */
-void initialize_counter(std::shared_ptr<swss::DBConnector> state_db, std::string counterVlan);
+void initialize_counter(std::shared_ptr<swss::DBConnector> state_db, std::string &ifname);
 
 /**
- * @code                void increase_counter(shared_ptr<swss::DBConnector>, std::string CounterVlan, uint8_t msg_type);
+ * @code                void increase_counter(shared_ptr<swss::DBConnector>, std::string ifname, uint8_t msg_type);
  *
  * @brief               increase the counter in state_db with count of each DHCPv6 message type
  *
  * @param shared_ptr<swss::DBConnector> state_db     state_db connector
- * @param counterVlan   counter table with interface name
+ * @param ifname        interface name
  * @param msg_type      dhcpv6 message type to be increased in counter
  * 
  * @return              none
  */
-void increase_counter(std::shared_ptr<swss::DBConnector> state_db, std::string counterVlan, uint8_t msg_type);
+void increase_counter(std::shared_ptr<swss::DBConnector> state_db, std::string &ifname, uint8_t msg_type);
 
 /* Helper functions */
 
