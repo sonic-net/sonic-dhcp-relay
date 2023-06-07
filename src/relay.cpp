@@ -14,8 +14,6 @@
 
 #define BUFFER_SIZE 9200
 
-struct event *listen_event;
-struct event *server_listen_event;
 struct event_base *base;
 struct event *ev_sigint;
 struct event *ev_sigterm;
@@ -70,6 +68,9 @@ std::map<int, std::string> counterMap = {{DHCPv6_MESSAGE_TYPE_UNKNOWN, "Unknown"
 
 /* interface to vlan mapping */
 std::unordered_map<std::string, std::string> vlan_map;
+
+/* ipv6 address to vlan name mapping */
+std::unordered_map<sockaddr_in6, std::string> addr_vlan_map;
 
 /**
  * @code                initialize_counter(std::shared_ptr<swss::DBConnector> state_db, std::string counterVlan);
@@ -269,6 +270,9 @@ int sock_open(const struct sock_fprog *fprog)
         return -1;
     }
 
+    evutil_make_listen_socket_reuseable(s);
+    evutil_make_socket_nonblocking(s);
+
     struct sockaddr_ll sll = {
         .sll_family = AF_PACKET,
         .sll_protocol = htons(ETH_P_ALL),
@@ -306,22 +310,22 @@ int sock_open(const struct sock_fprog *fprog)
 }
 
 /**
- * @code                        prepare_relay_config(relay_config &interface_config, int local_sock, int filter);
+ * @code                        prepare_relay_config(relay_config &interface_config, int gua_sock, int filter);
  * 
  * @brief                       prepare for specified relay interface config: server and link address
  *
  * @param interface_config      pointer to relay config to be prepared
- * @param local_sock            L3 socket used for relaying messages
+ * @param gua_sock              L3 socket used for relaying messages
  * @param filter                socket attached with filter
  *
  * @return                      none
  */
-void prepare_relay_config(relay_config &interface_config, int local_sock, int filter) {
+void prepare_relay_config(relay_config &interface_config, int gua_sock, int filter) {
     struct ifaddrs *ifa, *ifa_tmp;
     sockaddr_in6 non_link_local;
     sockaddr_in6 link_local;
     
-    interface_config.local_sock = local_sock; 
+    interface_config.gua_sock = gua_sock; 
     interface_config.filter = filter; 
 
     for(auto server: interface_config.servers) {
@@ -360,38 +364,91 @@ void prepare_relay_config(relay_config &interface_config, int local_sock, int fi
     
     if(!IN6_IS_ADDR_LINKLOCAL(&non_link_local.sin6_addr)) {
         interface_config.link_address = non_link_local;
+        addr_vlan_map[non_link_local] = interface_config.interface;
     }
     else {
         interface_config.link_address = link_local;
+        addr_vlan_map[link_local] = interface_config.interface;
     }
 }
 
-/**
- * @code                prepare_socket(int &local_sock, int &server_sock, relay_config &config);
- * 
- * @brief               prepare L3 socket for sending
- *
- * @param local_sock    pointer to socket binded to global address for relaying client message to server and listening for server message
- * @param server_sock       pointer to socket binded to link_local address for relaying server message to client
- *
- * @return              none
- */
-void prepare_socket(int &local_sock, int &server_sock, relay_config &config) {
+int prepare_lo_socket(const char *lo) {
     struct ifaddrs *ifa, *ifa_tmp;
-    sockaddr_in6 addr = {0};
-    sockaddr_in6 ll_addr = {0};
+    sockaddr_in6 gua = {0};
+    int lo_sock = -1;
 
-    if ((local_sock = socket(AF_INET6, SOCK_DGRAM, 0)) == -1) {
-        syslog(LOG_ERR, "socket: Failed to create socket on interface %s\n", config.interface.c_str());
+    if ((lo_sock = socket(AF_INET6, SOCK_DGRAM, 0)) == -1) {
+        syslog(LOG_ERR, "socket: Failed to create gua socket on interface %s\n", lo);
+        return -1;
     }
 
-    if ((server_sock = socket(AF_INET6, SOCK_DGRAM, 0)) == -1) {
-        syslog(LOG_ERR, "socket: Failed to create socket on interface %s\n", config.interface.c_str());
+    evutil_make_listen_socket_reuseable(lo_sock);
+    evutil_make_socket_nonblocking(lo_sock);
+
+    if (getifaddrs(&ifa) == -1) {
+        syslog(LOG_WARNING, "getifaddrs: Unable to get network interfaces with %s\n", strerror(errno));
     }
+    bool bind_gua = false;
+    ifa_tmp = ifa;
+    while (ifa_tmp) {
+        if (ifa_tmp->ifa_addr && (ifa_tmp->ifa_addr->sa_family == AF_INET6)) {
+            if (strcmp(ifa_tmp->ifa_name, lo) == 0)) {
+                struct sockaddr_in6 *in6 = (struct sockaddr_in6*) ifa_tmp->ifa_addr;
+                if (!IN6_IS_ADDR_LINKLOCAL(&in6->sin6_addr)) {
+                    bind_gua = true;
+                    gua = *in6;
+                    gua->sin6_family = AF_INET6;
+                    gua->sin6_port = htons(RELAY_PORT);
+                    break;
+                }
+            }
+        }
+        ifa_tmp = ifa_tmp->ifa_next;
+    }
+    freeifaddrs(ifa);
+
+    if (!bind_gua || bind(lo_sock, (sockaddr *)&gua, sizeof(gua)) == -1) {
+        syslog(LOG_ERR, "bind: Failed to bind socket on interface %s with %s\n", lo, strerror(errno));
+        (void) close(lo_sock);
+        return -1;
+    }
+
+    return lo_sock;
+}
+
+/**
+ * @code            prepare_vlan_sockets(int &gua_sock, int &lla_sock, relay_config &config);
+ * 
+ * @brief           prepare vlan l3 socket for sending
+ *
+ * @param gua_sock  socket binded to global address for relaying client message to server and listening for server message
+ * @param lla_sock  socket binded to link_local address for relaying server message to client
+ *
+ * @return          int
+ */
+int prepare_vlan_sockets(int &gua_sock, int &lla_sock, relay_config &config) {
+    struct ifaddrs *ifa, *ifa_tmp;
+    sockaddr_in6 gua = {0}, lla = {0};
+
+    if ((gua_sock = socket(AF_INET6, SOCK_DGRAM, 0)) == -1) {
+        syslog(LOG_ERR, "socket: Failed to create gua socket on interface %s\n", config.interface.c_str());
+        return -1;
+    }
+
+    if ((lla_sock = socket(AF_INET6, SOCK_DGRAM, 0)) == -1) {
+        syslog(LOG_ERR, "socket: Failed to create lla socket on interface %s\n", config.interface.c_str());
+        close(gua_sock);
+        return -1;
+    }
+
+    evutil_make_listen_socket_reuseable(gua_sock);
+    evutil_make_socket_nonblocking(gua_sock);
+    evutil_make_listen_socket_reuseable(lla_sock);
+    evutil_make_socket_nonblocking(lla_sock);
 
     int retry = 0;
-    bool bind_addr = false;
-    bool bind_ll_addr = false;
+    bool bind_gua = false;
+    bool bind_lla = false;
     do {
         if (getifaddrs(&ifa) == -1) {
             syslog(LOG_WARNING, "getifaddrs: Unable to get network interfaces with %s\n", strerror(errno));
@@ -399,19 +456,20 @@ void prepare_socket(int &local_sock, int &server_sock, relay_config &config) {
         else {
             ifa_tmp = ifa;
             while (ifa_tmp) {
-                if (ifa_tmp->ifa_addr && (ifa_tmp->ifa_addr->sa_family == AF_INET6) && (strcmp(ifa_tmp->ifa_name, config.interface.c_str()) == 0)) {
-                    struct sockaddr_in6 *in6 = (struct sockaddr_in6*) ifa_tmp->ifa_addr;
-                    if(!IN6_IS_ADDR_LINKLOCAL(&in6->sin6_addr)) {
-                        bind_addr = true;
-                        in6->sin6_family = AF_INET6;
-                        in6->sin6_port = htons(RELAY_PORT);
-                        addr = *in6;
-                    }
-                    if(IN6_IS_ADDR_LINKLOCAL(&in6->sin6_addr)) {
-                        bind_ll_addr = true;
-                        in6->sin6_family = AF_INET6;
-                        in6->sin6_port = htons(RELAY_PORT);
-                        ll_addr = *in6;
+                if (ifa_tmp->ifa_addr && (ifa_tmp->ifa_addr->sa_family == AF_INET6)) {
+                    if (strcmp(ifa_tmp->ifa_name, config.interface.c_str()) == 0)) {
+                        struct sockaddr_in6 *in6 = (struct sockaddr_in6*) ifa_tmp->ifa_addr;
+                        if (!IN6_IS_ADDR_LINKLOCAL(&in6->sin6_addr)) {
+                            bind_gua = true;
+                            gua = *in6;
+                            gua->sin6_family = AF_INET6;
+                            gua->sin6_port = htons(RELAY_PORT);
+                        } else {
+                            bind_lla = true;
+                            lla = *in6;
+                            lla->sin6_family = AF_INET6;
+                            lla->sin6_port = htons(RELAY_PORT);
+                        }
                     }
                 }
                 ifa_tmp = ifa_tmp->ifa_next;
@@ -419,7 +477,7 @@ void prepare_socket(int &local_sock, int &server_sock, relay_config &config) {
             freeifaddrs(ifa);
         }
 
-        if (bind_addr && bind_ll_addr) {
+        if (bind_gua && bind_lla) {
             break;
         }
 
@@ -427,13 +485,22 @@ void prepare_socket(int &local_sock, int &server_sock, relay_config &config) {
         sleep(5);
     } while (retry < 6);
 
-    if ((!bind_addr) || (bind(local_sock, (sockaddr *)&addr, sizeof(addr)) == -1)) {
-        syslog(LOG_ERR, "bind: Failed to bind socket to global ipv6 address on interface %s after %d retries with %s\n", config.interface.c_str(), retry, strerror(errno));
+    if ((!bind_gua) || (bind(gua_sock, (sockaddr *)&gua, sizeof(gua)) == -1)) {
+        syslog(LOG_ERR, "bind: Failed to bind socket to global ipv6 address on interface %s after %d retries with %s\n",
+               config.interface.c_str(), retry, strerror(errno));
+        close(gua_sock);
+        close(lla_sock);
+        return -1;
     }
 
-    if ((!bind_ll_addr) || (bind(server_sock, (sockaddr *)&ll_addr, sizeof(addr)) == -1)) {
-        syslog(LOG_ERR, "bind: Failed to bind socket to link local ipv6 address on interface %s after %d retries with %s\n", config.interface.c_str(), retry, strerror(errno));
+    if ((!bind_lla) || (bind(lla_sock, (sockaddr *)&lla, sizeof(lla)) == -1)) {
+        syslog(LOG_ERR, "bind: Failed to bind socket to link local ipv6 address on interface %s after %d retries with %s\n",
+               config.interface.c_str(), retry, strerror(errno));
+        close(gua_sock);
+        close(lla_sock);
+        return -1;
     }
+    return 0;
 }
 
 
@@ -738,11 +805,15 @@ void client_packet_handler(uint8_t *buffer, ssize_t length, struct relay_config 
     }
 
     auto option_position = current_position + sizeof(struct dhcpv6_msg);
+    auto relay_socket = config->gua_sock;
+    if (dual_tor_sock) {
+        relay_socket = config->lo_sock;
+    }
 
     switch (msg->msg_type) {
         case DHCPv6_MESSAGE_TYPE_RELAY_FORW:
         {
-            relay_relay_forw(config->local_sock, current_position, ntohs(udp_header->len) - sizeof(udphdr), ip_header, config);
+            relay_relay_forw(relay_socket, current_position, ntohs(udp_header->len) - sizeof(udphdr), ip_header, config);
             break;
         }
         case DHCPv6_MESSAGE_TYPE_SOLICIT:
@@ -766,13 +837,110 @@ void client_packet_handler(uint8_t *buffer, ssize_t length, struct relay_config 
             }
             counters[msg->msg_type]++;
             update_counter(config->state_db, counterVlan.append(config->interface), msg->msg_type);
-            relay_client(config->local_sock, current_position, ntohs(udp_header->len) - sizeof(udphdr), ip_header, ether_header, config);
+            relay_client(relay_socket, current_position, ntohs(udp_header->len) - sizeof(udphdr), ip_header, ether_header, config);
             break;
         }
         default:
         {
             syslog(LOG_WARNING, "DHCPv6 client message type %d received from %s was not relayed\n", msg->msg_type, ifname.c_str());
             break;
+        }
+    }
+}
+
+/**
+ * @code                bool inline isIPv6Zero(struct in6_addr *addr)
+ * 
+ * @brief               check if ipv6 address is zero
+ *
+ * @param addr          ipv6 address
+ *
+ * @return              bool
+ */
+bool inline isIPv6Zero(struct in6_addr *addr) {
+    return (memcmp(&addr, &in6addr_any, sizeof(in6addr_any)) == 0);
+}
+
+struct relay_config *
+get_relay_int_from_packet(uint8_t *packet, int32_t len, std::unordered_map<std::string, relay_config> &vlans) {
+    auto current_position = packet;
+    auto dhcp_relay_header = parse_dhcpv6_relay(packet);
+
+    // multi-level relay agents
+    if (isIPv6Zero(&dhcp_relay_header->link_address)) {
+        // This is temp solution for multi-level relay
+        // In this case, we need add
+        // 1. Add option82 in Relay Relay-Forward packets
+        // 2. Decode option82 in Relay-Reply to find out source vlan config
+        return NULL;
+    }
+
+    if (addr_vlan_map.find(dhcp_relay_header->link_address) == addr_vlan_map.end()) {
+        char link_addr_str[INET6_ADDRSTRLEN];
+        inet_ntop(AF_INET6, &dhcp_relay_header->link_address, link_addr_str, INET6_ADDRSTRLEN);
+        syslog(LOG_WARNING, "DHCPv6 type %d can't find vlan info from link address %s\n",
+               dhcp_relay_header->msg_type, link_addr_str);
+        return NULL;
+    }
+    auto vlan_name = addr_vlan_map[dhcp_relay_header->link_address];
+
+    if (vlans.find(vlan_name) == vlans.end()) {
+        syslog(LOG_WARNING, "DHCPv6 can't find vlan %s config\n", vlan_name);
+        return NULL;
+    }
+    return &vlans[vlan_name];
+}
+
+/**
+ * @code                void server_callback_dualtor(evutil_socket_t fd, short event, void *arg);
+ * 
+ * @brief               callback for libevent that is called everytime data is received at the loopback socket
+ *
+ * @param fd            loopback socket
+ * @param event         libevent triggered event  
+ * @param arg           callback argument provided by user
+ *
+ * @return              none
+ */
+void server_callback_dualtor(evutil_socket_t fd, short event, void *arg) {
+    auto vlans = reinterpret_cast<std::unordered_map<std::string, struct relay_config> *>(arg);
+    sockaddr_in6 from;
+    socklen_t len = sizeof(from);
+    int32_t pkts_num = 0;
+    static uint8_t message_buffer[BUFFER_SIZE];
+
+    while (pkts_num++ < BATCH_SIZE) {
+        std::string counterVlan = counter_table;
+        auto buffer_sz = recvfrom(fd, message_buffer, BUFFER_SIZE, 0, (sockaddr *)&from, &len);
+        if (buffer_sz <= 0) {
+            if (errno != EAGAIN) {
+                syslog(LOG_ERR, "recv: Failed to receive data from server: %s\n", strerror(errno));
+            }
+            return;
+        }
+
+        if (buffer_sz < (int32_t)sizeof(struct dhcpv6_msg)) {
+            syslog(LOG_WARNING, "Invalid DHCPv6 packet length %ld, no space for dhcpv6 msg header\n", buffer_sz);
+            continue;
+        }
+
+        auto config = get_relay_int_from_packet(message_buffer, buffer_sz, vlans)) {
+            syslog(LOG_WARNING, "Invalid DHCPv6 header content, packet will be dropped\n");
+            continue;
+        }
+        auto msg = parse_dhcpv6_hdr(message_buffer);
+        // RFC3315 only
+        if (msg->msg_type < DHCPv6_MESSAGE_TYPE_SOLICIT || msg->msg_type > DHCPv6_MESSAGE_TYPE_RELAY_REPL) {
+            update_counter(config->state_db, counterVlan.append(config->interface), DHCPv6_MESSAGE_TYPE_UNKNOWN);
+            syslog(LOG_WARNING, "Unknown DHCPv6 message type %d\n", msg->msg_type);
+            continue;
+        } else {
+            counters[msg->msg_type]++;
+        }
+
+        update_counter(config->state_db, counterVlan.append(config->interface), msg->msg_type);
+        if (msg->msg_type == DHCPv6_MESSAGE_TYPE_RELAY_REPL) {
+            relay_relay_reply(config->lla_sock, message_buffer, buffer_sz, config);
         }
     }
 }
@@ -795,10 +963,10 @@ void server_callback(evutil_socket_t fd, short event, void *arg) {
     socklen_t len = sizeof(from);
     int32_t pkts_num = 0;
     static uint8_t message_buffer[BUFFER_SIZE];
-    std::string counterVlan = counter_table;
 
     while (pkts_num++ < BATCH_SIZE) {
-        auto buffer_sz = recvfrom(config->local_sock, message_buffer, BUFFER_SIZE, 0, (sockaddr *)&from, &len);
+        std::string counterVlan = counter_table;
+        auto buffer_sz = recvfrom(config->gua_sock, message_buffer, BUFFER_SIZE, 0, (sockaddr *)&from, &len);
         if (buffer_sz <= 0) {
             if (errno != EAGAIN) {
                 syslog(LOG_ERR, "recv: Failed to receive data from server: %s\n", strerror(errno));
@@ -823,7 +991,7 @@ void server_callback(evutil_socket_t fd, short event, void *arg) {
 
         update_counter(config->state_db, counterVlan.append(config->interface), msg->msg_type);
         if (msg->msg_type == DHCPv6_MESSAGE_TYPE_RELAY_REPL) {
-            relay_relay_reply(config->server_sock, message_buffer, buffer_sz, config);
+            relay_relay_reply(config->lla_sock, message_buffer, buffer_sz, config);
         }
     }
 }
@@ -922,7 +1090,7 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
     std::vector<int> sockets;
     base = event_base_new();
     if(base == NULL) {
-        syslog(LOG_ERR, "libevent: Failed to create base\n");
+        syslog(LOG_ERR, "libevent: Failed to create event base\n");
     }
 
     std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
@@ -934,21 +1102,41 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
     auto filter = sock_open(&ether_relay_fprog);
     if (filter != -1) {
         sockets.push_back(filter);
-        listen_event = event_new(base, filter, EV_READ|EV_PERSIST, client_callback,
-                                 reinterpret_cast<void *>(&vlans));
-        if (listen_event == NULL) {
-            syslog(LOG_ERR, "libevent: Failed to create client listen libevent\n");
+        auto event = event_new(base, filter, EV_READ|EV_PERSIST, client_callback,
+                               reinterpret_cast<void *>(&vlans));
+        if (event == NULL) {
+            syslog(LOG_ERR, "libevent: Failed to create client listen event\n");
+            exit(EXIT_FAILURE);
         }
-        event_add(listen_event, NULL);
-        syslog(LOG_INFO, "libevent: add filter socket event\n");
+        event_add(event, NULL);
+        syslog(LOG_INFO, "libevent: Add client listen socket event\n");
     } else {
-        syslog(LOG_ALERT, "Failed to create relay filter socket");
+        syslog(LOG_ERR, "Failed to create client listen socket");
         exit(EXIT_FAILURE);
     }
 
+    int lo_sock = -1;
+    if (dual_tor_sock) {
+        lo_sock = prepare_lo_socket(loopback);
+        if (lo_sock != -1) {
+            sockets.push_back(lo_sock);
+            auto event = event_new(base, lo_sock, EV_READ|EV_PERSIST, server_callback_dualtor,
+                                   reinterpret_cast<void *>(&vlans));
+            if (event == NULL) {
+                syslog(LOG_ERR, "libevent: Failed to create dualtor loopback listen event\n");
+                exit(EXIT_FAILURE);
+            }
+            event_add(event, NULL);
+            syslog(LOG_INFO, "libevent: Add dualtor loopback socket event\n");
+        } else{
+            syslog(LOG_ERR, "Failed to create dualtor loopback listen socket");
+            exit(EXIT_FAILURE);
+        }
+    }
+
     for(auto &vlan : vlans) {
-        int local_sock = 0;
-        int server_sock = 0;
+        int gua_sock = 0;
+        int lla_sock = 0;
         vlan.second.config_db = config_db;
         vlan.second.mux_table = mStateDbMuxTablePtr;
         vlan.second.state_db = state_db;
@@ -958,28 +1146,28 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
 
         std::string counterVlan = counter_table;
         initialize_counter(vlan.second.state_db, counterVlan.append(vlan.second.interface));
-        prepare_socket(local_sock, server_sock, vlan.second);
+        if (prepare_vlan_sockets(gua_sock, lla_sock, vlan.second) != -1) {
+            vlan.second.gua_sock = gua_sock;
+            vlan.second.lla_sock = lla_sock;
+            vlan.second.lo_sock = lo_sock;
 
-        vlan.second.local_sock = local_sock;
-        vlan.second.server_sock = server_sock;
-
-        sockets.push_back(local_sock);
-        sockets.push_back(server_sock);
-        prepare_relay_config(vlan.second, local_sock, filter);
-
-        evutil_make_listen_socket_reuseable(filter);
-        evutil_make_socket_nonblocking(filter);
-
-        evutil_make_listen_socket_reuseable(local_sock);
-        evutil_make_socket_nonblocking(local_sock);
+            sockets.push_back(gua_sock);
+            sockets.push_back(lla_sock);
+            prepare_relay_config(vlan.second, gua_sock, filter);
     
-	    server_listen_event = event_new(base, local_sock, EV_READ|EV_PERSIST, server_callback, &(vlan.second));
-
-        if (server_listen_event == NULL) {
-            syslog(LOG_ERR, "libevent: Failed to create server listen libevent\n");
+            if (!dual_tor_sock) {
+	            auto event = event_new(base, gua_sock, EV_READ|EV_PERSIST,
+                                       server_callback, &(vlan.second));
+                if (event == NULL) {
+                    syslog(LOG_ERR, "libevent: Failed to create server listen libevent\n");
+                }
+                event_add(event, NULL);
+                syslog(LOG_INFO, "libevent: add server listen socket for %s\n", vlan.first.c_str());
+            }
+        } else {
+            syslog(LOG_ERR, "Failed to create dualtor loopback listen socket");
+            exit(EXIT_FAILURE);
         }
-        event_add(server_listen_event, NULL);
-        syslog(LOG_INFO, "libevent: add server listen socket for %s\n", vlan.first.c_str());
     }
 
     if((signal_init() == 0) && signal_start() == 0) {

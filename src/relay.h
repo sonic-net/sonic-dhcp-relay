@@ -58,8 +58,9 @@ typedef enum
 } dhcp_message_type_t;
 
 struct relay_config {
-    int local_sock; 
-    int server_sock;
+    int gua_sock; 
+    int lla_sock;
+    int lo_sock;
     int filter;
     sockaddr_in6 link_address;
     std::shared_ptr<swss::DBConnector> state_db;
@@ -116,30 +117,31 @@ struct interface_id_option  {
  */
 int sock_open(const struct sock_fprog *fprog);
 
-/**
- * @code                prepare_socket(int *local_sock, int *server_sock, relay_config *config);
- * 
- * @brief               prepare L3 socket for sending
- *
- * @param local_sock    pointer to socket binded to global address for relaying client message to server and listening for server message
- * @param server_sock       pointer to socket binded to link_local address for relaying server message to client
- *
- * @return              none
- */
-void prepare_socket(int *local_sock, int *server_sock, relay_config *config);
 
 /**
- * @code                        prepare_relay_config(relay_config &interface_config, int local_sock, int filter);
+ * @code            prepare_vlan_sockets(int &gua_sock, int &lla_sock, relay_config &config);
+ * 
+ * @brief           prepare vlan l3 socket for sending
+ *
+ * @param gua_sock  socket binded to global address for relaying client message to server and listening for server message
+ * @param lla_sock  socket binded to link_local address for relaying server message to client
+ *
+ * @return          none
+ */
+void prepare_vlan_sockets(int &gua_sock, int &lla_sock, relay_config &config);
+
+/**
+ * @code                        prepare_relay_config(relay_config &interface_config, int gua_sock, int filter);
  * 
  * @brief                       prepare for specified relay interface config: server and link address
  *
  * @param interface_config      pointer to relay config to be prepared
- * @param local_sock            L3 socket used for relaying messages
+ * @param gua_sock              L3 socket used for relaying messages
  * @param filter                socket attached with filter
  *
  * @return                      none
  */
-void prepare_relay_config(relay_config &interface_config, int local_sock, int filter);
+void prepare_relay_config(relay_config &interface_config, int gua_sock, int filter);
 
 /**
  * @code                relay_forward(uint8_t *buffer, const struct dhcpv6_msg *msg, uint16_t msg_length);
