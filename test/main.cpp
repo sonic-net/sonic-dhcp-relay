@@ -1,4 +1,5 @@
 #include "gtest/gtest.h"
+#include <net/if.h>
 #include <swss/dbconnector.h>
 #include <string>
 
