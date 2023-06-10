@@ -170,7 +170,7 @@ void relay_forward(uint8_t *buffer, const struct dhcpv6_msg *msg, uint16_t msg_l
  *
  * @return none
  */
-void relay_client(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, const ether_header *ether_hdr, relay_config *config);
+void relay_client(const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, const ether_header *ether_hdr, relay_config *config);
 
 /**
  * @code                 relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, relay_config *config)
@@ -185,21 +185,20 @@ void relay_client(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *ip_h
  *
  * @return none
  */
-void relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, relay_config *config);
+void relay_relay_forw(const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, relay_config *config);
 
 /**
- * @code                relay_relay_reply(int sock, const uint8_t *msg, int32_t len, relay_config *configs);
+ * @code                relay_relay_reply(const uint8_t *msg, int32_t len, relay_config *configs);
  * 
  * @brief               relay and unwrap a relay-reply message
  *
- * @param sock          L3 socket for sending data to servers
  * @param msg           pointer to dhcpv6 message header position
  * @param len           size of data received
  * @param config        relay interface config
  *
  * @return              none
  */
-void relay_relay_reply(int sock, const uint8_t *msg, int32_t len, relay_config *configs);
+void relay_relay_reply(const uint8_t *msg, int32_t len, relay_config *configs);
 
 /**
  * @code                loop_relay(std::unordered_map<std::string, relay_config> &vlans);
