@@ -13,23 +13,23 @@ static void usage()
 }
 
 int main(int argc, char *argv[]) {
-    if (argc > 1) {
+    if (argc > 2) {
         switch (argv[1][1])
         {
             case 'u':
-                if (strlen(argv[i + 1]) < IF_NAMESIZE) {
+                if (strlen(argv[2]) != 0 && strlen(argv[2]) < IF_NAMESIZE) {
                     std::memset(loopback, 0, IF_NAMESIZE);
-                    std::memcpy(loopback, argv[i + 1], strlen(argv[i + 1]));
+                    std::memcpy(loopback, argv[2], strlen(argv[2]));
                 } else {
                     syslog(LOG_ERR, "loopback interface name over length %d.\n", IF_NAMESIZE);
                     return 1;
                 }
                 dual_tor_sock = true;
-                i += 2;
                 break;
             default:
                 fprintf(stderr, "%s: Unknown option\n", basename(argv[0]));
                 usage();
+                return 0;
         }
     }
     try {
