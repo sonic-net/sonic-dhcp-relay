@@ -34,7 +34,6 @@
 #define BATCH_SIZE 64
 
 extern bool dual_tor_sock;
-extern char loopback[IF_NAMESIZE];
 
 /* DHCPv6 message types */
 typedef enum

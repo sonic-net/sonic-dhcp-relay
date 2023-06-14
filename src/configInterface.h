@@ -11,6 +11,9 @@ struct swssNotification {
     std::unordered_map<std::string, relay_config> vlans;
     swss::SubscriberStateTable *ipHelpersTable;
 };
+
+char loopback[IF_NAMESIZE] = "Loopback0";
+
 /**
  * @code                void initialize_swss()
  * 
