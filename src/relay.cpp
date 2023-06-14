@@ -575,11 +575,10 @@ void relay_client(const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, const 
 }
 
 /**
- * @code                 relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, relay_config *config)
+ * @code                 relay_relay_forw(const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, relay_config *config)
  *
  * @brief                construct a relay-forward message encapsulated relay-forward message
  *
- * @param sock           L3 socket for sending data to servers
  * @param msg            pointer to dhcpv6 message header position
  * @param len            size of data received
  * @param ip_hdr         pointer to IPv6 header

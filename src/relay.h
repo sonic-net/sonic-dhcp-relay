@@ -157,11 +157,10 @@ void prepare_relay_config(relay_config &interface_config, int gua_sock, int filt
 void relay_forward(uint8_t *buffer, const struct dhcpv6_msg *msg, uint16_t msg_length);
 
 /**
- * @code                 relay_client(int sock, const uint8_t *msg, int32_t len, ip6_hdr *ip_hdr, const ether_header *ether_hdr, relay_config *config);
+ * @code                 relay_client(const uint8_t *msg, int32_t len, ip6_hdr *ip_hdr, const ether_header *ether_hdr, relay_config *config);
  * 
  * @brief                construct relay-forward message
  *
- * @param sock           L3 socket for sending data to servers
  * @param msg            pointer to dhcpv6 message header position
  * @param len            size of data received
  * @param ip_hdr         pointer to IPv6 header
@@ -173,11 +172,10 @@ void relay_forward(uint8_t *buffer, const struct dhcpv6_msg *msg, uint16_t msg_l
 void relay_client(const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, const ether_header *ether_hdr, relay_config *config);
 
 /**
- * @code                 relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, relay_config *config)
+ * @code                 relay_relay_forw(const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, relay_config *config)
  *
  * @brief                construct a relay-forward message encapsulated relay-forward message
  *
- * @param sock           L3 socket for sending data to servers
  * @param msg            pointer to dhcpv6 message header position
  * @param len            size of data received
  * @param ip_hdr         pointer to IPv6 header

@@ -357,7 +357,7 @@ TEST(relay, relay_client)
   ip6_hdr ip_hdr;
   std::string s_addr = "2000::3";
 
-  relay_client(mock_sock, msg, msg_len, &ip_hdr, &ether_hdr, &config);
+  relay_client(msg, msg_len, &ip_hdr, &ether_hdr, &config);
 
   EXPECT_EQ(last_used_sock, 124);
 
@@ -433,7 +433,7 @@ TEST(relay, relay_relay_forw) {
   std::string s_addr = "2000::3";
   inet_pton(AF_INET6, s_addr.c_str(), &ip_hdr.ip6_src);
 
-  relay_relay_forw(mock_sock, msg, msg_len, &ip_hdr, &config);
+  relay_relay_forw(msg, msg_len, &ip_hdr, &config);
 
   EXPECT_EQ(last_used_sock, 125);
 
@@ -497,7 +497,7 @@ TEST(relay, relay_relay_reply)
 
   prepare_relay_config(config, local_sock, filter);
 
-  relay_relay_reply(mock_sock, msg, msg_len, &config);
+  relay_relay_reply(msg, msg_len, &config);
 
   EXPECT_EQ(last_used_sock, 123);
 
