@@ -410,8 +410,8 @@ int prepare_lo_socket(const char *lo) {
                 if (!IN6_IS_ADDR_LINKLOCAL(&in6->sin6_addr)) {
                     bind_gua = true;
                     gua = *in6;
-                    gua->sin6_family = AF_INET6;
-                    gua->sin6_port = htons(RELAY_PORT);
+                    gua.sin6_family = AF_INET6;
+                    gua.sin6_port = htons(RELAY_PORT);
                     break;
                 }
             }
@@ -475,13 +475,13 @@ int prepare_vlan_sockets(int &gua_sock, int &lla_sock, relay_config &config) {
                         if (!IN6_IS_ADDR_LINKLOCAL(&in6->sin6_addr)) {
                             bind_gua = true;
                             gua = *in6;
-                            gua->sin6_family = AF_INET6;
-                            gua->sin6_port = htons(RELAY_PORT);
+                            gua.sin6_family = AF_INET6;
+                            gua.sin6_port = htons(RELAY_PORT);
                         } else {
                             bind_lla = true;
                             lla = *in6;
-                            lla->sin6_family = AF_INET6;
-                            lla->sin6_port = htons(RELAY_PORT);
+                            lla.sin6_addr = AF_INET6;
+                            lla.sin6_port = htons(RELAY_PORT);
                         }
                     }
                 }
@@ -647,18 +647,17 @@ void relay_relay_forw(const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, re
 }
 
 /**
- * @code                relay_relay_reply(int sock, const uint8_t *msg, int32_t len, relay_config *configs);
+ * @code                relay_relay_reply(const uint8_t *msg, int32_t len, relay_config *configs);
  * 
  * @brief               relay and unwrap a relay-reply message
  *
- * @param sock          L3 socket for sending data to servers
  * @param msg           pointer to dhcpv6 message header position
  * @param len           size of data received
  * @param config        relay interface config
  *
  * @return              none
  */
- void relay_relay_reply(int sock, const uint8_t *msg, int32_t len, relay_config *config) {
+ void relay_relay_reply(const uint8_t *msg, int32_t len, relay_config *config) {
     static uint8_t buffer[BUFFER_SIZE];
     uint8_t type = 0;
     struct sockaddr_in6 target_addr;
@@ -693,7 +692,7 @@ void relay_relay_forw(const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, re
     target_addr.sin6_port = htons(CLIENT_PORT);
     target_addr.sin6_scope_id = if_nametoindex(config->interface.c_str());
     int sock = config->lla_sock;
-    if (isIPv6Zero(dhcp_relay_header->link_address)) {
+    if (isIPv6Zero(&dhcp_relay_header->link_address)) {
         // In this case, it's multi-level relay
         if (!IN6_IS_ADDR_LINKLOCAL(&dhcp_relay_header->peer_address))
             sock = config->gua_sock;
@@ -901,7 +900,7 @@ get_relay_int_from_relay_msg(uint8_t *msg, int32_t len, std::unordered_map<std::
 
     current_position += sizeof(struct dhcpv6_relay_msg);
     while ((current_position - msg) < len) {
-        uint8_t *tmp = NULL;
+        const uint8_t *tmp = NULL;
         auto option = parse_dhcpv6_opt(current_position, &tmp);
         current_position = tmp;
         if (current_position - msg > len) {
@@ -919,7 +918,7 @@ get_relay_int_from_relay_msg(uint8_t *msg, int32_t len, std::unordered_map<std::
         }
     }
 
-    struct in6_addr *addr = NULL;
+    const in6_addr *addr = NULL;
     if (!isIPv6Zero(&intf_id.interface_id)) {
         addr = &intf_id.interface_id;
     } else if (isIPv6Zero(&dhcp_relay_header->link_address)) {
@@ -943,7 +942,7 @@ get_relay_int_from_relay_msg(uint8_t *msg, int32_t len, std::unordered_map<std::
         syslog(LOG_WARNING, "DHCPv6 can't find vlan %s config\n", vlan_name.c_str());
         return NULL;
     }
-    return &vlans[vlan_name];
+    return &vlans->find(vlan_name)->second;
 }
 
 /**
