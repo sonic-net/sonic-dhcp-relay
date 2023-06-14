@@ -126,9 +126,9 @@ int sock_open(const struct sock_fprog *fprog);
  * @param gua_sock  socket binded to global address for relaying client message to server and listening for server message
  * @param lla_sock  socket binded to link_local address for relaying server message to client
  *
- * @return          none
+ * @return          int
  */
-void prepare_vlan_sockets(int &gua_sock, int &lla_sock, relay_config &config);
+int prepare_vlan_sockets(int &gua_sock, int &lla_sock, relay_config &config);
 
 /**
  * @code                        prepare_relay_config(relay_config &interface_config, int gua_sock, int filter);

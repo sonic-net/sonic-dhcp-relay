@@ -70,7 +70,7 @@ std::map<int, std::string> counterMap = {{DHCPv6_MESSAGE_TYPE_UNKNOWN, "Unknown"
 std::unordered_map<std::string, std::string> vlan_map;
 
 /* ipv6 address to vlan name mapping */
-std::unordered_map<sockaddr_in6, std::string> addr_vlan_map;
+std::unordered_map<in6_addr, std::string> addr_vlan_map;
 
 /**
  * @code                initialize_counter(std::shared_ptr<swss::DBConnector> state_db, std::string counterVlan);
@@ -364,11 +364,11 @@ void prepare_relay_config(relay_config &interface_config, int gua_sock, int filt
     
     if(!IN6_IS_ADDR_LINKLOCAL(&non_link_local.sin6_addr)) {
         interface_config.link_address = non_link_local;
-        addr_vlan_map[non_link_local] = interface_config.interface;
+        addr_vlan_map[non_link_local.sin6_addr] = interface_config.interface;
     }
     else {
         interface_config.link_address = link_local;
-        addr_vlan_map[link_local] = interface_config.interface;
+        addr_vlan_map[link_local.sin6_addr] = interface_config.interface;
     }
 }
 
