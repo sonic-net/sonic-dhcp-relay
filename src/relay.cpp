@@ -70,7 +70,7 @@ std::map<int, std::string> counterMap = {{DHCPv6_MESSAGE_TYPE_UNKNOWN, "Unknown"
 std::unordered_map<std::string, std::string> vlan_map;
 
 /* ipv6 address to vlan name mapping */
-std::unordered_map<in6_addr, std::string> addr_vlan_map;
+std::map<struct in6_addr, std::string> addr_vlan_map;
 
 /**
  * @code                initialize_counter(std::shared_ptr<swss::DBConnector> state_db, std::string counterVlan);
@@ -130,6 +130,19 @@ std::string toString(uint64_t count) {
     ss << count;
     std::string countValue = ss.str();
     return countValue;
+}
+
+/**
+ * @code                bool inline isIPv6Zero(const in6_addr *addr)
+ * 
+ * @brief               check if ipv6 address is zero
+ *
+ * @param addr          ipv6 address
+ *
+ * @return              bool
+ */
+bool inline isIPv6Zero(const in6_addr *addr) {
+    return (memcmp(&addr, &in6addr_any, sizeof(in6addr_any)) == 0);
 }
 
 /**
@@ -392,7 +405,7 @@ int prepare_lo_socket(const char *lo) {
     ifa_tmp = ifa;
     while (ifa_tmp) {
         if (ifa_tmp->ifa_addr && (ifa_tmp->ifa_addr->sa_family == AF_INET6)) {
-            if (strcmp(ifa_tmp->ifa_name, lo) == 0)) {
+            if (strcmp(ifa_tmp->ifa_name, lo) == 0) {
                 struct sockaddr_in6 *in6 = (struct sockaddr_in6*) ifa_tmp->ifa_addr;
                 if (!IN6_IS_ADDR_LINKLOCAL(&in6->sin6_addr)) {
                     bind_gua = true;
@@ -457,7 +470,7 @@ int prepare_vlan_sockets(int &gua_sock, int &lla_sock, relay_config &config) {
             ifa_tmp = ifa;
             while (ifa_tmp) {
                 if (ifa_tmp->ifa_addr && (ifa_tmp->ifa_addr->sa_family == AF_INET6)) {
-                    if (strcmp(ifa_tmp->ifa_name, config.interface.c_str()) == 0)) {
+                    if (strcmp(ifa_tmp->ifa_name, config.interface.c_str()) == 0) {
                         struct sockaddr_in6 *in6 = (struct sockaddr_in6*) ifa_tmp->ifa_addr;
                         if (!IN6_IS_ADDR_LINKLOCAL(&in6->sin6_addr)) {
                             bind_gua = true;
@@ -563,7 +576,7 @@ void relay_client(const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, const 
     relay_forward(current_buffer_position, parse_dhcpv6_hdr(msg), dhcp_message_length);
     current_buffer_position += dhcp_message_length + sizeof(dhcpv6_option);
 
-    auto sock = config->gua_sock;
+    int sock = config->gua_sock;
     if (dual_tor_sock) {
         sock = config->lo_sock;
     }
@@ -622,7 +635,7 @@ void relay_relay_forw(const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, re
     relay_forward(current_buffer_position, parse_dhcpv6_hdr(msg), dhcp_message_length);
     current_buffer_position += dhcp_message_length + sizeof(dhcpv6_option);
 
-    auto sock = config->gua_sock;
+    int sock = config->gua_sock;
     if (dual_tor_sock) {
         sock = config->lo_sock;
     }
@@ -679,10 +692,12 @@ void relay_relay_forw(const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, re
     target_addr.sin6_flowinfo = 0;
     target_addr.sin6_port = htons(CLIENT_PORT);
     target_addr.sin6_scope_id = if_nametoindex(config->interface.c_str());
-    auto sock = config->lla_sock;
+    int sock = config->lla_sock;
     if (isIPv6Zero(dhcp_relay_header->link_address)) {
         // In this case, it's multi-level relay
-        sock = config->gua_sock;
+        if (!IN6_IS_ADDR_LINKLOCAL(&dhcp_relay_header->peer_address))
+            sock = config->gua_sock;
+        target_addr.sin6_port = htons(RELAY_PORT);
     }
 
     if(send_udp(sock, buffer, target_addr, current_buffer_position - buffer)) {
@@ -868,22 +883,9 @@ void client_packet_handler(uint8_t *buffer, ssize_t length, struct relay_config 
 }
 
 /**
- * @code                bool inline isIPv6Zero(struct in6_addr *addr)
- * 
- * @brief               check if ipv6 address is zero
- *
- * @param addr          ipv6 address
- *
- * @return              bool
- */
-bool inline isIPv6Zero(struct in6_addr *addr) {
-    return (memcmp(&addr, &in6addr_any, sizeof(in6addr_any)) == 0);
-}
-
-/**
  * @code                struct relay_config *
- *                      get_relay_int_from_relay_msg(uint8_t *packet, int32_t len,
- *                                                   std::unordered_map<std::string, relay_config> &vlans)
+ *                      get_relay_int_from_relay_msg(uint8_t *msg, int32_t len,
+ *                                                   std::unordered_map<std::string, relay_config> *vlans)
  * 
  * @brief               get relay interface info from relay message
  *
@@ -892,14 +894,14 @@ bool inline isIPv6Zero(struct in6_addr *addr) {
  * @return              bool
  */
 struct relay_config *
-get_relay_int_from_relay_msg(uint8_t *packet, int32_t len, std::unordered_map<std::string, relay_config> &vlans) {
-    auto current_position = packet;
-    auto dhcp_relay_header = parse_dhcpv6_relay(packet);
+get_relay_int_from_relay_msg(uint8_t *msg, int32_t len, std::unordered_map<std::string, relay_config> *vlans) {
+    auto current_position = msg;
+    auto dhcp_relay_header = parse_dhcpv6_relay(msg);
     interface_id_option intf_id;
 
     current_position += sizeof(struct dhcpv6_relay_msg);
-    while ((current_position - packet) < len) {
-        const uint8_t *tmp = NULL;
+    while ((current_position - msg) < len) {
+        uint8_t *tmp = NULL;
         auto option = parse_dhcpv6_opt(current_position, &tmp);
         current_position = tmp;
         if (current_position - msg > len) {
@@ -937,8 +939,8 @@ get_relay_int_from_relay_msg(uint8_t *packet, int32_t len, std::unordered_map<st
     }
     auto vlan_name = addr_vlan_map[*addr];
 
-    if (vlans.find(vlan_name) == vlans.end()) {
-        syslog(LOG_WARNING, "DHCPv6 can't find vlan %s config\n", vlan_name);
+    if (vlans->find(vlan_name) == vlans->end()) {
+        syslog(LOG_WARNING, "DHCPv6 can't find vlan %s config\n", vlan_name.c_str());
         return NULL;
     }
     return &vlans[vlan_name];
@@ -981,7 +983,6 @@ void server_callback_dualtor(evutil_socket_t fd, short event, void *arg) {
 
         if (msg->msg_type != DHCPv6_MESSAGE_TYPE_RELAY_REPL) {
             syslog(LOG_WARNING, "Invalid DHCPv6 message type %d received on loopback interface\n", msg->msg_type);
-            update_counter(config->state_db, counterVlan.append(std::string(loopback)), msg->msg_type);
             continue;
         }
         auto config = get_relay_int_from_relay_msg(message_buffer, buffer_sz, vlans);

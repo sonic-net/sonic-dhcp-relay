@@ -316,8 +316,6 @@ TEST(counter, update_counter)
 
 TEST(relay, relay_client) 
 {
-  int mock_sock = 124;
-
   uint8_t msg[] = {
       0x01, 0x2f, 0xf4, 0xc8, 0x00, 0x01, 0x00, 0x0e,
       0x00, 0x01, 0x00, 0x01, 0x25, 0x3a, 0x37, 0xb9,
@@ -345,6 +343,9 @@ TEST(relay, relay_client)
   }
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   config.state_db = state_db;
+  config.gua_sock = 125;
+  config.lla_sock = 125;
+  config.lo_sock = 125;
 
   struct ether_header ether_hdr;
   ether_hdr.ether_shost[0] = 0x5a;
@@ -394,8 +395,6 @@ TEST(relay, relay_client)
 }
 
 TEST(relay, relay_relay_forw) {
-  int mock_sock = 125;
-
   uint8_t msg[] = {
       0x0c, 0x00, 0x20, 0x01, 0x0d, 0xb8, 0x01, 0x5a,
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -428,6 +427,9 @@ TEST(relay, relay_relay_forw) {
   }
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   config.state_db = state_db;
+  config.gua_sock = 125;
+  config.lla_sock = 125;
+  config.lo_sock = 125;
 
   ip6_hdr ip_hdr;
   std::string s_addr = "2000::3";
@@ -453,8 +455,6 @@ TEST(relay, relay_relay_forw) {
 
 TEST(relay, relay_relay_reply) 
 {
-  int mock_sock = 123;
-
   uint8_t msg[] = { 
       0x0d, 0x00, 0x20, 0x01, 0x0d, 0xb8, 0x01, 0x5a,
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -491,6 +491,9 @@ TEST(relay, relay_relay_reply)
   config.interface = "Vlan1000";
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   config.state_db = state_db;
+  config.gua_sock = 125;
+  config.lla_sock = 125;
+  config.lo_sock = 125;
 
   int local_sock = 1;
   int filter = 1;
