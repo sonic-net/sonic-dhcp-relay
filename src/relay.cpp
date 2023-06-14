@@ -70,7 +70,17 @@ std::map<int, std::string> counterMap = {{DHCPv6_MESSAGE_TYPE_UNKNOWN, "Unknown"
 std::unordered_map<std::string, std::string> vlan_map;
 
 /* ipv6 address to vlan name mapping */
-std::map<struct in6_addr, std::string> addr_vlan_map;
+struct in6_addrHash {
+    std::size_t operator()(const in6_addr& k) const {
+        std::size_t res = 17;
+        res = res * 31 + std::hash<uint32_t>()(k.__in6_u.__u6_addr32[0]);
+        res = res * 31 + std::hash<uint32_t>()(k.__in6_u.__u6_addr32[1]);
+        res = res * 31 + std::hash<uint32_t>()(k.__in6_u.__u6_addr32[2]);
+        res = res * 31 + std::hash<uint32_t>()(k.__in6_u.__u6_addr32[3]);
+        return res;
+    }
+};
+std::unordered_map<in6_addr, std::string, struct in6_addrHash> addr_vlan_map;
 
 /**
  * @code                initialize_counter(std::shared_ptr<swss::DBConnector> state_db, std::string counterVlan);
@@ -377,11 +387,11 @@ void prepare_relay_config(relay_config &interface_config, int gua_sock, int filt
     
     if(!IN6_IS_ADDR_LINKLOCAL(&non_link_local.sin6_addr)) {
         interface_config.link_address = non_link_local;
-        addr_vlan_map[non_link_local.sin6_addr] = interface_config.interface;
+        addr_vlan_map.insert({non_link_local.sin6_addr, interface_config.interface});
     }
     else {
         interface_config.link_address = link_local;
-        addr_vlan_map[link_local.sin6_addr] = interface_config.interface;
+        addr_vlan_map.insert({link_local.sin6_addr, interface_config.interface});
     }
 }
 
@@ -480,7 +490,7 @@ int prepare_vlan_sockets(int &gua_sock, int &lla_sock, relay_config &config) {
                         } else {
                             bind_lla = true;
                             lla = *in6;
-                            lla.sin6_addr = AF_INET6;
+                            lla.sin6_family = AF_INET6;
                             lla.sin6_port = htons(RELAY_PORT);
                         }
                     }
@@ -883,7 +893,7 @@ void client_packet_handler(uint8_t *buffer, ssize_t length, struct relay_config 
 
 /**
  * @code                struct relay_config *
- *                      get_relay_int_from_relay_msg(uint8_t *msg, int32_t len,
+ *                      get_relay_int_from_relay_msg(const uint8_t *msg, int32_t len,
  *                                                   std::unordered_map<std::string, relay_config> *vlans)
  * 
  * @brief               get relay interface info from relay message
@@ -893,7 +903,7 @@ void client_packet_handler(uint8_t *buffer, ssize_t length, struct relay_config 
  * @return              bool
  */
 struct relay_config *
-get_relay_int_from_relay_msg(uint8_t *msg, int32_t len, std::unordered_map<std::string, relay_config> *vlans) {
+get_relay_int_from_relay_msg(const uint8_t *msg, int32_t len, std::unordered_map<std::string, relay_config> *vlans) {
     auto current_position = msg;
     auto dhcp_relay_header = parse_dhcpv6_relay(msg);
     interface_id_option intf_id;
