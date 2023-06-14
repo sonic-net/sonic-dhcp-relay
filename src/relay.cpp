@@ -70,17 +70,7 @@ std::map<int, std::string> counterMap = {{DHCPv6_MESSAGE_TYPE_UNKNOWN, "Unknown"
 std::unordered_map<std::string, std::string> vlan_map;
 
 /* ipv6 address to vlan name mapping */
-struct in6_addrHash {
-    std::size_t operator()(const in6_addr& k) const {
-        std::size_t res = 17;
-        res = res * 31 + std::hash<uint32_t>()(k.__in6_u.__u6_addr32[0]);
-        res = res * 31 + std::hash<uint32_t>()(k.__in6_u.__u6_addr32[1]);
-        res = res * 31 + std::hash<uint32_t>()(k.__in6_u.__u6_addr32[2]);
-        res = res * 31 + std::hash<uint32_t>()(k.__in6_u.__u6_addr32[3]);
-        return res;
-    }
-};
-std::unordered_map<in6_addr, std::string, struct in6_addrHash> addr_vlan_map;
+std::unordered_map<std::string, std::string> addr_vlan_map;
 
 /**
  * @code                initialize_counter(std::shared_ptr<swss::DBConnector> state_db, std::string counterVlan);
@@ -385,13 +375,16 @@ void prepare_relay_config(relay_config &interface_config, int gua_sock, int filt
     }
     freeifaddrs(ifa); 
     
+    char ipv6_str[INET6_ADDRSTRLEN] = {};
     if(!IN6_IS_ADDR_LINKLOCAL(&non_link_local.sin6_addr)) {
         interface_config.link_address = non_link_local;
-        addr_vlan_map.insert({non_link_local.sin6_addr, interface_config.interface});
+        inet_ntop(AF_INET6, &non_link_local.sin6_addr, ipv6_str, INET6_ADDRSTRLEN);
+        addr_vlan_map[std::string(ipv6_str)] = interface_config.interface;
     }
     else {
         interface_config.link_address = link_local;
-        addr_vlan_map.insert({link_local.sin6_addr, interface_config.interface});
+        inet_ntop(AF_INET6, &link_local.sin6_addr, ipv6_str, INET6_ADDRSTRLEN);
+        addr_vlan_map[std::string(ipv6_str)] = interface_config.interface;
     }
 }
 
@@ -939,14 +932,15 @@ get_relay_int_from_relay_msg(const uint8_t *msg, int32_t len, std::unordered_map
         return NULL;
     }
 
-    if (addr_vlan_map.find(*addr) == addr_vlan_map.end()) {
-        char link_addr_str[INET6_ADDRSTRLEN];
-        inet_ntop(AF_INET6, addr, link_addr_str, INET6_ADDRSTRLEN);
+    char ipv6_str[INET6_ADDRSTRLEN] = {};
+    inet_ntop(AF_INET6, addr, ipv6_str, INET6_ADDRSTRLEN);
+    auto v6_string = std::string(ipv6_str);
+    if (addr_vlan_map.find(v6_string) == addr_vlan_map.end()) {
         syslog(LOG_WARNING, "DHCPv6 type %d can't find vlan info from link address %s\n",
-               dhcp_relay_header->msg_type, link_addr_str);
+               dhcp_relay_header->msg_type, ipv6_str);
         return NULL;
     }
-    auto vlan_name = addr_vlan_map[*addr];
+    auto vlan_name = addr_vlan_map[v6_string];
 
     if (vlans->find(vlan_name) == vlans->end()) {
         syslog(LOG_WARNING, "DHCPv6 can't find vlan %s config\n", vlan_name.c_str());
