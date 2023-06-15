@@ -11,6 +11,7 @@
 #include "MockRelay.h"
 
 bool dual_tor_sock = false;
+char loopback[IF_NAMESIZE] = "Loopback0";
 extern struct event_base *base;
 extern struct event *ev_sigint;
 extern struct event *ev_sigterm;
