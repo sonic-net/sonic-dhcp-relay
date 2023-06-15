@@ -142,7 +142,7 @@ std::string toString(uint64_t count) {
  * @return              bool
  */
 bool inline isIPv6Zero(const in6_addr *addr) {
-    return (memcmp(&addr, &in6addr_any, sizeof(in6addr_any)) == 0);
+    return (memcmp(addr, &in6addr_any, sizeof(in6addr_any)) == 0);
 }
 
 /**

@@ -12,8 +12,6 @@ struct swssNotification {
     swss::SubscriberStateTable *ipHelpersTable;
 };
 
-char loopback[IF_NAMESIZE] = "Loopback0";
-
 /**
  * @code                void initialize_swss()
  * 

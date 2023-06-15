@@ -4,6 +4,7 @@
 #include "configInterface.h"
 
 bool dual_tor_sock = false;
+char loopback[IF_NAMESIZE] = "Loopback0";
 
 static void usage()
 {

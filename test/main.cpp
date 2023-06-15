@@ -3,6 +3,8 @@
 #include <string>
 
 std::string database_config = "./test/database_config.json";
+bool dual_tor_sock = false;
+char loopback[IF_NAMESIZE] = "Loopback0";
 
 class DhcpRelayEnvironment : public ::testing::Environment {
 public:
