@@ -89,7 +89,6 @@ struct PACKED dhcpv6_relay_msg {
     struct in6_addr peer_address;
 };
 
-
 struct dhcpv6_option {
     uint16_t option_code;
     uint16_t option_length;

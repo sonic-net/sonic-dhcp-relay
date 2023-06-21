@@ -231,7 +231,6 @@ const struct dhcpv6_relay_msg *parse_dhcpv6_relay(const uint8_t *buffer) {
 const struct dhcpv6_option *parse_dhcpv6_opt(const uint8_t *buffer, const uint8_t **out_end) {
     auto option = (const struct dhcpv6_option *)buffer;
     uint8_t size = 4; // option-code + option-len
-    size += *(uint16_t *)(buffer);
     (*out_end) =  buffer + size + ntohs(option->option_length);
 
     return option;
@@ -901,6 +900,7 @@ get_relay_int_from_relay_msg(const uint8_t *msg, int32_t len, std::unordered_map
     auto dhcp_relay_header = parse_dhcpv6_relay(msg);
     interface_id_option intf_id;
 
+    std::memset(&intf_id, 0, sizeof(interface_id_option));
     current_position += sizeof(struct dhcpv6_relay_msg);
     while ((current_position - msg) < len) {
         const uint8_t *tmp = NULL;
@@ -913,7 +913,7 @@ get_relay_int_from_relay_msg(const uint8_t *msg, int32_t len, std::unordered_map
             case OPTION_INTERFACE_ID: {
                 intf_id.option_code = OPTION_INTERFACE_ID;
                 intf_id.option_length = ntohs(option->option_length);
-                memcpy(&intf_id.interface_id, ((uint8_t *)option) + sizeof(struct dhcpv6_option), intf_id.option_length);
+                std::memcpy(&intf_id.interface_id, ((uint8_t *)option) + sizeof(struct dhcpv6_option), intf_id.option_length);
                 break;
             }
             default:
@@ -933,7 +933,7 @@ get_relay_int_from_relay_msg(const uint8_t *msg, int32_t len, std::unordered_map
     }
 
     char ipv6_str[INET6_ADDRSTRLEN] = {};
-    inet_ntop(AF_INET6, address, ipv6_str, INET6_ADDRSTRLEN);
+    inet_ntop(AF_INET6, &address, ipv6_str, INET6_ADDRSTRLEN);
     auto v6_string = std::string(ipv6_str);
     if (addr_vlan_map.find(v6_string) == addr_vlan_map.end()) {
         syslog(LOG_WARNING, "DHCPv6 type %d can't find vlan info from link address %s\n",
