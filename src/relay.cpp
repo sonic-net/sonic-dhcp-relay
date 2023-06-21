@@ -921,27 +921,27 @@ get_relay_int_from_relay_msg(const uint8_t *msg, int32_t len, std::unordered_map
         }
     }
 
-    const in6_addr *addr = NULL;
+    in6_addr address = in6addr_any;
     if (!isIPv6Zero(&intf_id.interface_id)) {
-        addr = &intf_id.interface_id;
+        std::memcpy(&address, &intf_id.interface_id, sizeof(in6_addr));
     } else if (isIPv6Zero(&dhcp_relay_header->link_address)) {
-        addr = &dhcp_relay_header->link_address;
+        std::memcpy(&address, &dhcp_relay_header->link_address, sizeof(in6_addr));
     }
     // multi-level relay agents
-    if (!addr) {
+    if (!isIPv6Zero(&address)) {
         return NULL;
     }
 
     char ipv6_str[INET6_ADDRSTRLEN] = {};
-    inet_ntop(AF_INET6, addr, ipv6_str, INET6_ADDRSTRLEN);
+    inet_ntop(AF_INET6, address, ipv6_str, INET6_ADDRSTRLEN);
     auto v6_string = std::string(ipv6_str);
     if (addr_vlan_map.find(v6_string) == addr_vlan_map.end()) {
         syslog(LOG_WARNING, "DHCPv6 type %d can't find vlan info from link address %s\n",
                dhcp_relay_header->msg_type, ipv6_str);
         return NULL;
     }
-    auto vlan_name = addr_vlan_map[v6_string];
 
+    auto vlan_name = addr_vlan_map[v6_string];
     if (vlans->find(vlan_name) == vlans->end()) {
         syslog(LOG_WARNING, "DHCPv6 can't find vlan %s config\n", vlan_name.c_str());
         return NULL;
@@ -991,7 +991,6 @@ void server_callback_dualtor(evutil_socket_t fd, short event, void *arg) {
         auto config = get_relay_int_from_relay_msg(message_buffer, buffer_sz, vlans);
         if (!config) {
             syslog(LOG_WARNING, "Invalid DHCPv6 header content on loopback socket, packet will be dropped\n");
-            update_counter(config->state_db, counterVlan.append(std::string(loopback)), msg->msg_type);
             continue;
         }
         update_counter(config->state_db, counterVlan.append(std::string(loopback)), msg->msg_type);
