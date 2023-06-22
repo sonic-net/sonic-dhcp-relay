@@ -230,8 +230,7 @@ const struct dhcpv6_relay_msg *parse_dhcpv6_relay(const uint8_t *buffer) {
  */
 const struct dhcpv6_option *parse_dhcpv6_opt(const uint8_t *buffer, const uint8_t **out_end) {
     auto option = (const struct dhcpv6_option *)buffer;
-    uint8_t size = 4; // option-code + option-len
-    (*out_end) =  buffer + size + ntohs(option->option_length);
+    (*out_end) =  buffer + sizeof(struct dhcpv6_option) + ntohs(option->option_length);
 
     return option;
 }

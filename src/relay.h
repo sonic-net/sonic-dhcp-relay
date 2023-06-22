@@ -77,7 +77,7 @@ struct relay_config {
 
 /* DHCPv6 messages and options */
 
-struct dhcpv6_msg {
+struct PACKED dhcpv6_msg {
     uint8_t msg_type;
     uint8_t xid[3];
 };
@@ -89,18 +89,18 @@ struct PACKED dhcpv6_relay_msg {
     struct in6_addr peer_address;
 };
 
-struct dhcpv6_option {
+struct PACKED dhcpv6_option {
     uint16_t option_code;
     uint16_t option_length;
 };
 
-struct linklayer_addr_option  {
+struct PACKED linklayer_addr_option  {
     uint16_t option_code;
     uint16_t option_length;
     uint16_t link_layer_type;
 };
 
-struct interface_id_option  {
+struct PACKED interface_id_option  {
     uint16_t option_code;
     uint16_t option_length;
     in6_addr interface_id;  // to accomodate dual-tor, this opaque value is set to carry relay interface's global ipv6 address
