@@ -230,8 +230,7 @@ const struct dhcpv6_relay_msg *parse_dhcpv6_relay(const uint8_t *buffer) {
  */
 const struct dhcpv6_option *parse_dhcpv6_opt(const uint8_t *buffer, const uint8_t **out_end) {
     auto option = (const struct dhcpv6_option *)buffer;
-    uint8_t size = 4; // option-code + option-len
-    (*out_end) =  buffer + size + ntohs(option->option_length);
+    (*out_end) =  buffer + sizeof(struct dhcpv6_option) + ntohs(option->option_length);
 
     return option;
 }
@@ -374,12 +373,12 @@ void prepare_relay_config(relay_config &interface_config, int gua_sock, int filt
     }
     freeifaddrs(ifa); 
     
-    char ipv6_str[INET6_ADDRSTRLEN] = {};
     if(!IN6_IS_ADDR_LINKLOCAL(&non_link_local.sin6_addr)) {
         interface_config.link_address = non_link_local;
     } else {
         interface_config.link_address = link_local;
     }
+    char ipv6_str[INET6_ADDRSTRLEN] = {};
     inet_ntop(AF_INET6, &interface_config.link_address.sin6_addr, ipv6_str, INET6_ADDRSTRLEN);
     addr_vlan_map[std::string(ipv6_str)] = interface_config.interface;
 }
