@@ -377,14 +377,11 @@ void prepare_relay_config(relay_config &interface_config, int gua_sock, int filt
     char ipv6_str[INET6_ADDRSTRLEN] = {};
     if(!IN6_IS_ADDR_LINKLOCAL(&non_link_local.sin6_addr)) {
         interface_config.link_address = non_link_local;
-        inet_ntop(AF_INET6, &non_link_local.sin6_addr, ipv6_str, INET6_ADDRSTRLEN);
-        addr_vlan_map[std::string(ipv6_str)] = interface_config.interface;
-    }
-    else {
+    } else {
         interface_config.link_address = link_local;
-        inet_ntop(AF_INET6, &link_local.sin6_addr, ipv6_str, INET6_ADDRSTRLEN);
-        addr_vlan_map[std::string(ipv6_str)] = interface_config.interface;
     }
+    inet_ntop(AF_INET6, &interface_config.link_address.sin6_addr, ipv6_str, INET6_ADDRSTRLEN);
+    addr_vlan_map[std::string(ipv6_str)] = interface_config.interface;
 }
 
 int prepare_lo_socket(const char *lo) {
@@ -620,8 +617,9 @@ void relay_relay_forw(const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, re
     current_buffer_position += sizeof(dhcpv6_relay_msg);
 
     // insert option82 for new relay-forward packet, we need this information
-    // to get original relay-forward source interface for accurate counting in dualtor env
-    if (dual_tor_sock) {
+    // to get original relay-forward source interface for accurate counting in dualtor scenario
+    // is_interface_id is by-default enabled in dualtor scenario
+    if(config->is_interface_id) {
         interface_id_option intf_id;
         intf_id.option_code = htons(OPTION_INTERFACE_ID);
         intf_id.option_length = htons(sizeof(in6_addr));
@@ -924,11 +922,11 @@ get_relay_int_from_relay_msg(const uint8_t *msg, int32_t len, std::unordered_map
     in6_addr address = in6addr_any;
     if (!isIPv6Zero(&intf_id.interface_id)) {
         std::memcpy(&address, &intf_id.interface_id, sizeof(in6_addr));
-    } else if (isIPv6Zero(&dhcp_relay_header->link_address)) {
+    } else {
         std::memcpy(&address, &dhcp_relay_header->link_address, sizeof(in6_addr));
     }
     // multi-level relay agents
-    if (!isIPv6Zero(&address)) {
+    if (isIPv6Zero(&address)) {
         return NULL;
     }
 

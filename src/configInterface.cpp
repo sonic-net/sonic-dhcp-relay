@@ -9,6 +9,8 @@ bool pollSwssNotifcation = true;
 std::shared_ptr<boost::thread> mSwssThreadPtr;
 swss::Select swssSelect;
 
+extern bool dual_tor_sock;
+
 /**
  * @code                void initialize_swss()
  * 
@@ -116,6 +118,12 @@ void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::un
 void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries, std::unordered_map<std::string, relay_config> &vlans)
 {
     std::vector<std::string> servers;
+    bool option_79_default = true;
+    bool interface_id_default = false;
+
+    if (dual_tor_sock) {
+        interface_id_default = true;
+    }
 
     for (auto &entry: entries) {
         std::string vlan = kfvKey(entry);
@@ -123,8 +131,8 @@ void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries,
         std::vector<swss::FieldValueTuple> fieldValues = kfvFieldsValues(entry);
 
         relay_config intf;
-        intf.is_option_79 = true;
-        intf.is_interface_id = false;
+        intf.is_option_79 = option_79_default;
+        intf.is_interface_id = interface_id_default;
         intf.interface = vlan;
         intf.mux_key = "";
         intf.state_db = nullptr;

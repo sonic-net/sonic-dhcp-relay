@@ -423,3 +423,17 @@ void server_callback(evutil_socket_t fd, short event, void *arg);
  * @return              none
  */
 void server_callback_dual_tor(evutil_socket_t fd, short event, void *arg);
+
+/**
+ * @code                struct relay_config *
+ *                      get_relay_int_from_relay_msg(const uint8_t *msg, int32_t len,
+ *                                                   std::unordered_map<std::string, relay_config> *vlans)
+ * 
+ * @brief               get relay interface info from relay message
+ *
+ * @param addr          ipv6 address
+ *
+ * @return              bool
+ */
+struct relay_config *
+get_relay_int_from_relay_msg(const uint8_t *msg, int32_t len, std::unordered_map<std::string, relay_config> *vlans);
