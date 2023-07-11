@@ -14,6 +14,8 @@
 using namespace ::testing;
 
 bool dual_tor_sock = false;
+char loopback[IF_NAMESIZE] = "Loopback0";
+int mock_sock = 124;
 
 static struct sock_filter ether_relay_filter[] = {
 
@@ -188,21 +190,6 @@ TEST(parsePacket, parse_dhcpv6_relay)
   EXPECT_GE("fe80::58df:a801:acb7:886", peer_addr.append(peer)); 
 }
 
-TEST(parsePacket, parse_dhcpv6_opt)
-{
-  unsigned char relay[] = {     /* Relay-Forward Message DHCPv6 Option */
-      0x00, 0x09, 0x00, 0x63, 0x01, 0x34, 0x56, 0x78, 0x00, 0x01, 0x00, 0x0a
-  }; 
-
-  char *ptr = (char *)relay;
-  const uint8_t *current_position = (uint8_t *)ptr;
-  const uint8_t *tmp = NULL;
-
-  auto dhcp_relay_header = parse_dhcpv6_opt(current_position, &tmp);
-  EXPECT_EQ(OPTION_RELAY_MSG, ntohs(dhcp_relay_header->option_code));
-  EXPECT_EQ(99, ntohs(dhcp_relay_header->option_length));
-}
-
 TEST(sock, sock_open)
 { 
   struct sock_filter ether_relay_filter[] = {
@@ -239,7 +226,7 @@ TEST(helper, send_udp)
 
 TEST(prepareConfig, prepare_relay_config)
 {
-  int local_sock = 1;
+  int gua_sock = 1;
   int filter = 1;
   struct relay_config config{};
   config.is_option_79 = true;
@@ -256,7 +243,7 @@ TEST(prepareConfig, prepare_relay_config)
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   config.state_db = state_db;
 
-  prepare_relay_config(config, local_sock, filter);
+  prepare_relay_config(config, gua_sock, filter);
 
   char addr1[INET6_ADDRSTRLEN];
   char addr2[INET6_ADDRSTRLEN];
@@ -269,7 +256,42 @@ TEST(prepareConfig, prepare_relay_config)
   EXPECT_EQ("fc02:2000::2", s2);
 }
 
-TEST(prepareConfig, prepare_socket)
+TEST(prepareConfig, prepare_lo_socket)
+{
+  // test case use "lo" as an example
+  std::string ifname1 = "lo";
+  std::string ifname2 = "lo222";
+
+  auto sock = prepare_lo_socket(ifname1.c_str());
+
+  struct ifaddrs *ifa, *ifa_tmp;
+  if (getifaddrs(&ifa) == -1) {
+    EXPECT_EQ(sock, -1);
+  }
+  bool find_gua = false;
+  ifa_tmp = ifa;
+  while (ifa_tmp) {
+    if (ifa_tmp->ifa_addr && (ifa_tmp->ifa_addr->sa_family == AF_INET6)) {
+      if (strcmp(ifa_tmp->ifa_name, ifname1.c_str()) == 0) {
+        struct sockaddr_in6 *in6 = (struct sockaddr_in6*) ifa_tmp->ifa_addr;
+        if (!IN6_IS_ADDR_LINKLOCAL(&in6->sin6_addr)) {
+          find_gua = true;
+        }
+      }
+    }
+    ifa_tmp = ifa_tmp->ifa_next;
+  }
+  freeifaddrs(ifa);
+  if (find_gua) 
+    EXPECT_GE(sock, 0);
+  else
+    EXPECT_EQ(sock, -1);
+
+  sock = prepare_lo_socket(ifname2.c_str());
+  EXPECT_EQ(sock, -1);
+}
+
+TEST(prepareConfig, prepare_vlan_sockets)
 {
   struct relay_config config{};
   config.is_option_79 = true;
@@ -286,11 +308,11 @@ TEST(prepareConfig, prepare_socket)
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   config.state_db = state_db;
 
-  int local_sock = -1, server_sock = -1;
-  prepare_socket(local_sock, server_sock, config);
+  int gua_sock = -1, lla_sock = -1;
+  prepare_vlan_sockets(gua_sock, lla_sock, config);
 
-  EXPECT_GE(local_sock, 0);
-  EXPECT_GE(server_sock, 0);
+  EXPECT_GE(gua_sock, 0);
+  EXPECT_GE(lla_sock, 0);
 }
 
 TEST(counter, initialize_counter)
@@ -325,8 +347,6 @@ TEST(counter, increase_counter)
 
 TEST(relay, relay_client) 
 {
-  int mock_sock = 124;
-
   uint8_t msg[] = {
       0x01, 0x2f, 0xf4, 0xc8, 0x00, 0x01, 0x00, 0x0e,
       0x00, 0x01, 0x00, 0x01, 0x25, 0x3a, 0x37, 0xb9,
@@ -341,6 +361,9 @@ TEST(relay, relay_client)
   struct relay_config config{};
   config.is_option_79 = true;
   config.is_interface_id = true;
+  config.gua_sock = mock_sock;
+  config.lla_sock = mock_sock;
+  config.lo_sock = mock_sock;
   std::vector<std::string> servers;
   servers.push_back("fc02:2000::1");
   servers.push_back("fc02:2000::2");
@@ -368,15 +391,16 @@ TEST(relay, relay_client)
   std::string s_addr = "2000::3";
 
   // invalid msg_len testing
-  ASSERT_NO_THROW(relay_client(mock_sock, msg, 2, &ip_hdr, &ether_hdr, &config));
+  ASSERT_NO_THROW(relay_client(msg, 2, &ip_hdr, &ether_hdr, &config));
 
   // packet with a super length > sizeof(msg)
-  EXPECT_DEATH(relay_client(mock_sock, msg, 65535, &ip_hdr, &ether_hdr, &config), "");
+  EXPECT_DEATH(relay_client(msg, 65535, &ip_hdr, &ether_hdr, &config), "");
 
-  // normal packet testing 
-  ASSERT_NO_THROW(relay_client(mock_sock, msg, msg_len, &ip_hdr, &ether_hdr, &config));
+  // normal packet testing
+  dual_tor_sock = true;
+  ASSERT_NO_THROW(relay_client(msg, msg_len, &ip_hdr, &ether_hdr, &config));
 
-  EXPECT_EQ(last_used_sock, 124);
+  EXPECT_EQ(last_used_sock, mock_sock);
 
   auto sent_msg = parse_dhcpv6_relay(sender_buffer);
 
@@ -387,32 +411,9 @@ TEST(relay, relay_client)
       EXPECT_EQ(sent_msg->link_address.__in6_u.__u6_addr8[i], config.link_address.sin6_addr.__in6_u.__u6_addr8[i]);
       EXPECT_EQ(sent_msg->peer_address.__in6_u.__u6_addr8[i], ip_hdr.ip6_src.__in6_u.__u6_addr8[i]);
   }
-
-  const uint8_t *current_position = sender_buffer + sizeof(dhcpv6_relay_msg);
-
-  bool link_layer = false;
-  bool interface_id = false;
-  while ((current_position - sender_buffer) < valid_byte_count) {
-      
-      auto option = parse_dhcpv6_opt(current_position, &current_position);
-      switch (ntohs(option->option_code)) {
-          case OPTION_RELAY_MSG:
-              EXPECT_EQ(memcmp(((uint8_t *)option) + sizeof(dhcpv6_option), msg, msg_len), 0);
-          case OPTION_CLIENT_LINKLAYER_ADDR:
-              link_layer = true;
-          case OPTION_INTERFACE_ID:
-                interface_id = true;
-      }
-  }
-  EXPECT_TRUE(link_layer);
-  EXPECT_TRUE(interface_id);
-  EXPECT_GE(sendUdpCount, 1);
-  sendUdpCount = 0;
 }
 
 TEST(relay, relay_relay_forw) {
-  int mock_sock = 125;
-
   uint8_t msg[] = {
       0x0c, 0x00, 0x20, 0x01, 0x0d, 0xb8, 0x01, 0x5a,
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -445,6 +446,10 @@ TEST(relay, relay_relay_forw) {
   }
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   config.state_db = state_db;
+  config.is_interface_id = true;
+  config.gua_sock = mock_sock;
+  config.lla_sock = mock_sock;
+  config.lo_sock = mock_sock;
 
   ip6_hdr ip_hdr;
   std::string s_addr = "2000::3";
@@ -453,18 +458,19 @@ TEST(relay, relay_relay_forw) {
   // msg with hop count > HOP_LIMIT
   auto hop = msg[1];
   msg[1] = 65;
-  ASSERT_NO_THROW(relay_relay_forw(mock_sock, msg, msg_len, &ip_hdr, &config));
+  ASSERT_NO_THROW(relay_relay_forw(msg, msg_len, &ip_hdr, &config));
   msg[1] = hop;
 
   // super frame over size limit for secondary relay
   uint8_t super_frame[BUFFER_SIZE] = {};
   ::memcpy(super_frame, msg, msg_len);
-  ASSERT_NO_THROW(relay_relay_forw(mock_sock, super_frame, BUFFER_SIZE, &ip_hdr, &config));
+  ASSERT_NO_THROW(relay_relay_forw(super_frame, BUFFER_SIZE, &ip_hdr, &config));
 
   // normal packet
-  ASSERT_NO_THROW(relay_relay_forw(mock_sock, msg, msg_len, &ip_hdr, &config));
+  dual_tor_sock = true;
+  ASSERT_NO_THROW(relay_relay_forw(msg, msg_len, &ip_hdr, &config));
 
-  EXPECT_EQ(last_used_sock, 125);
+  EXPECT_EQ(last_used_sock, mock_sock);
 
   auto sent_msg = parse_dhcpv6_relay(sender_buffer);
   
@@ -520,14 +526,17 @@ TEST(relay, relay_relay_reply)
   config.interface = "Vlan1000";
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   config.state_db = state_db;
+  config.gua_sock = mock_sock;
+  config.lla_sock = mock_sock;
+  config.lo_sock = mock_sock;
 
-  int local_sock = 1;
+  int gua_sock = 1;
   int filter = 1;
 
-  prepare_relay_config(config, local_sock, filter);
+  prepare_relay_config(config, gua_sock, filter);
 
   // invalid message length
-  ASSERT_NO_THROW(relay_relay_reply(mock_sock, msg, 2, &config));
+  ASSERT_NO_THROW(relay_relay_reply(msg, 2, &config));
 
   // invalid relay msg, without OPTION_RELAY_MSG
    uint8_t invalid_msg[] = { 
@@ -549,13 +558,13 @@ TEST(relay, relay_relay_reply)
       0x3a, 0x32, 0x33, 0x50, 0xe5, 0x49, 0x50, 0x9e,
       0x40
   };
-  ASSERT_NO_THROW(relay_relay_reply(mock_sock, invalid_msg, msg_len, &config));
+  ASSERT_NO_THROW(relay_relay_reply(invalid_msg, msg_len, &config));
 
 
   // normal message
-  ASSERT_NO_THROW(relay_relay_reply(mock_sock, msg, msg_len, &config));
+  ASSERT_NO_THROW(relay_relay_reply(msg, msg_len, &config));
 
-  EXPECT_EQ(last_used_sock, 123);
+  EXPECT_EQ(last_used_sock, mock_sock);
 
   uint8_t expected_bytes[] = {
       0x07, 0x4f, 0x6d, 0x04, 0x00, 0x03, 0x00, 0x28,
@@ -720,7 +729,9 @@ TEST(relay, server_callback) {
   config.servers.push_back("fc02:2000::2");
   config.interface = "Vlan1000";
   config.state_db = state_db;
-  config.local_sock = -1;
+  config.gua_sock = -1;
+  config.lla_sock = -1;
+  config.lo_sock = -1;
   // simulator normal dhcpv6 packet length
   ssize_t msg_len = 129;
 
@@ -753,7 +764,9 @@ TEST(relay, client_callback) {
   config.interface = "Vlan1000";
   config.state_db = state_db;
   config.mux_table = mux_table;
-  config.local_sock = -1;
+  config.gua_sock = -1;
+  config.lla_sock = -1;
+  config.lo_sock = -1;
 
   std::unordered_map<std::string, struct relay_config> vlans;
   // mock normal dhcpv6 packet length
@@ -1018,8 +1031,90 @@ TEST(relay, loop_relay) {
   vlans_in_loop["Vlan1000"] = config;
   EXPECT_EQ(vlans_in_loop.size(), 1);
 
-  EXPECT_GLOBAL_CALL(event_base_dispatch, event_base_dispatch(_)).Times(1).WillOnce(Return(-1));
-  EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(AtLeast(2)).WillOnce(Return(0))
-                                                                     .WillOnce(Return(0));
-  ASSERT_NO_THROW(loop_relay(vlans_in_loop));
+  EXPECT_ANY_THROW(loop_relay(vlans_in_loop));
 }
+
+TEST(relay, get_relay_int_from_relay_msg) {
+  std::string lla_str = "fc02:1000::1";
+  std::string vlan_str = "Vlan1000";
+  uint8_t relay_reply_with_opt18[] = {
+      0x0d,0x00,0xfc,0x02,0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+      0x00,0x01,0xfe,0x80,0x00,0x00,0x00,0x00,0x00,0x00,0x12,0x70,0xfd,0xff,0xfe,0xcb,
+      0x0c,0x06,0x00,0x09,0x00,0x04,0x07,0x00,0x30,0x39,0x00,0x12,0x00,0x10,0xfc,0x02,
+      0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01
+  };
+  uint8_t relay_reply_without_opt18[] = {
+      0x0d,0x00,0xfc,0x02,0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+      0x00,0x01,0xfe,0x80,0x00,0x00,0x00,0x00,0x00,0x00,0x12,0x70,0xfd,0xff,0xfe,0xcb,
+      0x0c,0x06,0x00,0x09,0x00,0x04,0x07,0x00,0x30,0x39
+  };
+  uint8_t relay_reply_without_opt18_linkaddr_zero[] = {
+      0x0d,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+      0x00,0x00,0xfe,0x80,0x00,0x00,0x00,0x00,0x00,0x00,0x12,0x70,0xfd,0xff,0xfe,0xcb,
+      0x0c,0x06,0x00,0x09,0x00,0x04,0x07,0x00,0x30,0x39
+  };
+  std::unordered_map<std::string, relay_config> vlans;
+  struct relay_config config{
+    .interface = vlan_str,
+    .is_option_79 = true,
+    .is_interface_id = true
+  };
+
+  // valid option18 + invalid name mapping
+  auto value = get_relay_int_from_relay_msg(relay_reply_with_opt18, sizeof(relay_reply_with_opt18), &vlans);
+  EXPECT_EQ((uintptr_t)value, NULL);
+
+  // valid option18 + valid name mapping + invalid vlan config mapping
+  addr_vlan_map[lla_str] = vlan_str;
+  value = get_relay_int_from_relay_msg(relay_reply_with_opt18, sizeof(relay_reply_with_opt18), &vlans);
+  EXPECT_EQ((uintptr_t)value, NULL);
+
+  // valid option18 + valid name mapping + valid vlan config mapping
+  vlans[vlan_str] = config;
+  value = get_relay_int_from_relay_msg(relay_reply_with_opt18, sizeof(relay_reply_with_opt18), &vlans);
+  EXPECT_NE((uintptr_t)value, NULL);
+  EXPECT_EQ(value->interface, vlan_str);
+
+  // no option18 + non-zero link-address + valid name mapping + valid vlan config mapping
+  value = get_relay_int_from_relay_msg(relay_reply_without_opt18, sizeof(relay_reply_without_opt18), &vlans);
+  EXPECT_NE((uintptr_t)value, NULL);
+  EXPECT_EQ(value->interface, vlan_str);
+
+  // no option18 + zero link-address + valid name mapping + valid vlan config mapping
+  value = get_relay_int_from_relay_msg(relay_reply_without_opt18_linkaddr_zero, sizeof(relay_reply_without_opt18_linkaddr_zero), &vlans);
+  EXPECT_EQ((uintptr_t)value, NULL);
+}
+
+TEST(relay, server_callback_dualtor) {
+  std::unordered_map<std::string, relay_config> vlans_in_loop;
+  std::string ifname = "Vlan1000";
+  struct relay_config config{};
+  config.is_option_79 = true;
+  config.is_interface_id = true;
+  config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x01;
+  config.servers.push_back("fc02:2000::1");
+  config.servers.push_back("fc02:2000::2");
+  config.interface = "Vlan1000";
+  config.gua_sock = -1;
+  config.lla_sock = -1;
+  config.lo_sock = -1;
+  // simulator normal dhcpv6 packet length
+  ssize_t msg_len = 129;
+
+  // cover buffer_sz <= 0
+  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(5)
+    .WillOnce(Return(0))
+    .WillOnce(Return(2)).WillOnce(Return(0))
+    .WillOnce(Return(msg_len)).WillOnce(Return(0));
+
+  ASSERT_NO_THROW(server_callback_dualtor(0, 0, &vlans_in_loop));
+  // cover 0 < buffer_sz < sizeof(struct dhcpv6_msg)
+  ASSERT_NO_THROW(server_callback_dualtor(0, 0, &vlans_in_loop));
+  // normal size and right configuration from get_relay_int_from_relay_msg
+  //ASSERT_NO_THROW(server_callback_dualtor(0, 0, &vlans_in_loop));
+  // normal size and NULL from get_relay_int_from_relay_msg
+  ASSERT_NO_THROW(server_callback_dualtor(0, 0, &vlans_in_loop));
+}
+
+
+

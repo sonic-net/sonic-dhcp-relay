@@ -37,6 +37,7 @@
 #define BATCH_SIZE 64
 
 extern bool dual_tor_sock;
+extern char loopback[IF_NAMESIZE];
 
 /* DHCPv6 message types */
 typedef enum
@@ -61,8 +62,9 @@ typedef enum
 } dhcp_message_type_t;
 
 struct relay_config {
-    int local_sock; 
-    int server_sock;
+    int gua_sock; 
+    int lla_sock;
+    int lo_sock;
     int filter;
     sockaddr_in6 link_address;
     std::shared_ptr<swss::DBConnector> state_db;
@@ -167,36 +169,46 @@ private:
 int sock_open(const struct sock_fprog *fprog);
 
 /**
- * @code                prepare_socket(int &local_sock, int &server_sock, relay_config &config);
+ * @code                prepare_lo_socket(const char *lo);
  * 
- * @brief               prepare L3 socket for sending
+ * @brief               prepare loopback interface socket for dual tor senario
  *
- * @param local_sock    pointer to socket binded to global address for relaying client message to server and listening for server message
- * @param server_sock   pointer to socket binded to link_local address for relaying server message to client
+ * @param lo            loopback interface name
  *
- * @return              none
+ * @return              int
  */
-void prepare_socket(int &local_sock, int &server_sock, relay_config &config);
+int prepare_lo_socket(const char *lo);
 
 /**
- * @code                        prepare_relay_config(relay_config &interface_config, int local_sock, int filter);
+ * @code                prepare_vlan_sockets(int &gua_sock, int &lla_sock, relay_config &config);
+ * 
+ * @brief               prepare vlan L3 socket for sending
+ *
+ * @param gua_sock      socket binded to global address for relaying client message to server and listening for server message
+ * @param lla_sock      socket binded to link_local address for relaying server message to client
+ *
+ * @return              int
+ */
+int prepare_vlan_sockets(int &gua_sock, int &lla_sock, relay_config &config);
+
+/**
+ * @code                        prepare_relay_config(relay_config &interface_config, int gua_sock, int filter);
  * 
  * @brief                       prepare for specified relay interface config: server and link address
  *
  * @param interface_config      pointer to relay config to be prepared
- * @param local_sock            L3 socket used for relaying messages
+ * @param gua_sock              L3 socket used for relaying messages
  * @param filter                socket attached with filter
  *
  * @return                      none
  */
-void prepare_relay_config(relay_config &interface_config, int local_sock, int filter);
+void prepare_relay_config(relay_config &interface_config, int gua_sock, int filter);
 
 /**
- * @code                 relay_client(int sock, const uint8_t *msg, uint16_t len, ip6_hdr *ip_hdr, const ether_header *ether_hdr, relay_config *config);
+ * @code                 relay_client(const uint8_t *msg, uint16_t len, ip6_hdr *ip_hdr, const ether_header *ether_hdr, relay_config *config);
  * 
  * @brief                construct relay-forward message
  *
- * @param sock           L3 socket for sending data to servers
  * @param msg            pointer to dhcpv6 message header position
  * @param len            size of data received
  * @param ip_hdr         pointer to IPv6 header
@@ -205,14 +217,13 @@ void prepare_relay_config(relay_config &interface_config, int local_sock, int fi
  *
  * @return none
  */
-void relay_client(int sock, const uint8_t *msg, uint16_t len, const ip6_hdr *ip_hdr, const ether_header *ether_hdr, relay_config *config);
+void relay_client(const uint8_t *msg, uint16_t len, const ip6_hdr *ip_hdr, const ether_header *ether_hdr, relay_config *config);
 
 /**
- * @code                 relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, relay_config *config)
+ * @code                 relay_relay_forw(const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, relay_config *config)
  *
  * @brief                construct a relay-forward message encapsulated relay-forward message
  *
- * @param sock           L3 socket for sending data to servers
  * @param msg            pointer to dhcpv6 message header position
  * @param len            size of data received
  * @param ip_hdr         pointer to IPv6 header
@@ -220,21 +231,47 @@ void relay_client(int sock, const uint8_t *msg, uint16_t len, const ip6_hdr *ip_
  *
  * @return none
  */
-void relay_relay_forw(int sock, const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, relay_config *config);
+void relay_relay_forw(const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, relay_config *config);
 
 /**
- * @code                relay_relay_reply(int sock, const uint8_t *msg, int32_t len, relay_config *configs);
+ * @code                relay_relay_reply(const uint8_t *msg, int32_t len, relay_config *configs);
  * 
  * @brief               relay and unwrap a relay-reply message
  *
- * @param sock          L3 socket for sending data to servers
  * @param msg           pointer to dhcpv6 message header position
  * @param len           size of data received
  * @param config        relay interface config
  *
  * @return              none
  */
-void relay_relay_reply(int sock, const uint8_t *msg, int32_t len, relay_config *configs);
+void relay_relay_reply(const uint8_t *msg, int32_t len, relay_config *configs);
+
+/**
+ * @code                struct relay_config *
+ *                      get_relay_int_from_relay_msg(const uint8_t *msg, int32_t len,
+ *                                                   std::unordered_map<std::string, relay_config> *vlans)
+ * 
+ * @brief               get relay interface info from relay message
+ *
+ * @param addr          ipv6 address
+ *
+ * @return              bool
+ */
+struct relay_config *
+get_relay_int_from_relay_msg(const uint8_t *msg, int32_t len, std::unordered_map<std::string, relay_config> *vlans);
+
+/**
+ * @code                void server_callback_dualtor(evutil_socket_t fd, short event, void *arg);
+ * 
+ * @brief               callback for libevent that is called everytime data is received at the loopback socket
+ *
+ * @param fd            loopback socket
+ * @param event         libevent triggered event  
+ * @param arg           callback argument provided by user
+ *
+ * @return              none
+ */
+void server_callback_dualtor(evutil_socket_t fd, short event, void *arg);
 
 /**
  * @code                loop_relay(std::unordered_map<std::string, relay_config> &vlans);
@@ -384,18 +421,6 @@ const struct dhcpv6_msg *parse_dhcpv6_hdr(const uint8_t *buffer);
  * @return dhcpv6_relay_msg   start of dhcpv6 relay message or end of dhcpv6 message type position
  */
 const struct dhcpv6_relay_msg *parse_dhcpv6_relay(const uint8_t *buffer);
-
-/**
- * @code                const struct dhcpv6_option *parse_dhcpv6_opt(const uint8_t *buffer, const uint8_t **out_end);
- *
- * @brief               parse through dhcpv6 option
- *
- * @param *buffer       message buffer
- * @param **out_end     pointer
- * 
- * @return dhcpv6_option   end of dhcpv6 message option
- */
-const struct dhcpv6_option *parse_dhcpv6_opt(const uint8_t *buffer, const uint8_t **out_end);
 
 /**
  * @code                update_vlan_mapping(std::string vlan, std::shared_ptr<swss::DBConnector> cfgdb);
