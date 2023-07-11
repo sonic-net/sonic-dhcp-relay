@@ -11,9 +11,11 @@
 #include "MockRelay.h"
 
 bool dual_tor_sock = false;
+char loopback[IF_NAMESIZE] = "Loopback0";
 extern struct event_base *base;
 extern struct event *ev_sigint;
 extern struct event *ev_sigterm;
+extern std::unordered_map<std::string, std::string> addr_vlan_map;
 
 static struct sock_filter ether_relay_filter[] = {
 
@@ -311,13 +313,11 @@ TEST(counter, update_counter)
   update_counter(state_db, "DHCPv6_COUNTER_TABLE|Vlan1000", 1);
   std::shared_ptr<std::string> output = state_db->hget("DHCPv6_COUNTER_TABLE|Vlan1000", "Solicit");
   std::string *ptr = output.get();
-  EXPECT_EQ(*ptr, "0");
+  EXPECT_EQ(*ptr, "1");
 }
 
 TEST(relay, relay_client) 
 {
-  int mock_sock = 124;
-
   uint8_t msg[] = {
       0x01, 0x2f, 0xf4, 0xc8, 0x00, 0x01, 0x00, 0x0e,
       0x00, 0x01, 0x00, 0x01, 0x25, 0x3a, 0x37, 0xb9,
@@ -345,6 +345,9 @@ TEST(relay, relay_client)
   }
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   config.state_db = state_db;
+  config.gua_sock = 125;
+  config.lla_sock = 125;
+  config.lo_sock = 125;
 
   struct ether_header ether_hdr;
   ether_hdr.ether_shost[0] = 0x5a;
@@ -357,9 +360,9 @@ TEST(relay, relay_client)
   ip6_hdr ip_hdr;
   std::string s_addr = "2000::3";
 
-  relay_client(mock_sock, msg, msg_len, &ip_hdr, &ether_hdr, &config);
+  relay_client(msg, msg_len, &ip_hdr, &ether_hdr, &config);
 
-  EXPECT_EQ(last_used_sock, 124);
+  EXPECT_EQ(last_used_sock, 125);
 
   auto sent_msg = parse_dhcpv6_relay(sender_buffer);
 
@@ -394,8 +397,6 @@ TEST(relay, relay_client)
 }
 
 TEST(relay, relay_relay_forw) {
-  int mock_sock = 125;
-
   uint8_t msg[] = {
       0x0c, 0x00, 0x20, 0x01, 0x0d, 0xb8, 0x01, 0x5a,
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -428,12 +429,15 @@ TEST(relay, relay_relay_forw) {
   }
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   config.state_db = state_db;
+  config.gua_sock = 125;
+  config.lla_sock = 125;
+  config.lo_sock = 125;
 
   ip6_hdr ip_hdr;
   std::string s_addr = "2000::3";
   inet_pton(AF_INET6, s_addr.c_str(), &ip_hdr.ip6_src);
 
-  relay_relay_forw(mock_sock, msg, msg_len, &ip_hdr, &config);
+  relay_relay_forw(msg, msg_len, &ip_hdr, &config);
 
   EXPECT_EQ(last_used_sock, 125);
 
@@ -453,8 +457,6 @@ TEST(relay, relay_relay_forw) {
 
 TEST(relay, relay_relay_reply) 
 {
-  int mock_sock = 123;
-
   uint8_t msg[] = { 
       0x0d, 0x00, 0x20, 0x01, 0x0d, 0xb8, 0x01, 0x5a,
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -491,15 +493,18 @@ TEST(relay, relay_relay_reply)
   config.interface = "Vlan1000";
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   config.state_db = state_db;
+  config.gua_sock = 125;
+  config.lla_sock = 125;
+  config.lo_sock = 125;
 
   int local_sock = 1;
   int filter = 1;
 
   prepare_relay_config(config, local_sock, filter);
 
-  relay_relay_reply(mock_sock, msg, msg_len, &config);
+  relay_relay_reply(msg, msg_len, &config);
 
-  EXPECT_EQ(last_used_sock, 123);
+  EXPECT_EQ(last_used_sock, 125);
 
   uint8_t expected_bytes[] = {
       0x07, 0x4f, 0x6d, 0x04, 0x00, 0x03, 0x00, 0x28,
@@ -558,4 +563,51 @@ TEST(relay, dhcp6relay_stop) {
   event_free(event);
   event_base_free(base);
   base = NULL;
+}
+
+TEST(relay, get_relay_int_from_relay_msg) {
+  struct relay_config config{};
+  std::string lla_str = "fc02:1000::1";
+  std::unordered_map<std::string, relay_config> vlans;
+
+  config.is_option_79 = true;
+  config.is_interface_id = true;
+  inet_pton(AF_INET6, lla_str.c_str(), &config.link_address.sin6_addr);
+  config.servers.push_back("fc02:2000::1");
+  config.servers.push_back("fc02:2000::2");
+  config.interface = "Vlan1000";
+
+  vlans["Vlan1000"] = config;
+  addr_vlan_map[lla_str] = "Vlan1000";
+
+  uint8_t relay_reply_with_opt18[] = {
+      0x0d,0x00,0xfc,0x02,0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+      0x00,0x01,0xfe,0x80,0x00,0x00,0x00,0x00,0x00,0x00,0x12,0x70,0xfd,0xff,0xfe,0xcb,
+      0x0c,0x06,0x00,0x09,0x00,0x04,0x07,0x00,0x30,0x39,0x00,0x12,0x00,0x10,0xfc,0x02,
+      0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01
+  };
+
+  auto cfg = get_relay_int_from_relay_msg(relay_reply_with_opt18, sizeof(relay_reply_with_opt18), &vlans);
+  EXPECT_NE((uintptr_t)cfg, NULL);
+  EXPECT_EQ(cfg->interface, "Vlan1000");
+
+  uint8_t relay_reply_without_opt18[] = {
+      0x0d,0x00,0xfc,0x02,0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+      0x00,0x01,0xfe,0x80,0x00,0x00,0x00,0x00,0x00,0x00,0x12,0x70,0xfd,0xff,0xfe,0xcb,
+      0x0c,0x06,0x00,0x09,0x00,0x04,0x07,0x00,0x30,0x39
+  };
+
+  cfg = get_relay_int_from_relay_msg(relay_reply_without_opt18, sizeof(relay_reply_without_opt18), &vlans);
+  EXPECT_NE((uintptr_t)cfg, NULL);
+  EXPECT_EQ(cfg->interface, "Vlan1000");
+
+  uint8_t relay_reply_without_opt18_linkaddr_zero[] = {
+      0x0d,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+      0x00,0x00,0xfe,0x80,0x00,0x00,0x00,0x00,0x00,0x00,0x12,0x70,0xfd,0xff,0xfe,0xcb,
+      0x0c,0x06,0x00,0x09,0x00,0x04,0x07,0x00,0x30,0x39
+  };
+
+  cfg = get_relay_int_from_relay_msg(relay_reply_without_opt18_linkaddr_zero,
+                                     sizeof(relay_reply_without_opt18_linkaddr_zero), &vlans);
+  EXPECT_EQ((uintptr_t)cfg, NULL);
 }
