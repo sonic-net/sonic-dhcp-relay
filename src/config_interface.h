@@ -7,10 +7,13 @@
 #include "select.h"
 #include "relay.h"
 
+extern bool dual_tor_sock;
+
 struct swssNotification {
     std::unordered_map<std::string, relay_config> vlans;
     swss::SubscriberStateTable *ipHelpersTable;
 };
+
 /**
  * @code                void initialize_swss()
  * 
