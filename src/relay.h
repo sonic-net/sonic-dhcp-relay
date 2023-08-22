@@ -11,7 +11,10 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <event.h>
+#include <event2/event.h>
 #include <event2/util.h>
+#include <event2/bufferevent.h>
 #include <syslog.h>
 #include "dbconnector.h"
 #include "table.h"
@@ -60,6 +63,15 @@ typedef enum
 
     DHCPv6_MESSAGE_TYPE_COUNT
 } dhcp_message_type_t;
+
+/** packet direction */
+typedef enum
+{
+    DHCPV6_RX,    /** RX DHCPV6 packet */
+    DHCPV6_TX,    /** TX DHCPV6 packet */
+
+    DHCPV6_DIR_COUNT
+} dhcpv6_pkt_dir_t;
 
 struct relay_config {
     int gua_sock; 
@@ -158,15 +170,15 @@ private:
 };
 
 /**
- * @code                sock_open(const struct sock_fprog *fprog);
+ * @code                prepare_raw_socket(const struct sock_fprog *fprog);
  *
- * @brief               prepare L2 socket to attach to "udp and port 547" filter 
+ * @brief               prepare raw socket filter 
  *
- * @param fprog         bpf filter "udp and port 547"
+ * @param fprog         bpf filter
  *
  * @return              socket descriptor
  */
-int sock_open(const struct sock_fprog *fprog);
+int prepare_raw_socket(const struct sock_fprog *fprog);
 
 /**
  * @code                prepare_lo_socket(const char *lo);
@@ -337,17 +349,20 @@ void shutdown_relay();
 void initialize_counter(std::shared_ptr<swss::DBConnector> state_db, std::string &ifname);
 
 /**
- * @code                void increase_counter(shared_ptr<swss::DBConnector>, std::string ifname, uint8_t msg_type);
+ * @code                void increase_counter(swss::DBConnector *state_db, std::string ifname,
+ *                                            uint8_t msg_type, dhcpv6_pkt_dir_t dir);
  *
  * @brief               increase the counter in state_db with count of each DHCPv6 message type
  *
  * @param shared_ptr<swss::DBConnector> state_db     state_db connector
  * @param ifname        interface name
  * @param msg_type      dhcpv6 message type to be increased in counter
+ * @param dir           dhcpv6 packet direction
  * 
  * @return              none
  */
-void increase_counter(std::shared_ptr<swss::DBConnector> state_db, std::string &ifname, uint8_t msg_type);
+void increase_counter(swss::DBConnector *state_db, std::string &ifname,
+                      uint8_t msg_type, dhcpv6_pkt_dir_t dir);
 
 /* Helper functions */
 
@@ -423,7 +438,8 @@ const struct dhcpv6_msg *parse_dhcpv6_hdr(const uint8_t *buffer);
 const struct dhcpv6_relay_msg *parse_dhcpv6_relay(const uint8_t *buffer);
 
 /**
- * @code                update_vlan_mapping(std::string vlan, std::shared_ptr<swss::DBConnector> cfgdb);
+ * @code                update_vlan_mapping(std::string vlan, std::shared_ptr<swss::DBConnector> cfgdb,
+ *                                          std::shared_ptr<swss::DBConnector> statdb);
  *
  * @brief               build vlan member interface to vlan mapping table 
  *
@@ -432,7 +448,33 @@ const struct dhcpv6_relay_msg *parse_dhcpv6_relay(const uint8_t *buffer);
  *
  * @return              none
  */
-void update_vlan_mapping(std::string vlan, std::shared_ptr<swss::DBConnector> cfgdb);
+void update_vlan_mapping(std::string vlan, std::shared_ptr<swss::DBConnector> cfgdb,
+                         std::shared_ptr<swss::DBConnector> statdb);
+
+/**
+ * @code                update_portchannel_mapping(std::shared_ptr<swss::DBConnector> cfgdb,
+ *                                                 std::shared_ptr<swss::DBConnector> statdb);
+ *
+ * @brief               build portchannel member interface mapping table 
+ *
+ * @param cfgdb         config db connection
+ * @param statdb        state db connection
+ *
+ * @return              none
+ */
+void update_portchannel_mapping(std::shared_ptr<swss::DBConnector> cfgdb, std::shared_ptr<swss::DBConnector> statdb);
+
+/**
+ * @code                update_loopback_mapping(std::string &ifname, std::shared_ptr<swss::DBConnector> statdb);
+ *
+ * @brief               update loopback interface mapping, currently only counter related initialization
+ *
+ * @param ifname        loopback interface name
+ * @param statdb        state db connection
+ *
+ * @return              none
+ */
+void update_loopback_mapping(std::string &ifname, std::shared_ptr<swss::DBConnector> statdb);
 
 /**
  * @code                client_callback(evutil_socket_t fd, short event, void *arg);
@@ -474,3 +516,46 @@ void client_packet_handler(uint8_t *buffer, ssize_t length, struct relay_config 
  */
 void server_callback(evutil_socket_t fd, short event, void *arg);
 
+/**
+ * @code                outbond_callback(evutil_socket_t fd, short event, void *arg);
+ *
+ * @brief               callback for outbond socket, only for counting purpose
+ *
+ * @param fd            outbond socket
+ * @param event         libevent triggered event
+ * @param arg           callback argument provided by user
+ *
+ * @return              none
+ */
+void outbond_callback(evutil_socket_t fd, short event, void *arg);
+
+/**
+ * @code                packet_counting_handler(uint8_t *buffer, ssize_t length, std::string &ifname,
+                                                swss::DBConnector *state_db, dhcpv6_pkt_dir_t dir);
+ *
+ * @brief               packet couting handler
+ *
+ * @param buffer        packet buffer
+ * @param length        packet length
+ * @param ifname        vlan member interface name
+ * @param state_db      state db pointer
+ * @param dir           packet direction
+ *
+ * @return              none
+ */
+void packet_counting_handler(uint8_t *buffer, ssize_t length, std::string &ifname,
+                             swss::DBConnector *state_db, dhcpv6_pkt_dir_t rx);
+
+/**
+ * @code prepare_socket_callback(event_base *base, int socket,
+ *                               void (*cb)(evutil_socket_t, short, void *), void *arg);
+ * 
+ * @brief Set socket read event callback
+ * 
+ * @param base        libevent base
+ * @param socket      target socket
+ * @param cb          callback function
+ * @param arg         callback function argument
+ * 
+ */
+void prepare_socket_callback(event_base *base, int socket, void (*cb)(evutil_socket_t, short, void *), void *arg);
