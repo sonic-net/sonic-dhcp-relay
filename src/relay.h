@@ -477,7 +477,7 @@ void update_portchannel_mapping(std::shared_ptr<swss::DBConnector> cfgdb, std::s
 void update_loopback_mapping(std::string &ifname, std::shared_ptr<swss::DBConnector> statdb);
 
 /**
- * @code                client_callback(evutil_socket_t fd, short event, void *arg);
+ * @code                inbound_callback(evutil_socket_t fd, short event, void *arg);
  *
  * @brief               callback for libevent that is called everytime data is received at the filter socket
  *
@@ -487,7 +487,7 @@ void update_loopback_mapping(std::string &ifname, std::shared_ptr<swss::DBConnec
  *
  * @return              none
  */
-void client_callback(evutil_socket_t fd, short event, void *arg);
+void inbound_callback(evutil_socket_t fd, short event, void *arg);
 
 /**
  * @code                client_packet_handler(uint8_t *buffer, ssize_t length, struct relay_config *config, std::string &ifname);
@@ -517,17 +517,17 @@ void client_packet_handler(uint8_t *buffer, ssize_t length, struct relay_config 
 void server_callback(evutil_socket_t fd, short event, void *arg);
 
 /**
- * @code                outbond_callback(evutil_socket_t fd, short event, void *arg);
+ * @code                outbound_callback(evutil_socket_t fd, short event, void *arg);
  *
- * @brief               callback for outbond socket, only for counting purpose
+ * @brief               callback for outbound socket, only for counting purpose
  *
- * @param fd            outbond socket
+ * @param fd            outbound socket
  * @param event         libevent triggered event
  * @param arg           callback argument provided by user
  *
  * @return              none
  */
-void outbond_callback(evutil_socket_t fd, short event, void *arg);
+void outbound_callback(evutil_socket_t fd, short event, void *arg);
 
 /**
  * @code                packet_counting_handler(uint8_t *buffer, ssize_t length, std::string &ifname,

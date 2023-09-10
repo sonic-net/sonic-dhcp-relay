@@ -775,7 +775,7 @@ TEST(relay, server_callback) {
 
 MOCK_GLOBAL_FUNC2(if_indextoname, char*(unsigned int, char *));
 
-TEST(relay, client_callback) {
+TEST(relay, inbound_callback) {
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   std::shared_ptr<swss::Table> mux_table = std::make_shared<swss::Table> (
         state_db.get(), "HW_MUX_CABLE_TABLE"
@@ -824,21 +824,21 @@ TEST(relay, client_callback) {
                     .WillOnce(DoAll(SetArrayArgument<1>(ethernet1, ethernet1 + IF_NAMESIZE), Return(ptr)))
                     .WillOnce(DoAll(SetArrayArgument<1>(ethernet3, ethernet3 + IF_NAMESIZE), Return(ptr)));
   // test buffer_sz <=0 early return
-  ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
+  ASSERT_NO_THROW(inbound_callback(-1, 0, &vlans));
   // test buffer_sz > 0, if_indextoname == null early return
-  ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
+  ASSERT_NO_THROW(inbound_callback(-1, 0, &vlans));
   // test normal msg but vlan not found
-  ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
+  ASSERT_NO_THROW(inbound_callback(-1, 0, &vlans));
   // test normal msg and vlan found 
-  ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
+  ASSERT_NO_THROW(inbound_callback(-1, 0, &vlans));
 
   dual_tor_sock = true;
   // test normal msg and vlan found + dual tor
-  ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
+  ASSERT_NO_THROW(inbound_callback(-1, 0, &vlans));
   dual_tor_sock = false;
   
   // normal msg but interface mapping missing
-  ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
+  ASSERT_NO_THROW(inbound_callback(-1, 0, &vlans));
 }
 
 TEST(relay, shutdown_relay) {
@@ -1190,7 +1190,7 @@ TEST(relay, prepare_socket_callback) {
   ASSERT_NO_THROW(prepare_socket_callback(base, 1, server_callback_dualtor, NULL));
 }
 
-TEST(relay, outbond_callback) {
+TEST(relay, outbound_callback) {
   std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   config_db->hset("PORTCHANNEL_MEMBER|PortChannel101|Ethernet48", "", "");
@@ -1216,11 +1216,11 @@ TEST(relay, outbond_callback) {
   EXPECT_GLOBAL_CALL(if_indextoname, if_indextoname(_, _)).Times(2).WillOnce(Return(nullptr))
                     .WillOnce(DoAll(SetArrayArgument<1>(ethernet1, ethernet1 + IF_NAMESIZE), Return(ptr)));
 
-  ASSERT_NO_THROW(outbond_callback(0, 0, state_db.get()));
+  ASSERT_NO_THROW(outbound_callback(0, 0, state_db.get()));
   // cover 0 < buffer_sz < sizeof(struct dhcpv6_msg)
-  ASSERT_NO_THROW(outbond_callback(0, 0, state_db.get()));
+  ASSERT_NO_THROW(outbound_callback(0, 0, state_db.get()));
 
-  ASSERT_NO_THROW(outbond_callback(0, 0, state_db.get()));
+  ASSERT_NO_THROW(outbound_callback(0, 0, state_db.get()));
 }
 
 TEST(relay, packet_counting_handler) {
@@ -1252,6 +1252,3 @@ TEST(relay, packet_counting_handler) {
   reader->parse(json_begin, json_end, &root, NULL);
   EXPECT_EQ(root["Solicit"], "1");
 }
-
-
-
