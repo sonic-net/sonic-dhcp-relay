@@ -3,7 +3,6 @@
 #include <sstream>
 #include <jsoncpp/json/json.h>
 #include <signal.h>
-#include <jsoncpp/json/json.h>
 
 #include "configdb.h"
 #include "sonicv2connector.h"
