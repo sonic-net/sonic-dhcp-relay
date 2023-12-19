@@ -322,7 +322,6 @@ void initialize_counter(std::shared_ptr<swss::DBConnector> state_db, std::string
     std::string table_name = counter_table + ifname;
 
     auto init_value = gen_counter_json_str(DHCPv6_MESSAGE_TYPE_UNKNOWN, 0);
-    state_db->del(table_name);
     state_db->hset(table_name, "RX", init_value);
     state_db->hset(table_name, "TX", init_value);
 }
@@ -1485,6 +1484,23 @@ void prepare_socket_callback(event_base *base, int socket, void (*cb)(evutil_soc
 }
 
 /**
+ * @code clear_counter(std::shared_ptr<swss::DBConnector> state_db);
+ * 
+ * @brief Clear all counter
+ * 
+ * @param state_db      state_db connector pointer
+ * 
+ */
+void clear_counter(std::shared_ptr<swss::DBConnector> state_db) {
+    std::string match_pattern = counter_table + std::string("*");
+    auto keys = state_db->keys(match_pattern);
+
+    for (auto &itr : keys) {
+        state_db->del(itr);
+    }
+}
+
+/**
  * @code                loop_relay(std::unordered_map<relay_config> &vlans);
  * 
  * @brief               main loop: configure sockets, create libevent base, start server listener thread
@@ -1512,6 +1528,8 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
     auto out_filter = prepare_raw_socket(&outbound_filter_fprog);
     prepare_socket_callback(base, out_filter, outbound_callback, reinterpret_cast<void *>(state_db.get()));
     sockets.push_back(out_filter);
+
+    clear_counter(state_db);
 
     int lo_sock = -1;
     if (dual_tor_sock) {

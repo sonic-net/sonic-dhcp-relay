@@ -325,6 +325,17 @@ TEST(counter, initialize_counter)
   EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "TX"));
 }
 
+TEST(counter, clear_counter)
+{
+  std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+  std::string ifname = "Vlan1000";
+  initialize_counter(state_db, ifname);
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "RX"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "TX"));
+  clear_counter(state_db);
+  EXPECT_FALSE(state_db->exists("DHCPv6_COUNTER_TABLE|Vlan1000"));
+}
+
 TEST(counter, increase_counter)
 {
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
