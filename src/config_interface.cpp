@@ -145,6 +145,10 @@ void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries,
                 intf.is_interface_id = true;
             }
         }
+        if (intf.servers.empty()) {
+            syslog(LOG_WARNING, "No servers found for VLAN %s, skipping configuration.", vlan.c_str());
+            continue;
+        }
         syslog(LOG_INFO, "add %s relay config, option79 %s interface-id %s\n", vlan.c_str(),
                intf.is_option_79 ? "enable" : "disable", intf.is_interface_id ? "enable" : "disable");
         vlans[vlan] = intf;
