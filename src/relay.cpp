@@ -540,7 +540,7 @@ int prepare_raw_socket(const struct sock_fprog *fprog)
         if (setsockopt(s, SOL_SOCKET, SO_RCVBUF, &maxBufferSize, sizeof(maxBufferSize)) == -1) {
 	    syslog(LOG_ALERT, "setsockopt: failed to set rcvbuf size '%s'\n", strerror(errno));
         } else {
-		syslog(LOG_INFO, "setsockopt: change raw socket recv buffer size from %d to %d\n", optval, maxBufferSize);
+	    syslog(LOG_INFO, "setsockopt: change raw socket recv buffer size from %d to %d\n", optval, maxBufferSize);
 	}
     }
 
