@@ -471,6 +471,22 @@ const struct dhcpv6_relay_msg *parse_dhcpv6_relay(const uint8_t *buffer) {
 }
 
 /**
+ * @code getMaxBufferSize();
+ *
+ * @get max buffer size from /proc/sys/net/core/rmem_max.
+ */
+size_t getMaxBufferSize() {
+    std::ifstream file("/proc/sys/net/core/rmem_max");
+    int maxBufferSize = 0;
+    if (file) {
+        file >> maxBufferSize;
+    } else {
+        syslog(LOG_ALERT, "Could not open /proc/sys/net/core/rmem_max");
+    }
+    return maxBufferSize;
+}
+
+/**
  * @code                prepare_raw_socket(const struct sock_fprog *fprog);
  *
  * @brief               prepare L2 socket to attach to "udp and port 547" filter 
@@ -516,12 +532,18 @@ int prepare_raw_socket(const struct sock_fprog *fprog)
         return -1;
     }
 
-    int optval_new = RAWSOCKET_RECV_SIZE;
-    if (setsockopt(s, SOL_SOCKET, SO_RCVBUF, &optval_new, sizeof(optval_new)) == -1) {
-        syslog(LOG_WARNING, "setsockopt: Failed to set recv buffer size to %d, use default value\n", optval_new);
-    } else {
-        syslog(LOG_INFO, "setsockopt: change raw socket recv buffer size from %d to %d\n", optval, optval_new);
+    size_t maxBufferSize = getMaxBufferSize();
+    if (maxBufferSize == 0) {
+        syslog(LOG_ALERT, "dhcp_device_start_capture: failed to get max buffer size, using default");
     }
+    else {
+        if (setsockopt(s, SOL_SOCKET, SO_RCVBUF, &maxBufferSize, sizeof(maxBufferSize)) == -1) {
+	    syslog(LOG_ALERT, "setsockopt: failed to set rcvbuf size '%s'\n", strerror(errno));
+        } else {
+		syslog(LOG_INFO, "setsockopt: change raw socket recv buffer size from %d to %d\n", optval, maxBufferSize);
+	}
+    }
+
     syslog(LOG_INFO, "RAW Socket:%d successfully initialized !!!\n", s);
     return s;
 }
