@@ -44,7 +44,6 @@ jobs:
           libnl-route-3-dev \
           libnl-genl-3-dev \
           libnl-nf-3-dev \
-          libjsoncpp-dev \
           redis-server
       sudo sed -ri 's/^# unixsocket/unixsocket/' /etc/redis/redis.conf
       sudo sed -ri 's/^unixsocketperm .../unixsocketperm 777/' /etc/redis/redis.conf
@@ -74,8 +73,8 @@ jobs:
       ${{ else }}:
         artifact: common-lib.${{ parameters.arch }}
       patterns: |
-        target/debs/bullseye/libyang-*.deb
-        target/debs/bullseye/libyang_*.deb
+        target/debs/buster/libyang-*.deb
+        target/debs/buster/libyang_*.deb
     displayName: "Download libyang from common lib"
   - script: |
       set -ex
