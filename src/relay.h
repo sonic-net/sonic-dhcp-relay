@@ -559,13 +559,3 @@ void packet_counting_handler(uint8_t *buffer, ssize_t length, std::string &ifnam
  * 
  */
 void prepare_socket_callback(event_base *base, int socket, void (*cb)(evutil_socket_t, short, void *), void *arg);
-
-/**
- * @code clear_counter(std::shared_ptr<swss::DBConnector> state_db);
- * 
- * @brief Clear all counter
- * 
- * @param state_db      state_db connector pointer
- * 
- */
-void clear_counter(std::shared_ptr<swss::DBConnector> state_db);
