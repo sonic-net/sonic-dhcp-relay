@@ -50,7 +50,6 @@ jobs:
             libnl-nf-3-dev \
             libnl-genl-3-dev \
             libgmock-dev \
-            libjsoncpp-dev \
             dh-exec \
             swig3.0 \
             uuid-dev \
