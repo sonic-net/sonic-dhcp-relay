@@ -11,7 +11,7 @@ MKDIR := mkdir
 MV := mv
 FIND := find
 GCOVR := gcovr
-override LDLIBS += -levent -lhiredis -lswsscommon -pthread -lboost_thread -lboost_system -ljsoncpp
+override LDLIBS += -levent -lhiredis -lswsscommon -pthread -lboost_thread -lboost_system
 override CPPFLAGS += -Wall -std=c++17 -fPIE -I/usr/include/swss
 override CPPFLAGS += -MMD -MP -MF"$(@:%.o=%.d)" -MT"$(@)"
 CPPFLAGS_TEST := --coverage -fprofile-arcs -ftest-coverage -fprofile-generate -fsanitize=address
