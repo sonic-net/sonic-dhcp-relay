@@ -6,10 +6,9 @@
 #include <chrono>
 #include <thread>
 #include <unistd.h>
-#include <jsoncpp/json/json.h>
-
 #include "gtest/gtest.h"
 #include "gmock/gmock.h"
+
 #include "mock_relay.h"
 
 using namespace ::testing;
@@ -191,7 +190,7 @@ TEST(parsePacket, parse_dhcpv6_relay)
   EXPECT_GE("fe80::58df:a801:acb7:886", peer_addr.append(peer)); 
 }
 
-TEST(sock, prepare_raw_socket)
+TEST(sock, sock_open)
 { 
   struct sock_filter ether_relay_filter[] = {
       { 0x6, 0, 0, 0x00040000 },
@@ -200,13 +199,13 @@ TEST(sock, prepare_raw_socket)
       lengthof(ether_relay_filter),
       ether_relay_filter
   };
-  EXPECT_GE(prepare_raw_socket(&ether_relay_fprog), 0);
+  EXPECT_GE(sock_open(&ether_relay_fprog), 0);
 }
 
-TEST(sock, prepare_raw_socket_invalid_filter)
+TEST(sock, sock_open_invalid_filter)
 {
   const struct sock_fprog ether_relay_fprog = {0,{}};
-  EXPECT_EQ(prepare_raw_socket(&ether_relay_fprog), -1);
+  EXPECT_EQ(sock_open(&ether_relay_fprog), -1);
 }
 
 TEST(helper, send_udp)
@@ -321,64 +320,29 @@ TEST(counter, initialize_counter)
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   std::string ifname = "Vlan1000";
   initialize_counter(state_db, ifname);
-  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "RX"));
-  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "TX"));
-}
-
-TEST(counter, clear_counter)
-{
-  std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
-  std::string ifname = "Vlan1000";
-  initialize_counter(state_db, ifname);
-  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "RX"));
-  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "TX"));
-  clear_counter(state_db);
-  EXPECT_FALSE(state_db->exists("DHCPv6_COUNTER_TABLE|Vlan1000"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Unknown"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Solicit"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Advertise"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Request"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Confirm"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Renew"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Rebind"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Reply"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Release"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Decline"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Relay-Forward"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Relay-Reply"));
 }
 
 TEST(counter, increase_counter)
 {
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+  state_db->hset("DHCPv6_COUNTER_TABLE|Vlan1000", "Solicit", "0");
   std::string ifname = "Vlan1000";
-  Json::Value root;
-  Json::CharReaderBuilder builder;
-  std::string *output;
-  const std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
-
-  // case 1, invalid packet type
-  ASSERT_NO_THROW(increase_counter(state_db.get(), ifname, DHCPv6_MESSAGE_TYPE_COUNT, DHCPV6_RX));
-
-  // case 2, counter table not initialized before increase_counter
-  increase_counter(state_db.get(), ifname, DHCPv6_MESSAGE_TYPE_SOLICIT, DHCPV6_RX);
-  auto output_ptr1 = state_db->hget("DHCPv6_COUNTER_TABLE|Vlan1000", "RX");
-  EXPECT_NE(output_ptr1, nullptr);
-  output = output_ptr1.get();
-  std::replace(output->begin(), output->end(), '\'', '\"');
-  auto json_begin = output->c_str();
-  auto json_end = json_begin + output->length();
-  reader->parse(json_begin, json_end, &root, NULL);
-  EXPECT_EQ(root["Solicit"], "1");
-  EXPECT_EQ(root["Advertise"], "0");
-
-  // case 3, counter table initialized before increase_counter
-  initialize_counter(state_db, ifname);
-  increase_counter(state_db.get(), ifname, DHCPv6_MESSAGE_TYPE_SOLICIT, DHCPV6_RX);
-  auto output_ptr2 = state_db->hget("DHCPv6_COUNTER_TABLE|Vlan1000", "RX");
-  EXPECT_NE(output_ptr2, nullptr);
-  output = output_ptr2.get();
-  std::replace(output->begin(), output->end(), '\'', '\"');
-  json_begin = output->c_str();
-  json_end = json_begin + output->length();
-  reader->parse(json_begin, json_end, &root, NULL);
-  EXPECT_EQ(root["Solicit"], "1");
-  EXPECT_EQ(root["Advertise"], "0");
-
-  // case 4, invalid json string
-  Json::StreamWriterBuilder wbuilder;
-  std::string document = Json::writeString(wbuilder, root);
-  std::replace(document.begin(), document.end(), '\"', ':');
-  state_db->hset("DHCPv6_COUNTER_TABLE|Vlan1000", "RX", document);
-  ASSERT_NO_THROW(increase_counter(state_db.get(), ifname, DHCPv6_MESSAGE_TYPE_SOLICIT, DHCPV6_RX));
+  increase_counter(state_db, ifname, 1);
+  std::shared_ptr<std::string> output = state_db->hget("DHCPv6_COUNTER_TABLE|Vlan1000", "Solicit");
+  std::string *ptr = output.get();
+  EXPECT_EQ(*ptr, "1");
 }
 
 TEST(relay, relay_client) 
@@ -403,7 +367,6 @@ TEST(relay, relay_client)
   std::vector<std::string> servers;
   servers.push_back("fc02:2000::1");
   servers.push_back("fc02:2000::2");
-
   for (auto server:servers) {
     sockaddr_in6 tmp;
     inet_pton(AF_INET6, server.c_str(), &tmp.sin6_addr);
@@ -668,11 +631,10 @@ TEST(relay, dhcp6relay_stop) {
 
 TEST(relay, update_vlan_mapping) {
   std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
-  std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   config_db->hset("VLAN_MEMBER|Vlan1000|Ethernet19", "tagging_mode", "untagged");
   config_db->hset("VLAN_MEMBER|Vlan1000|Ethernet20", "tagging_mode", "untagged");
   std::string vlan = "Vlan1000";
-  update_vlan_mapping(vlan, config_db, state_db);
+  update_vlan_mapping(vlan, config_db);
 
   auto output = config_db->hget("VLAN_MEMBER|Vlan1000|Ethernet19", "tagging_mode");
   std::string *ptr = output.get();
@@ -786,7 +748,7 @@ TEST(relay, server_callback) {
 
 MOCK_GLOBAL_FUNC2(if_indextoname, char*(unsigned int, char *));
 
-TEST(relay, inbound_callback) {
+TEST(relay, client_callback) {
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   std::shared_ptr<swss::Table> mux_table = std::make_shared<swss::Table> (
         state_db.get(), "HW_MUX_CABLE_TABLE"
@@ -835,21 +797,21 @@ TEST(relay, inbound_callback) {
                     .WillOnce(DoAll(SetArrayArgument<1>(ethernet1, ethernet1 + IF_NAMESIZE), Return(ptr)))
                     .WillOnce(DoAll(SetArrayArgument<1>(ethernet3, ethernet3 + IF_NAMESIZE), Return(ptr)));
   // test buffer_sz <=0 early return
-  ASSERT_NO_THROW(inbound_callback(-1, 0, &vlans));
+  ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
   // test buffer_sz > 0, if_indextoname == null early return
-  ASSERT_NO_THROW(inbound_callback(-1, 0, &vlans));
+  ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
   // test normal msg but vlan not found
-  ASSERT_NO_THROW(inbound_callback(-1, 0, &vlans));
+  ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
   // test normal msg and vlan found 
-  ASSERT_NO_THROW(inbound_callback(-1, 0, &vlans));
+  ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
 
   dual_tor_sock = true;
   // test normal msg and vlan found + dual tor
-  ASSERT_NO_THROW(inbound_callback(-1, 0, &vlans));
+  ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
   dual_tor_sock = false;
   
   // normal msg but interface mapping missing
-  ASSERT_NO_THROW(inbound_callback(-1, 0, &vlans));
+  ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
 }
 
 TEST(relay, shutdown_relay) {
@@ -1154,112 +1116,5 @@ TEST(relay, server_callback_dualtor) {
   ASSERT_NO_THROW(server_callback_dualtor(0, 0, &vlans_in_loop));
 }
 
-TEST(relay, update_portchannel_mapping) {
-  std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
-  std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
-  config_db->hset("PORTCHANNEL_MEMBER|PortChannel101|Ethernet48", "", "");
-  config_db->hset("PORTCHANNEL_MEMBER|PortChannel101|Ethernet52", "", "");
-  config_db->hset("PORTCHANNEL_MEMBER|PortChannel102|Ethernet56", "", "");
 
-  update_portchannel_mapping(config_db, state_db);
 
-  Json::Value root;
-  Json::CharReaderBuilder builder;
-  std::string *output;
-  const std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
-
-  auto output_ptr1 = state_db->hget("DHCPv6_COUNTER_TABLE|PortChannel101", "RX");
-  EXPECT_NE(output_ptr1, nullptr);
-  output = output_ptr1.get();
-  std::replace(output->begin(), output->end(), '\'', '\"');
-  auto json_begin = output->c_str();
-  auto json_end = json_begin + output->length();
-  reader->parse(json_begin, json_end, &root, NULL);
-  
-  EXPECT_EQ(root["Unknown"], "0");
-  EXPECT_EQ(root["Solicit"], "0");
-  EXPECT_EQ(root["Advertise"], "0");
-  EXPECT_EQ(root["Malformed"], "0");
-
-  auto output_ptr2 = state_db->hget("DHCPv6_COUNTER_TABLE|Ethernet52", "TX");
-  EXPECT_NE(output_ptr2, nullptr);
-  output = output_ptr2.get();
-  std::replace(output->begin(), output->end(), '\'', '\"');
-  json_begin = output->c_str();
-  json_end = json_begin + output->length();
-  reader->parse(json_begin, json_end, &root, NULL);
-
-  EXPECT_EQ(root["Unknown"], "0");
-  EXPECT_EQ(root["Solicit"], "0");
-  EXPECT_EQ(root["Advertise"], "0");
-  EXPECT_EQ(root["Malformed"], "0");
-}
-
-TEST(relay, prepare_socket_callback) {
-  EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(1).WillOnce(Return(0));
-  auto base = event_base_new();
-  ASSERT_NO_THROW(prepare_socket_callback(base, 1, server_callback_dualtor, NULL));
-}
-
-TEST(relay, outbound_callback) {
-  std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
-  std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
-  config_db->hset("PORTCHANNEL_MEMBER|PortChannel101|Ethernet48", "", "");
-  config_db->hset("PORTCHANNEL_MEMBER|PortChannel101|Ethernet52", "", "");
-  config_db->hset("PORTCHANNEL_MEMBER|PortChannel102|Ethernet56", "", "");
-  config_db->hset("VLAN_MEMBER|Vlan1000|Ethernet19", "tagging_mode", "untagged");
-  config_db->hset("VLAN_MEMBER|Vlan1000|Ethernet20", "tagging_mode", "untagged");
-  std::string vlan = "Vlan1000";
-
-  update_vlan_mapping(vlan, config_db, state_db);
-  update_portchannel_mapping(config_db, state_db);
-
-  // simulator normal dhcpv6 packet length
-  ssize_t msg_len = 129;
-
-  // cover buffer_sz <= 0
-  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(5).WillOnce(Return(0))
-    .WillOnce(Return(2)).WillOnce(Return(0))
-    .WillOnce(Return(msg_len)).WillOnce(Return(0));
-
-  char ethernet1[IF_NAMESIZE] = "Ethernet1";
-  char ptr[20] = "vlan";
-  EXPECT_GLOBAL_CALL(if_indextoname, if_indextoname(_, _)).Times(2).WillOnce(Return(nullptr))
-                    .WillOnce(DoAll(SetArrayArgument<1>(ethernet1, ethernet1 + IF_NAMESIZE), Return(ptr)));
-
-  ASSERT_NO_THROW(outbound_callback(0, 0, state_db.get()));
-  // cover 0 < buffer_sz < sizeof(struct dhcpv6_msg)
-  ASSERT_NO_THROW(outbound_callback(0, 0, state_db.get()));
-
-  ASSERT_NO_THROW(outbound_callback(0, 0, state_db.get()));
-}
-
-TEST(relay, packet_counting_handler) {
-  uint8_t client_raw_solicit[] = {
-    0x33, 0x33, 0x00, 0x01, 0x00, 0x02, 0x08, 0x00, 0x27, 0xfe, 0x8f, 0x95, 0x86, 0xdd, 0x60, 0x00,
-    0x00, 0x00, 0x00, 0x3c, 0x11, 0x01, 0xfe, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0a, 0x00,
-    0x27, 0xff, 0xfe, 0xfe, 0x8f, 0x95, 0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x01, 0x00, 0x02, 0x02, 0x22, 0x02, 0x23, 0x00, 0x3c, 0xad, 0x08, 0x01, 0x10,
-    0x08, 0x74, 0x00, 0x01, 0x00, 0x0e, 0x00, 0x01, 0x00, 0x01, 0x1c, 0x39, 0xcf, 0x88, 0x08, 0x00,
-    0x27, 0xfe, 0x8f, 0x95, 0x00, 0x06, 0x00, 0x04, 0x00, 0x17, 0x00, 0x18, 0x00, 0x08, 0x00, 0x02,
-    0x00, 0x00, 0x00, 0x19, 0x00, 0x0c, 0x27, 0xfe, 0x8f, 0x95, 0x00, 0x00, 0x0e, 0x10, 0x00, 0x00,
-    0x15, 0x18
-  };
-  std::string ifname("Vlan1000");
-  std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
-  packet_counting_handler(client_raw_solicit, sizeof(client_raw_solicit),
-                          ifname, state_db.get(), DHCPV6_RX);
-
-  Json::Value root;
-  Json::CharReaderBuilder builder;
-  const std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
-
-  auto output_ptr1 = state_db->hget("DHCPv6_COUNTER_TABLE|Vlan1000", "RX");
-  EXPECT_NE(output_ptr1, nullptr);
-  auto output = output_ptr1.get();
-  std::replace(output->begin(), output->end(), '\'', '\"');
-  auto json_begin = output->c_str();
-  auto json_end = json_begin + output->length();
-  reader->parse(json_begin, json_end, &root, NULL);
-  EXPECT_EQ(root["Solicit"], "1");
-}

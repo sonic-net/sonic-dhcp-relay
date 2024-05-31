@@ -1,7 +1,9 @@
 #include <errno.h>
 #include <unistd.h>
+#include <event.h>
 #include <sstream>
-#include <jsoncpp/json/json.h>
+#include <event2/event.h>
+#include <event2/bufferevent.h>
 #include <signal.h>
 
 #include "configdb.h"
@@ -17,53 +19,33 @@ static std::string counter_table = "DHCPv6_COUNTER_TABLE|";
 
 static uint8_t client_recv_buffer[BUFFER_SIZE];
 static uint8_t server_recv_buffer[BUFFER_SIZE];
-static uint8_t outbound_packet_buffer[BUFFER_SIZE];
 
 /* DHCPv6 filter */
+/* sudo tcpdump -dd "inbound and ip6 dst ff02::1:2 && udp dst port 547" */
 
-/* sudo tcpdump -dd "inbound and ip6 and udp and (port 546 or port 547)" */
-static struct sock_filter inbound_filter[] = {
+static struct sock_filter ether_relay_filter[] = {
     { 0x28, 0, 0, 0xfffff004 },
-    { 0x15, 11, 0, 0x00000004 },
+    { 0x15, 15, 0, 0x00000004 },
     { 0x28, 0, 0, 0x0000000c },
-    { 0x15, 0, 9, 0x000086dd },
+    { 0x15, 0, 13, 0x000086dd },
+    { 0x20, 0, 0, 0x00000026 },
+    { 0x15, 0, 11, 0xff020000 },
+    { 0x20, 0, 0, 0x0000002a },
+    { 0x15, 0, 9, 0x00000000 },
+    { 0x20, 0, 0, 0x0000002e },
+    { 0x15, 0, 7, 0x00000000 },
+    { 0x20, 0, 0, 0x00000032 },
+    { 0x15, 0, 5, 0x00010002 },
     { 0x30, 0, 0, 0x00000014 },
-    { 0x15, 0, 7, 0x00000011 },
-    { 0x28, 0, 0, 0x00000036 },
-    { 0x15, 4, 0, 0x00000222 },
-    { 0x15, 3, 0, 0x00000223 },
+    { 0x15, 0, 3, 0x00000011 },
     { 0x28, 0, 0, 0x00000038 },
-    { 0x15, 1, 0, 0x00000222 },
     { 0x15, 0, 1, 0x00000223 },
     { 0x6, 0, 0, 0x00040000 },
     { 0x6, 0, 0, 0x00000000 },
 };
-const struct sock_fprog inbound_filter_fprog = {
-	lengthof(inbound_filter),
-	inbound_filter
-};
-
-
-/* sudo tcpdump -dd "outbound and ip6 and udp and (port 546 or port 547)" */
-static struct sock_filter outbound_filter[] = {
-    { 0x28, 0, 0, 0xfffff004 },
-    { 0x15, 0, 11, 0x00000004 },
-    { 0x28, 0, 0, 0x0000000c },
-    { 0x15, 0, 9, 0x000086dd },
-    { 0x30, 0, 0, 0x00000014 },
-    { 0x15, 0, 7, 0x00000011 },
-    { 0x28, 0, 0, 0x00000036 },
-    { 0x15, 4, 0, 0x00000222 },
-    { 0x15, 3, 0, 0x00000223 },
-    { 0x28, 0, 0, 0x00000038 },
-    { 0x15, 1, 0, 0x00000222 },
-    { 0x15, 0, 1, 0x00000223 },
-    { 0x6, 0, 0, 0x00040000 },
-    { 0x6, 0, 0, 0x00000000 },
-};
-const struct sock_fprog outbound_filter_fprog = {
-	lengthof(outbound_filter),
-	outbound_filter
+const struct sock_fprog ether_relay_fprog = {
+	lengthof(ether_relay_filter),
+	ether_relay_filter
 };
 
 /* DHCPv6 counter name map */
@@ -87,9 +69,6 @@ std::map<int, std::string> counterMap = {
 
 /* interface to vlan mapping */
 std::unordered_map<std::string, std::string> vlan_map;
-
-/* interface to port-channel mapping */
-std::unordered_map<std::string, std::string> portchan_map;
 
 /* ipv6 address to vlan name mapping */
 std::unordered_map<std::string, std::string> addr_vlan_map;
@@ -282,33 +261,6 @@ bool DHCPv6Msg::UnmarshalBinary(const uint8_t *packet, uint16_t len) {
 }
 
 /**
- * @code                void gen_counter_json_str(dhcp_message_type_t type, uint64_t cnt)
- *
- * @brief               generate counter json string based on the value in counterMap
- *
- * @return              counter json string
- */
-std::string gen_counter_json_str(dhcp_message_type_t type, uint64_t cnt) {
-    std::string init_value;
-
-    init_value.append("{");
-    for (int i = 0; i < DHCPv6_MESSAGE_TYPE_COUNT; i++) {
-        std::string json_str;
-        if (i == type) {
-            json_str = "'" + counterMap[i] + "'"+ ":" + "'" + std::to_string(cnt) + "'";
-        } else {
-            json_str = "'" + counterMap[i] + "'"+ ":" + "'0'";
-        }
-        init_value.append(json_str);
-        if (i + 1 < DHCPv6_MESSAGE_TYPE_COUNT) {
-            init_value.append(",");
-        }
-    }
-    init_value.append("}");
-    return init_value;
-}
-
-/**
  * @code                initialize_counter(std::shared_ptr<swss::DBConnector> state_db, std::string &ifname);
  *
  * @brief               initialize the counter for interface
@@ -320,61 +272,35 @@ std::string gen_counter_json_str(dhcp_message_type_t type, uint64_t cnt) {
  */
 void initialize_counter(std::shared_ptr<swss::DBConnector> state_db, std::string &ifname) {
     std::string table_name = counter_table + ifname;
-
-    auto init_value = gen_counter_json_str(DHCPv6_MESSAGE_TYPE_UNKNOWN, 0);
-    state_db->hset(table_name, "RX", init_value);
-    state_db->hset(table_name, "TX", init_value);
+    for (auto &intr : counterMap) {
+        state_db->hset(table_name, intr.second, toString(0)); 
+    }
 }
 
 /**
- * @code                void increase_counter(swss::DBConnector *state_db, std::string &ifname,
- *                                            uint8_t msg_type, dhcpv6_pkt_dir_t dir);
+ * @code                void increase_counter(std::shared_ptr<swss::DBConnector> state_db, std::string &ifname, uint8_t msg_type);
  *
  * @brief               increase the counter in state_db with count of each DHCPv6 message types
  *
- * @param state_db      state_db connector pointer
+ * @param std::shared_ptr<swss::DBConnector> state_db,     state_db connector pointer
  * @param ifname        interface name
  * @param msg_type      dhcpv6 message type to be increased in counter
- * @param dir           packet direction
  * 
  * @return              none
  */
-void increase_counter(swss::DBConnector *state_db, std::string &ifname, uint8_t msg_type, dhcpv6_pkt_dir_t dir) {
+void increase_counter(std::shared_ptr<swss::DBConnector> state_db, std::string &ifname, uint8_t msg_type) {
     if (counterMap.find(msg_type) == counterMap.end()) {
         syslog(LOG_WARNING, "Unexpected message type %d(0x%x)\n", msg_type, msg_type);
-        // overwrite to UNKNOWN type for counting
-        msg_type = DHCPv6_MESSAGE_TYPE_UNKNOWN;
+        return;
     }
     std::string table_name = counter_table + ifname;
     std::string type = counterMap.find(msg_type)->second;
-    auto counters_json = state_db->hget(table_name, (dir == DHCPV6_RX) ? "RX" : "TX");
-    if (counters_json == nullptr) {
-        auto json_string = gen_counter_json_str(static_cast<dhcp_message_type_t>(msg_type), 1);
-        state_db->hset(table_name, (dir == DHCPV6_RX) ? "RX" : "TX", json_string);
+    auto count_str = state_db->hget(table_name, type);
+    if (count_str == nullptr) {
+        state_db->hset(table_name, type, toString(1));
     } else {
-        Json::Value root;
-        Json::CharReaderBuilder builder;
-        Json::StreamWriterBuilder wbuilder;
-        JSONCPP_STRING err;
-
-        std::replace(counters_json.get()->begin(), counters_json.get()->end(), '\'', '\"');
-        auto json_begin = counters_json.get()->c_str();
-        auto json_end = json_begin + counters_json.get()->length();
-        const std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
-        if (reader->parse(json_begin, json_end, &root, &err)) {
-            if (root.isMember(type)) {
-                std::string cnt_string = root[type].asString();
-                auto cnt = std::stoull(cnt_string) + 1;
-                root[type] = Json::Value(std::to_string(cnt));
-            } else {
-                root[type] = Json::Value(std::to_string(1));
-            }
-            wbuilder["indentation"] = ""; // whitespace-less output
-            const std::string document = Json::writeString(wbuilder, root);
-            state_db->hset(table_name, (dir == DHCPV6_RX) ? "RX" : "TX", document);
-        } else {
-            syslog(LOG_WARNING, "failed to parse counter json: %s, %s", json_begin, err.c_str());
-        }
+        auto count = atoll(count_str.get()->c_str());
+        state_db->hset(table_name, type, toString(count + 1));
     }
 }
 
@@ -471,7 +397,7 @@ const struct dhcpv6_relay_msg *parse_dhcpv6_relay(const uint8_t *buffer) {
 }
 
 /**
- * @code                prepare_raw_socket(const struct sock_fprog *fprog);
+ * @code                sock_open(const struct sock_fprog *fprog);
  *
  * @brief               prepare L2 socket to attach to "udp and port 547" filter 
  *
@@ -479,8 +405,9 @@ const struct dhcpv6_relay_msg *parse_dhcpv6_relay(const uint8_t *buffer) {
  *
  * @return              socket descriptor
  */
-int prepare_raw_socket(const struct sock_fprog *fprog)
+int sock_open(const struct sock_fprog *fprog)
 {
+
     int s = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
     if (s == -1) {
         syslog(LOG_ERR, "socket: Failed to create socket\n");
@@ -522,7 +449,7 @@ int prepare_raw_socket(const struct sock_fprog *fprog)
     } else {
         syslog(LOG_INFO, "setsockopt: change raw socket recv buffer size from %d to %d\n", optval, optval_new);
     }
-    syslog(LOG_INFO, "RAW Socket:%d successfully initialized !!!\n", s);
+
     return s;
 }
 
@@ -543,7 +470,7 @@ void prepare_relay_config(relay_config &interface_config, int gua_sock, int filt
     sockaddr_in6 link_local;
     
     interface_config.gua_sock = gua_sock;
-    interface_config.filter = filter;
+    interface_config.filter = filter; 
 
     for(auto server: interface_config.servers) {
         sockaddr_in6 tmp;
@@ -639,7 +566,7 @@ int prepare_lo_socket(const char *lo) {
         (void) close(lo_sock);
         return -1;
     }
-    syslog(LOG_INFO, "%s socket %d successfully initialized !!!\n", lo, lo_sock);
+
     return lo_sock;
 }
 
@@ -727,8 +654,6 @@ int prepare_vlan_sockets(int &gua_sock, int &lla_sock, relay_config &config) {
         close(lla_sock);
         return -1;
     }
-    syslog(LOG_INFO, "%s GUA Socket:%d, LLA Socket:%d, successfully initialized !!!\n",
-           config.interface.c_str(), gua_sock, lla_sock);
     return 0;
 }
 
@@ -754,11 +679,11 @@ void relay_client(const uint8_t *msg, uint16_t len, const ip6_hdr *ip_hdr, const
     if (!result) {
         char addr_str[INET6_ADDRSTRLEN];
         inet_ntop(AF_INET6, &ip_hdr->ip6_src, addr_str, INET6_ADDRSTRLEN);
-        increase_counter(config->state_db.get(), config->interface, DHCPv6_MESSAGE_TYPE_MALFORMED, DHCPV6_RX);
+        increase_counter(config->state_db, config->interface, DHCPv6_MESSAGE_TYPE_MALFORMED);
         syslog(LOG_WARNING, "DHCPv6 option is invalid or contains malformed payload from %s\n", addr_str);
         return;
     }
-    increase_counter(config->state_db.get(), config->interface, dhcpv6.m_msg_hdr.msg_type, DHCPV6_RX);
+    increase_counter(config->state_db, config->interface, dhcpv6.m_msg_hdr.msg_type);
 
     /* generate relay packet */
     class RelayMsg relay;
@@ -798,7 +723,7 @@ void relay_client(const uint8_t *msg, uint16_t len, const ip6_hdr *ip_hdr, const
     }
     for(auto server: config->servers_sock) {
         if(send_udp(sock, relay_pkt, server, relay_pkt_len)) {
-            increase_counter(config->state_db.get(), config->interface, DHCPv6_MESSAGE_TYPE_RELAY_FORW, DHCPV6_TX);
+            increase_counter(config->state_db, config->interface, DHCPv6_MESSAGE_TYPE_RELAY_FORW);
         }
     }
 }
@@ -825,7 +750,6 @@ void relay_relay_forw(const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, re
                addr_str, dhcp_relay_header->hop_count);
         return;
     }
-    increase_counter(config->state_db.get(), config->interface, DHCPv6_MESSAGE_TYPE_RELAY_FORW, DHCPV6_RX);
 
     RelayMsg relay;
     relay.m_msg_hdr.msg_type = DHCPv6_MESSAGE_TYPE_RELAY_FORW;
@@ -860,7 +784,7 @@ void relay_relay_forw(const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, re
     }
     for(auto server: config->servers_sock) {
         if(send_udp(sock, send_buffer, server, send_buffer_len)) {
-            increase_counter(config->state_db.get(), config->interface, DHCPv6_MESSAGE_TYPE_RELAY_FORW, DHCPV6_TX);
+            increase_counter(config->state_db, config->interface, DHCPv6_MESSAGE_TYPE_RELAY_FORW);
         }
     }
 }
@@ -881,14 +805,14 @@ void relay_relay_forw(const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, re
     class RelayMsg relay;
     auto result = relay.UnmarshalBinary(msg, len);
     if (!result) {
-        increase_counter(config->state_db.get(), config->interface, DHCPv6_MESSAGE_TYPE_MALFORMED, DHCPV6_RX);
+        increase_counter(config->state_db, config->interface, DHCPv6_MESSAGE_TYPE_MALFORMED);
         syslog(LOG_WARNING, "Relay-reply option is invalid or contains malformed payload\n");
         return;
     }
 
     auto opt_value = relay.m_option_list.Get(OPTION_RELAY_MSG);
     if (opt_value.empty()) {
-        increase_counter(config->state_db.get(), config->interface, DHCPv6_MESSAGE_TYPE_UNKNOWN, DHCPV6_RX);
+        increase_counter(config->state_db, config->interface, DHCPv6_MESSAGE_TYPE_UNKNOWN);
         syslog(LOG_WARNING, "Option relay-msg not found");
         return;
     }
@@ -905,7 +829,7 @@ void relay_relay_forw(const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, re
 
     int sock = config->lla_sock;
     if (isIPv6Zero(relay.m_msg_hdr.link_address)) {
-        /* relay.m_msg_hdr is packed member, use a temp variable for unaligned case */
+        // relay.m_msg_hdr is packed member, use a temp variable for unaligned case
         struct in6_addr peer_addr = relay.m_msg_hdr.peer_address;
         if (!IN6_IS_ADDR_LINKLOCAL(&peer_addr))
             sock = config->gua_sock;
@@ -913,13 +837,12 @@ void relay_relay_forw(const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, re
     }
 
     if(send_udp(sock, dhcpv6, target_addr, length)) {
-        increase_counter(config->state_db.get(), config->interface, msg_type, DHCPV6_TX);
+        increase_counter(config->state_db, config->interface, msg_type);
     }
 }
 
 /**
- * @code                update_vlan_mapping(std::string vlan, std::shared_ptr<swss::DBConnector> cfgdb,
- *                                          std::shared_ptr<swss::DBConnector> statdb);
+ * @code                update_vlan_mapping(std::string vlan, std::shared_ptr<swss::DBConnector> cfgdb);
  *
  * @brief               build vlan member interface to vlan mapping table 
  *
@@ -928,8 +851,7 @@ void relay_relay_forw(const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, re
  *
  * @return              none
  */
-void update_vlan_mapping(std::string vlan, std::shared_ptr<swss::DBConnector> cfgdb,
-                         std::shared_ptr<swss::DBConnector> statdb) {
+void update_vlan_mapping(std::string vlan, std::shared_ptr<swss::DBConnector> cfgdb) {
     auto match_pattern = std::string("VLAN_MEMBER|") + vlan + std::string("|*");
     auto keys = cfgdb->keys(match_pattern);
     for (auto &itr : keys) {
@@ -937,58 +859,11 @@ void update_vlan_mapping(std::string vlan, std::shared_ptr<swss::DBConnector> cf
         auto interface = itr.substr(found + 1);
         vlan_map[interface] = vlan;
         syslog(LOG_INFO, "Add <%s, %s> into interface vlan map\n", interface.c_str(), vlan.c_str());
-        initialize_counter(statdb, interface);
-    }
-    initialize_counter(statdb, vlan);
-}
-
-/**
- * @code                update_portchannel_mapping(std::shared_ptr<swss::DBConnector> cfgdb,
- *                                                 std::shared_ptr<swss::DBConnector> statdb);
- *
- * @brief               build portchannel member interface mapping table 
- *
- * @param cfgdb         config db connection
- * @param statdb        state db connection
- *
- * @return              none
- */
-void update_portchannel_mapping(std::shared_ptr<swss::DBConnector> cfgdb, std::shared_ptr<swss::DBConnector> statdb) {
-    auto match_pattern = std::string("PORTCHANNEL_MEMBER|*");
-    auto keys = cfgdb->keys(match_pattern);
-    std::unordered_map<std::string, bool> portchannels;
-    for (auto &itr : keys) {
-        auto first = itr.find_first_of('|');
-        auto second = itr.find_last_of('|');
-        auto portchannel = itr.substr(first + 1, second - first - 1);
-        auto interface = itr.substr(second + 1);
-        portchan_map[interface] = portchannel;
-        portchannels[portchannel] = true;
-        syslog(LOG_INFO, "Add <%s, %s> into interface port-channel map\n", interface.c_str(), portchannel.c_str());
-        initialize_counter(statdb, interface);
-    }
-    for (auto &itr : portchannels) {
-        std::string ifname = itr.first;
-        initialize_counter(statdb, ifname);
     }
 }
 
 /**
- * @code                update_loopback_mapping(std::string &ifname, std::shared_ptr<swss::DBConnector> statdb);
- *
- * @brief               update loopback interface mapping, currently only counter related initialization
- *
- * @param ifname        loopback interface name
- * @param statdb        state db connection
- *
- * @return              none
- */
-void update_loopback_mapping(std::string &ifname, std::shared_ptr<swss::DBConnector> statdb) {
-    initialize_counter(statdb, ifname);
-}
-
-/**
- * @code                inbound_callback(evutil_socket_t fd, short event, void *arg);
+ * @code                client_callback(evutil_socket_t fd, short event, void *arg);
  *
  * @brief               callback for libevent that is called everytime data is received at the filter socket
  *
@@ -998,7 +873,7 @@ void update_loopback_mapping(std::string &ifname, std::shared_ptr<swss::DBConnec
  *
  * @return              none
  */
-void inbound_callback(evutil_socket_t fd, short event, void *arg) {
+void client_callback(evutil_socket_t fd, short event, void *arg) {
     auto vlans = reinterpret_cast<std::unordered_map<std::string, struct relay_config> *>(arg);
     struct sockaddr_ll sll;
     socklen_t slen = sizeof(sll);
@@ -1021,11 +896,9 @@ void inbound_callback(evutil_socket_t fd, short event, void *arg) {
         std::string intf(interfaceName);
         auto vlan = vlan_map.find(intf);
         if (vlan == vlan_map.end()) {
-            if (intf.find(CLIENT_IF_PREFIX) == std::string::npos) {
-                continue;
+            if (intf.find(CLIENT_IF_PREFIX) != std::string::npos) {
+                syslog(LOG_WARNING, "Invalid input interface %s\n", interfaceName);
             }
-            // update uplink Ethernet interfaces rx counters
-            packet_counting_handler(client_recv_buffer, buffer_sz, intf, vlans->begin()->second.state_db.get(), DHCPV6_RX);
             continue;
         }
         auto config_itr = vlans->find(vlan->second);
@@ -1034,8 +907,6 @@ void inbound_callback(evutil_socket_t fd, short event, void *arg) {
             continue;
         }
         auto config = config_itr->second;
-        /* update downlink vlan member interface rx counters */
-        packet_counting_handler(client_recv_buffer, buffer_sz, intf, config.state_db.get(), DHCPV6_RX);
         if (dual_tor_sock) {
             std::string state;
             config.mux_table->hget(intf, "state", state);
@@ -1049,110 +920,7 @@ void inbound_callback(evutil_socket_t fd, short event, void *arg) {
 }
 
 /**
- * @code                outbound_callback(evutil_socket_t fd, short event, void *arg);
- *
- * @brief               callback for outbound socket, only for counting purpose
- *
- * @param fd            outbound socket
- * @param event         libevent triggered event
- * @param arg           callback argument provided by user
- *
- * @return              none
- */
-void outbound_callback(evutil_socket_t fd, short event, void *arg) {
-    auto state_db = static_cast<swss::DBConnector *>(arg);
-    struct sockaddr_ll sll;
-    socklen_t slen = sizeof(sll);
-    int pkts_num = 0;
-
-    while (pkts_num++ < BATCH_SIZE) {
-        auto buffer_sz = recvfrom(fd, outbound_packet_buffer, BUFFER_SIZE, 0, (struct sockaddr *)&sll, &slen);
-        if (buffer_sz <= 0) {
-            if (errno != EAGAIN) {
-                syslog(LOG_ERR, "recv: Failed to receive data at filter socket: %s\n", strerror(errno));
-            }
-            return;
-        }
-        char interfaceName[IF_NAMESIZE];
-        if (if_indextoname(sll.sll_ifindex, interfaceName) == NULL) {
-            syslog(LOG_WARNING, "Invalid output interface index %d\n", sll.sll_ifindex);
-            continue;
-        }
-        /* Only count TX packets downlink and uplink Ethernet interfaces.
-         * For portchannel interface TX counter, increase in packet_counting_handler.
-         * For vlan interface counter, increase in relay service function handlers.
-         */
-        std::string intf(interfaceName);
-        auto vlan = vlan_map.find(intf);
-        if (vlan == vlan_map.end()) {
-            if (intf.find(CLIENT_IF_PREFIX) == std::string::npos) {
-                continue;
-            }
-            packet_counting_handler(outbound_packet_buffer, buffer_sz, intf, state_db, DHCPV6_TX);
-            continue;
-        }
-        packet_counting_handler(outbound_packet_buffer, buffer_sz, intf, state_db, DHCPV6_TX);
-    }
-}
-
-/**
- * @code                packet_counting_handler(uint8_t *buffer, ssize_t length, std::string &ifname,
-                                                swss::DBConnector *state_db, dhcpv6_pkt_dir_t dir);
- *
- * @brief               packet couting handler
- *
- * @param buffer        packet buffer
- * @param length        packet length
- * @param ifname        vlan member interface name
- * @param state_db      state db pointer
- * @param dir           packet direction
- *
- * @return              none
- */
-void packet_counting_handler(uint8_t *buffer, ssize_t length, std::string &ifname,
-                             swss::DBConnector *state_db, dhcpv6_pkt_dir_t dir) {
-    auto buffer_end = buffer + length;
-    const uint8_t *current_position = buffer;
-    const uint8_t *prev = NULL;
-
-    parse_ether_frame(current_position, &current_position);
-    auto ip6_header = parse_ip6_hdr(current_position, &current_position);
-    prev = current_position;
-    if (ip6_header->ip6_ctlun.ip6_un1.ip6_un1_nxt != IPPROTO_UDP) {
-        const struct ip6_ext *ext_header;
-        do {
-            ext_header = (const struct ip6_ext *)current_position;
-            current_position += ext_header->ip6e_len;
-            if((current_position == prev) ||
-               (current_position + sizeof(*ext_header) >= buffer_end)) {
-                syslog(LOG_WARNING, "Invalid ipv6 extension header packets from %s\n", ifname.c_str());
-                return;
-            }
-            prev = current_position;
-        }
-        while (ext_header->ip6e_nxt != IPPROTO_UDP);
-    }
-    auto udp_header = parse_udp(current_position, &current_position);
-    auto udp_len = ntohs(udp_header->len);
-    if (udp_len < (sizeof(struct udphdr) + sizeof(struct dhcpv6_msg)) ||
-        (current_position + udp_len - sizeof(struct udphdr)) != buffer_end) {
-        syslog(LOG_WARNING, "Invalid UDP header length from %s\n", ifname.c_str());
-        return;
-    }
-
-    auto msg = parse_dhcpv6_hdr(current_position);
-    /* Extra counting for port channel interface.
-     * No need worry for vlan interface counting, it will be handled in relay service paths.
-     */
-    if (portchan_map.find(ifname) != portchan_map.end()) {
-        increase_counter(state_db, portchan_map[ifname], msg->msg_type, dir);
-    }
-    increase_counter(state_db, ifname, msg->msg_type, dir);
-}
-
-/**
- * @code                client_packet_handler(uint8_t *buffer, ssize_t length, struct relay_config *config,
- *                                            std::string &ifname);
+ * @code                client_packet_handler(uint8_t *buffer, ssize_t length, struct relay_config *config, std::string &ifname);
  *
  * @brief               dhcpv6 client packet handler
  *
@@ -1179,7 +947,6 @@ void client_packet_handler(uint8_t *buffer, ssize_t length, struct relay_config 
             current_position += ext_header->ip6e_len;
             if((current_position == prev) ||
                (current_position + sizeof(*ext_header) >= buffer_end)) {
-                syslog(LOG_WARNING, "Invalid ipv6 extension header packets from %s\n", ifname.c_str());
                 return;
             }
             prev = current_position;
@@ -1188,9 +955,8 @@ void client_packet_handler(uint8_t *buffer, ssize_t length, struct relay_config 
     }
 
     auto udp_header = parse_udp(current_position, &current_position);
-    auto udp_len = ntohs(udp_header->len);
-    if (udp_len < (sizeof(struct udphdr) + sizeof(struct dhcpv6_msg)) ||
-        (current_position + udp_len - sizeof(struct udphdr)) != buffer_end) {
+    uint16_t udp_len = ntohs(udp_header->len);
+    if (udp_len < sizeof(struct udphdr) || (current_position - sizeof(struct udphdr) + udp_len) != buffer_end) {
         syslog(LOG_WARNING, "Invalid UDP header length from %s\n", ifname.c_str());
         return;
     }
@@ -1198,9 +964,8 @@ void client_packet_handler(uint8_t *buffer, ssize_t length, struct relay_config 
     auto msg = parse_dhcpv6_hdr(current_position);
     // RFC3315 only
     if (msg->msg_type < DHCPv6_MESSAGE_TYPE_SOLICIT || msg->msg_type > DHCPv6_MESSAGE_TYPE_RELAY_REPL) {
-        increase_counter(config->state_db.get(), config->interface, DHCPv6_MESSAGE_TYPE_UNKNOWN, DHCPV6_RX);
-        syslog(LOG_WARNING, "Unknown DHCPv6 message type %d from %s:%s\n",
-               msg->msg_type, ifname.c_str(), config->interface.c_str());
+        increase_counter(config->state_db, config->interface, DHCPv6_MESSAGE_TYPE_UNKNOWN);
+        syslog(LOG_WARNING, "Unknown DHCPv6 message type %d from %s\n", msg->msg_type, ifname.c_str());
         return;
     }
 
@@ -1224,8 +989,7 @@ void client_packet_handler(uint8_t *buffer, ssize_t length, struct relay_config 
         }
         default:
         {
-            syslog(LOG_WARNING, "DHCPv6 client message type %d received from %s was not relayed\n",
-                   msg->msg_type, ifname.c_str());
+            syslog(LOG_WARNING, "DHCPv6 client message type %d received from %s was not relayed\n", msg->msg_type, ifname.c_str());
             break;
         }
     }
@@ -1324,7 +1088,7 @@ void server_callback_dualtor(evutil_socket_t fd, short event, void *arg) {
             continue;
         }
         auto loopback_str = std::string(loopback);
-        increase_counter(config->state_db.get(), loopback_str, msg_type, DHCPV6_RX);
+        increase_counter(config->state_db, loopback_str, msg_type);
         relay_relay_reply(server_recv_buffer, buffer_sz, config);
     }
 }
@@ -1363,12 +1127,12 @@ void server_callback(evutil_socket_t fd, short event, void *arg) {
         auto msg_type = parse_dhcpv6_hdr(server_recv_buffer)->msg_type;
         // RFC3315 only
         if (msg_type < DHCPv6_MESSAGE_TYPE_SOLICIT || msg_type > DHCPv6_MESSAGE_TYPE_RELAY_REPL) {
-            increase_counter(config->state_db.get(), config->interface, DHCPv6_MESSAGE_TYPE_UNKNOWN, DHCPV6_RX);
+            increase_counter(config->state_db, config->interface, DHCPv6_MESSAGE_TYPE_UNKNOWN);
             syslog(LOG_WARNING, "Unknown DHCPv6 message type %d\n", msg_type);
             continue;
         }
 
-        increase_counter(config->state_db.get(), config->interface, msg_type, DHCPV6_RX);
+        increase_counter(config->state_db, config->interface, msg_type);
         if (msg_type == DHCPv6_MESSAGE_TYPE_RELAY_REPL) {
             relay_relay_reply(server_recv_buffer, buffer_sz, config);
         }
@@ -1459,48 +1223,6 @@ void dhcp6relay_stop()
 }
 
 /**
- * @code prepare_socket_callback(event_base *base, int socket,
- *                               void (*cb)(evutil_socket_t, short, void *), void *arg);
- * 
- * @brief Set socket read event callback
- * 
- * @param base        libevent base
- * @param socket      target socket
- * @param cb          callback function
- * @param arg         callback function argument
- * 
- */
-void prepare_socket_callback(event_base *base, int socket, void (*cb)(evutil_socket_t, short, void *), void *arg) {
-    if (socket == -1) {
-        syslog(LOG_ERR, "Invalid socket id\n");
-        exit(EXIT_FAILURE);
-    }
-    auto event = event_new(base, socket, EV_READ|EV_PERSIST, cb, arg);
-    if (event == NULL) {
-        syslog(LOG_ERR, "libevent: Failed to create event for socket %d\n", socket);
-        exit(EXIT_FAILURE);
-    }
-    event_add(event, NULL);
-}
-
-/**
- * @code clear_counter(std::shared_ptr<swss::DBConnector> state_db);
- * 
- * @brief Clear all counter
- * 
- * @param state_db      state_db connector pointer
- * 
- */
-void clear_counter(std::shared_ptr<swss::DBConnector> state_db) {
-    std::string match_pattern = counter_table + std::string("*");
-    auto keys = state_db->keys(match_pattern);
-
-    for (auto &itr : keys) {
-        state_db->del(itr);
-    }
-}
-
-/**
  * @code                loop_relay(std::unordered_map<relay_config> &vlans);
  * 
  * @brief               main loop: configure sockets, create libevent base, start server listener thread
@@ -1521,26 +1243,40 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
         state_db.get(), "HW_MUX_CABLE_TABLE"
     );
 
-    auto in_filter = prepare_raw_socket(&inbound_filter_fprog);
-    prepare_socket_callback(base, in_filter, inbound_callback, reinterpret_cast<void *>(&vlans));
-    sockets.push_back(in_filter);
-
-    auto out_filter = prepare_raw_socket(&outbound_filter_fprog);
-    prepare_socket_callback(base, out_filter, outbound_callback, reinterpret_cast<void *>(state_db.get()));
-    sockets.push_back(out_filter);
-
-    clear_counter(state_db);
+    auto filter = sock_open(&ether_relay_fprog);
+    if (filter != -1) {
+        sockets.push_back(filter);
+        auto event = event_new(base, filter, EV_READ|EV_PERSIST, client_callback,
+                               reinterpret_cast<void *>(&vlans));
+        if (event == NULL) {
+            syslog(LOG_ERR, "libevent: Failed to create client listen event\n");
+            exit(EXIT_FAILURE);
+        }
+        event_add(event, NULL);
+        syslog(LOG_INFO, "libevent: Add client listen socket event\n");
+    } else {
+        syslog(LOG_ERR, "Failed to create client listen socket");
+        exit(EXIT_FAILURE);
+    }
 
     int lo_sock = -1;
     if (dual_tor_sock) {
-        std::string lo_string(loopback);
-        update_loopback_mapping(lo_string, state_db);
         lo_sock = prepare_lo_socket(loopback);
-        prepare_socket_callback(base, lo_sock, server_callback_dualtor, reinterpret_cast<void *>(&vlans));
-        sockets.push_back(lo_sock);
+        if (lo_sock != -1) {
+            sockets.push_back(lo_sock);
+            auto event = event_new(base, lo_sock, EV_READ|EV_PERSIST, server_callback_dualtor,
+                                   reinterpret_cast<void *>(&vlans));
+            if (event == NULL) {
+                syslog(LOG_ERR, "libevent: Failed to create dualtor loopback listen event\n");
+                exit(EXIT_FAILURE);
+            }
+            event_add(event, NULL);
+            syslog(LOG_INFO, "libevent: Add dualtor loopback socket event\n");
+        } else{
+            syslog(LOG_ERR, "Failed to create dualtor loopback listen socket");
+            exit(EXIT_FAILURE);
+        }
     }
-
-    update_portchannel_mapping(config_db, state_db);
 
     for(auto &vlan : vlans) {
         int gua_sock = 0;
@@ -1550,18 +1286,31 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
         vlan.second.state_db = state_db;
         vlan.second.mux_key = vlan_member + vlan.second.interface + "|";
 
-        update_vlan_mapping(vlan.first, config_db, state_db);
+        update_vlan_mapping(vlan.first, config_db);
+
+        initialize_counter(vlan.second.state_db, vlan.second.interface);
         
-        assert(prepare_vlan_sockets(gua_sock, lla_sock, vlan.second) != -1);
+        if (prepare_vlan_sockets(gua_sock, lla_sock, vlan.second) != -1) {
+            vlan.second.gua_sock = gua_sock;
+            vlan.second.lla_sock = lla_sock;
+            vlan.second.lo_sock = lo_sock;
 
-        vlan.second.gua_sock = gua_sock;
-        vlan.second.lla_sock = lla_sock;
-        vlan.second.lo_sock = lo_sock;
-
-        prepare_relay_config(vlan.second, gua_sock, in_filter);
-        prepare_socket_callback(base, gua_sock, server_callback, &(vlan.second));
-        sockets.push_back(gua_sock);
-        sockets.push_back(lla_sock);
+            sockets.push_back(gua_sock);
+            sockets.push_back(lla_sock);
+            prepare_relay_config(vlan.second, gua_sock, filter);
+            if (!dual_tor_sock) {
+	            auto event = event_new(base, gua_sock, EV_READ|EV_PERSIST,
+                                       server_callback, &(vlan.second));
+                if (event == NULL) {
+                    syslog(LOG_ERR, "libevent: Failed to create server listen libevent\n");
+                }
+                event_add(event, NULL);
+                syslog(LOG_INFO, "libevent: add server listen socket for %s\n", vlan.first.c_str());
+            }
+        } else {
+            syslog(LOG_ERR, "Failed to create dualtor loopback listen socket");
+            exit(EXIT_FAILURE);
+        }
     }
 
     if(signal_init() == 0 && signal_start() == 0) {
