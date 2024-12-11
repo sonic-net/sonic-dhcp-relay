@@ -350,9 +350,31 @@ TEST(counter, clear_counter)
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   std::string ifname = "Vlan1000";
   initialize_counter(state_db, ifname);
-  EXPECT_FALSE(state_db->exists("DHCPv6_COUNTER_TABLE|Vlan1000"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Unknown"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Solicit"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Advertise"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Request"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Confirm"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Renew"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Rebind"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Reply"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Release"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Decline"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Relay-Forward"));
+  EXPECT_TRUE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Relay-Reply"));
   clear_counter(state_db);
-  EXPECT_FALSE(state_db->exists("DHCPv6_COUNTER_TABLE|Vlan1000"));
+  EXPECT_FALSE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Unknown"));
+  EXPECT_FALSE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Solicit"));
+  EXPECT_FALSE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Advertise"));
+  EXPECT_FALSE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Request"));
+  EXPECT_FALSE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Confirm"));
+  EXPECT_FALSE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Renew"));
+  EXPECT_FALSE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Rebind"));
+  EXPECT_FALSE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Reply"));
+  EXPECT_FALSE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Release"));
+  EXPECT_FALSE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Decline"));
+  EXPECT_FALSE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Relay-Forward"));
+  EXPECT_FALSE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Relay-Reply"));
 }
 
 TEST(relay, relay_client) 
