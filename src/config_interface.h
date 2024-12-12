@@ -39,7 +39,7 @@ void deinitialize_swss();
  *
  * @return              none
  */
-void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic);
+void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic, std::shared_ptr<swss::DBConnector> config_db);
 
 /**
  * @code                    void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::unordered_map<std::string, relay_config> &vlans)
@@ -51,7 +51,7 @@ void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::Subscr
  *
  * @return                  none
  */
-void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::unordered_map<std::string, relay_config> &vlans);
+void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::unordered_map<std::string, relay_config> &vlans, std::shared_ptr<swss::DBConnector> config_db);
 
 /**
  * @code                    void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries, std::unordered_map<std::string, relay_config> &vlans)
@@ -63,4 +63,4 @@ void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::un
  *
  * @return                  none
  */
-void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries, std::unordered_map<std::string, relay_config> &vlans);
+void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries, std::unordered_map<std::string, relay_config> &vlans, std::shared_ptr<swss::DBConnector> config_db);

@@ -24,12 +24,12 @@ TEST(configInterface, get_dhcp) {
   swss::SubscriberStateTable ipHelpersTable(config_db.get(), "DHCP_RELAY");
   std::unordered_map<std::string, relay_config> vlans;
   
-  ASSERT_NO_THROW(get_dhcp(vlans, &ipHelpersTable, false));
+  ASSERT_NO_THROW(get_dhcp(vlans, &ipHelpersTable, false, config_db));
   EXPECT_EQ(vlans.size(), 0);
 
   swssSelect.addSelectable(&ipHelpersTable);
 
-  ASSERT_NO_THROW(get_dhcp(vlans, &ipHelpersTable, false));
+  ASSERT_NO_THROW(get_dhcp(vlans, &ipHelpersTable, false, config_db));
   EXPECT_EQ(vlans.size(), 1);
 }
 
@@ -37,7 +37,7 @@ TEST(configInterface, handleRelayNotification) {
   std::shared_ptr<swss::DBConnector> cfg_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
   swss::SubscriberStateTable ipHelpersTable(cfg_db.get(), "DHCP_RELAY");
   std::unordered_map<std::string, relay_config> vlans;
-  handleRelayNotification(ipHelpersTable, vlans);
+  handleRelayNotification(ipHelpersTable, vlans, cfg_db);
 }
 
 TEST(configInterface, processRelayNotification) {  
@@ -51,7 +51,7 @@ TEST(configInterface, processRelayNotification) {
   ipHelpersTable.pops(entries);
   std::unordered_map<std::string, relay_config> vlans;
 
-  processRelayNotification(entries, vlans);
+  processRelayNotification(entries, vlans, config_db);
 
   EXPECT_EQ(vlans.size(), 1);
   EXPECT_FALSE(vlans["Vlan1000"].is_option_79);
