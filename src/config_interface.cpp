@@ -53,13 +53,15 @@ void deinitialize_swss()
 
 /**
 
- * @code                void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic)
+ * @code                void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic,
+                                      std::shared_ptr<swss::DBConnector> config_db)
  * 
  * @brief               initialize and get vlan table information from DHCP_RELAY
  *
  * @return              none
  */
-void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic, std::shared_ptr<swss::DBConnector> config_db) {
+void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic,
+              std::shared_ptr<swss::DBConnector> config_db) {
     swss::Selectable *selectable;
     int ret = swssSelect.select(&selectable, DEFAULT_TIMEOUT_MSEC);
     if (ret == swss::Select::ERROR) {
@@ -78,7 +80,8 @@ void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::Subscr
 }
 
 /**
- * @code                    void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::unordered_map<std::string, relay_config> &vlans)
+ * @code                    void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::unordered_map<std::string, relay_config> &vlans,
+ *                                                       std::shared_ptr<swss::DBConnector> config_db)
  * 
  * @brief                   handles DHCPv6 relay configuration change notification
  *
@@ -87,7 +90,8 @@ void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::Subscr
  *
  * @return                  none
  */
-void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::unordered_map<std::string, relay_config> &vlans, std::shared_ptr<swss::DBConnector> config_db)
+void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::unordered_map<std::string, relay_config> &vlans,
+                             std::shared_ptr<swss::DBConnector> config_db)
 {
     std::deque<swss::KeyOpFieldsValuesTuple> entries;
 
@@ -96,7 +100,8 @@ void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::un
 }
 
 /**
- * @code                    void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries, std::unordered_map<std::string, relay_config> vlans)
+ * @code                    void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries, std::unordered_map<std::string, relay_config> vlans,
+                                                          std::shared_ptr<swss::DBConnector> config_db)
  * 
  * @brief                   process DHCPv6 relay servers and options configuration change notification
  *
@@ -105,7 +110,8 @@ void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::un
  *
  * @return                  none
  */
-void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries, std::unordered_map<std::string, relay_config> &vlans, std::shared_ptr<swss::DBConnector> config_db)
+void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries, std::unordered_map<std::string, relay_config> &vlans,
+                              std::shared_ptr<swss::DBConnector> config_db)
 {
     std::vector<std::string> servers;
     bool option_79_default = true;
