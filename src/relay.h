@@ -474,3 +474,12 @@ void client_packet_handler(uint8_t *buffer, ssize_t length, struct relay_config 
  */
 void server_callback(evutil_socket_t fd, short event, void *arg);
 
+/**
+ * @code clear_counter(std::shared_ptr<swss::DBConnector> state_db);
+ * 
+ * @brief Clear all counter
+ * 
+ * @param state_db      state_db connector pointer
+ * 
+ */
+void clear_counter(std::shared_ptr<swss::DBConnector> state_db);
