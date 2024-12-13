@@ -132,6 +132,7 @@ void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries,
         for (const auto &itr : keys) {
             auto found = itr.find_last_of('|');
             if (found == std::string::npos) {
+                syslog(LOG_WARNING, "%s doesn't exist in VLAN_INTERFACE table, skip it", vlan.c_str());
                 continue;
             }
             std::string ip_address = itr.substr(found + 1);
