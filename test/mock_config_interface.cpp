@@ -2,12 +2,12 @@
 
 using namespace ::testing;
 
-MOCK_GLOBAL_FUNC0(get_dhcp, void(void));
 TEST(configInterface, initialize_swss) {
   std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
   config_db->hset("DHCP_RELAY|Vlan1000", "dhcpv6_servers@", "fc02:2000::1,fc02:2000::2,fc02:2000::3,fc02:2000::4");
   config_db->hset("DHCP_RELAY|Vlan1000", "dhcpv6_option|rfc6939_support", "false");
   config_db->hset("DHCP_RELAY|Vlan1000", "dhcpv6_option|interface_id", "true");
+  config_db->hset("VLAN_INTERFACE|Vlan1000|fc02:1000::1", "", "");
   std::unordered_map<std::string, relay_config> vlans;
   ASSERT_NO_THROW(initialize_swss(vlans));
   EXPECT_EQ(vlans.size(), 1);
@@ -24,7 +24,7 @@ TEST(configInterface, get_dhcp) {
   config_db->hset("DHCP_RELAY|Vlan1000", "dhcpv6_option|interface_id", "true");
   swss::SubscriberStateTable ipHelpersTable(config_db.get(), "DHCP_RELAY");
   std::unordered_map<std::string, relay_config> vlans;
-  
+
   ASSERT_NO_THROW(get_dhcp(vlans, &ipHelpersTable, false, config_db));
   EXPECT_EQ(vlans.size(), 0);
 
