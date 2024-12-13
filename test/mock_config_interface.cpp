@@ -2,6 +2,7 @@
 
 using namespace ::testing;
 
+MOCK_GLOBAL_FUNC0(get_dhcp, void(void));
 TEST(configInterface, initialize_swss) {
   std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
   config_db->hset("DHCP_RELAY|Vlan1000", "dhcpv6_servers@", "fc02:2000::1,fc02:2000::2,fc02:2000::3,fc02:2000::4");

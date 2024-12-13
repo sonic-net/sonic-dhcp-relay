@@ -116,8 +116,6 @@ void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries,
     std::vector<std::string> servers;
     bool option_79_default = true;
     bool interface_id_default = false;
-    const int wait_timeout = 120;
-    int current_wait = 0;
 
     if (dual_tor_sock) {
         interface_id_default = true;
@@ -128,7 +126,6 @@ void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries,
         std::string operation = kfvOp(entry);
         std::vector<swss::FieldValueTuple> fieldValues = kfvFieldsValues(entry);
         bool has_ipv6_address = false;
-        bool is_lla_ready = false;
 
         const std::string match_pattern = "VLAN_INTERFACE|" + vlan + "|*";
         auto keys = config_db->keys(match_pattern);
@@ -149,37 +146,13 @@ void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries,
             continue;
         }
 
-        // Checke whether link local address is ready for Vlan, wait total 120s for all Vlans
-        do {
-            const std::string cmd = "ip -6 addr show " + vlan + " scope link 2> /dev/null";
-            std::array<char, 256> buffer;
-            std::string result;
-            std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd.c_str(), "r"), pclose);
-            if (pipe) {
-                while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-                    result += buffer.data();
-                }
-                if (!result.empty()) {
-                    is_lla_ready = true;
-                    break;
-                }
-            }
-            syslog(LOG_WARNING, "Cannot get link local address for %s, wait 5s", vlan.c_str());
-            sleep(5);
-            current_wait += 5;
-        } while (current_wait <= wait_timeout);
-
-        if (!is_lla_ready) {
-            syslog(LOG_WARNING, "%s doesn't have IPv6 link local address, skip it", vlan.c_str());
-            continue;
-        }
-
         relay_config intf;
         intf.is_option_79 = option_79_default;
         intf.is_interface_id = interface_id_default;
         intf.interface = vlan;
         intf.mux_key = "";
         intf.state_db = nullptr;
+        intf.is_lla_ready = false;
         for (auto &fieldValue: fieldValues) {
             std::string f = fvField(fieldValue);
             std::string v = fvValue(fieldValue);
@@ -207,4 +180,29 @@ void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries,
                intf.is_option_79 ? "enable" : "disable", intf.is_interface_id ? "enable" : "disable");
         vlans[vlan] = intf;
     }
+}
+
+/**
+ * @code                    bool check_is_lla_ready(std::string vlan)
+ * 
+ * @brief                   Check whether link local address appear in vlan interface
+ *
+ * @param vlan              string of vlan name
+ *
+ * @return                  bool value indicates whether lla ready
+ */
+bool check_is_lla_ready(std::string vlan) {
+    const std::string cmd = "ip -6 addr show " + vlan + " scope link 2> /dev/null";
+    std::array<char, 256> buffer;
+    std::string result;
+    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd.c_str(), "r"), pclose);
+    if (pipe) {
+        while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+            result += buffer.data();
+        }
+        if (!result.empty()) {
+            return true;
+        }
+    }
+    return false;
 }

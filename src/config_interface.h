@@ -70,3 +70,14 @@ void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::un
  */
 void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries, std::unordered_map<std::string, relay_config> &vlans,
                               std::shared_ptr<swss::DBConnector> config_db);
+
+/**
+ * @code                    bool check_is_lla_ready(std::string vlan)
+ * 
+ * @brief                   Check whether link local address appear in vlan interface
+ *
+ * @param vlan              string of vlan name
+ *
+ * @return                  bool value indicates whether lla ready
+ */
+bool check_is_lla_ready(std::string vlan);
