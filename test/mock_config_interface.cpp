@@ -66,3 +66,7 @@ TEST(configInterface, stopSwssNotificationPoll) {
   EXPECT_GLOBAL_CALL(stopSwssNotificationPoll, stopSwssNotificationPoll()).Times(1);
   ASSERT_NO_THROW(stopSwssNotificationPoll());
 }
+
+TEST(configInterface, check_is_lla_ready) {
+  EXPECT_FALSE(check_is_lla_ready("Vlan1000"));
+}
