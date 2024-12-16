@@ -1409,12 +1409,12 @@ void lla_check_callback(evutil_socket_t fd, short event, void *arg) {
             sockets.push_back(lla_sock);
             prepare_relay_config(vlan.second, gua_sock, filter);
             if (!dual_tor_sock) {
-	            auto event = event_new(base, gua_sock, EV_READ|EV_PERSIST,
+	            auto server_callback_event = event_new(base, gua_sock, EV_READ|EV_PERSIST,
                                        server_callback, &(vlan.second));
-                if (event == NULL) {
+                if (server_callback_event == NULL) {
                     syslog(LOG_ERR, "libevent: Failed to create server listen libevent\n");
                 }
-                event_add(event, NULL);
+                event_add(server_callback_event, NULL);
                 syslog(LOG_INFO, "libevent: add server listen socket for %s\n", vlan.first.c_str());
             }
         } else {
