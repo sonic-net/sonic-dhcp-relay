@@ -21,7 +21,7 @@ void initialize_swss(std::unordered_map<std::string, relay_config> &vlans)
         std::shared_ptr<swss::DBConnector> configDbPtr = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
         swss::SubscriberStateTable ipHelpersTable(configDbPtr.get(), "DHCP_RELAY");
         swssSelect.addSelectable(&ipHelpersTable);
-        get_dhcp(vlans, &ipHelpersTable, false);
+        get_dhcp(vlans, &ipHelpersTable, false, configDbPtr);
     }
     catch (const std::bad_alloc &e) {
         syslog(LOG_ERR, "Failed allocate memory. Exception details: %s", e.what());
@@ -53,13 +53,15 @@ void deinitialize_swss()
 
 /**
 
- * @code                void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic)
+ * @code                void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic,
+                                      std::shared_ptr<swss::DBConnector> config_db)
  * 
  * @brief               initialize and get vlan table information from DHCP_RELAY
  *
  * @return              none
  */
-void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic) {
+void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic,
+              std::shared_ptr<swss::DBConnector> config_db) {
     swss::Selectable *selectable;
     int ret = swssSelect.select(&selectable, DEFAULT_TIMEOUT_MSEC);
     if (ret == swss::Select::ERROR) {
@@ -69,7 +71,7 @@ void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::Subscr
     } 
     if (selectable == static_cast<swss::Selectable *> (ipHelpersTable)) {
         if (!dynamic) {
-            handleRelayNotification(*ipHelpersTable, vlans);
+            handleRelayNotification(*ipHelpersTable, vlans, config_db);
         } else {
             syslog(LOG_WARNING, "relay config changed, "
                    "need restart container to take effect");
@@ -78,7 +80,8 @@ void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::Subscr
 }
 
 /**
- * @code                    void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::unordered_map<std::string, relay_config> &vlans)
+ * @code                    void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::unordered_map<std::string, relay_config> &vlans,
+ *                                                       std::shared_ptr<swss::DBConnector> config_db)
  * 
  * @brief                   handles DHCPv6 relay configuration change notification
  *
@@ -87,16 +90,18 @@ void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::Subscr
  *
  * @return                  none
  */
-void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::unordered_map<std::string, relay_config> &vlans)
+void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::unordered_map<std::string, relay_config> &vlans,
+                             std::shared_ptr<swss::DBConnector> config_db)
 {
     std::deque<swss::KeyOpFieldsValuesTuple> entries;
 
     ipHelpersTable.pops(entries);
-    processRelayNotification(entries, vlans);
+    processRelayNotification(entries, vlans, config_db);
 }
 
 /**
- * @code                    void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries, std::unordered_map<std::string, relay_config> vlans)
+ * @code                    void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries, std::unordered_map<std::string, relay_config> vlans,
+                                                          std::shared_ptr<swss::DBConnector> config_db)
  * 
  * @brief                   process DHCPv6 relay servers and options configuration change notification
  *
@@ -105,7 +110,8 @@ void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::un
  *
  * @return                  none
  */
-void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries, std::unordered_map<std::string, relay_config> &vlans)
+void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries, std::unordered_map<std::string, relay_config> &vlans,
+                              std::shared_ptr<swss::DBConnector> config_db)
 {
     std::vector<std::string> servers;
     bool option_79_default = true;
@@ -119,6 +125,27 @@ void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries,
         std::string vlan = kfvKey(entry);
         std::string operation = kfvOp(entry);
         std::vector<swss::FieldValueTuple> fieldValues = kfvFieldsValues(entry);
+        bool has_ipv6_address = false;
+
+        const std::string match_pattern = "VLAN_INTERFACE|" + vlan + "|*";
+        auto keys = config_db->keys(match_pattern);
+        for (const auto &itr : keys) {
+            auto found = itr.find_last_of('|');
+            if (found == std::string::npos) {
+                syslog(LOG_WARNING, "%s doesn't exist in VLAN_INTERFACE table, skip it", vlan.c_str());
+                continue;
+            }
+            std::string ip_address = itr.substr(found + 1);
+            if (ip_address.find(":") != std::string::npos) {
+                has_ipv6_address = true;
+                break;
+            }
+        }
+
+        if (!has_ipv6_address) {
+            syslog(LOG_WARNING, "%s doesn't have IPv6 address configured, skip it", vlan.c_str());
+            continue;
+        }
 
         relay_config intf;
         intf.is_option_79 = option_79_default;
@@ -126,6 +153,7 @@ void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries,
         intf.interface = vlan;
         intf.mux_key = "";
         intf.state_db = nullptr;
+        intf.is_lla_ready = false;
         for (auto &fieldValue: fieldValues) {
             std::string f = fvField(fieldValue);
             std::string v = fvValue(fieldValue);
@@ -153,4 +181,29 @@ void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries,
                intf.is_option_79 ? "enable" : "disable", intf.is_interface_id ? "enable" : "disable");
         vlans[vlan] = intf;
     }
+}
+
+/**
+ * @code                    bool check_is_lla_ready(std::string vlan)
+ * 
+ * @brief                   Check whether link local address appear in vlan interface
+ *
+ * @param vlan              string of vlan name
+ *
+ * @return                  bool value indicates whether lla ready
+ */
+bool check_is_lla_ready(std::string vlan) {
+    const std::string cmd = "ip -6 addr show " + vlan + " scope link 2> /dev/null";
+    std::array<char, 256> buffer;
+    std::string result;
+    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd.c_str(), "r"), pclose);
+    if (pipe) {
+        while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+            result += buffer.data();
+        }
+        if (!result.empty()) {
+            return true;
+        }
+    }
+    return false;
 }

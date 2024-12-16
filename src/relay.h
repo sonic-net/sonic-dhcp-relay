@@ -76,6 +76,7 @@ struct relay_config {
     bool is_interface_id;
     std::shared_ptr<swss::Table> mux_table;
     std::shared_ptr<swss::DBConnector> config_db;
+    bool is_lla_ready;
 };
 
 /* DHCPv6 messages and options */
@@ -483,3 +484,16 @@ void server_callback(evutil_socket_t fd, short event, void *arg);
  * 
  */
 void clear_counter(std::shared_ptr<swss::DBConnector> state_db);
+
+/**
+ * @code                void lla_check_callback(evutil_socket_t fd, short event, void *arg);
+ * 
+ * @brief               callback for libevent timer to check whether lla is ready for vlan
+ *
+ * @param fd            libevent socket
+ * @param event         libevent triggered event  
+ * @param arg           callback argument provided by user
+ *
+ * @return              none
+ */
+void lla_check_callback(evutil_socket_t fd, short event, void *arg);

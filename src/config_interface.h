@@ -33,16 +33,19 @@ void initialize_swss(std::unordered_map<std::string, relay_config> &vlans);
 void deinitialize_swss();
 
 /**
- * @code                void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic)
+ * @code                void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic,
+ *                                    std::shared_ptr<swss::DBConnector> config_db)
  * 
  * @brief               initialize and get vlan information from DHCP_RELAY
  *
  * @return              none
  */
-void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic);
+void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic,
+              std::shared_ptr<swss::DBConnector> config_db);
 
 /**
- * @code                    void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::unordered_map<std::string, relay_config> &vlans)
+ * @code                    void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::unordered_map<std::string, relay_config> &vlans,
+ *                                                       std::shared_ptr<swss::DBConnector> config_db)
  * 
  * @brief                   handles DHCPv6 relay configuration change notification
  *
@@ -51,10 +54,12 @@ void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::Subscr
  *
  * @return                  none
  */
-void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::unordered_map<std::string, relay_config> &vlans);
+void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::unordered_map<std::string, relay_config> &vlans,
+                             std::shared_ptr<swss::DBConnector> config_db);
 
 /**
- * @code                    void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries, std::unordered_map<std::string, relay_config> &vlans)
+ * @code                    void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries, std::unordered_map<std::string, relay_config> &vlans,
+ *                                                        std::shared_ptr<swss::DBConnector> config_db)
  * 
  * @brief                   process DHCPv6 relay servers and options configuration change notification
  *
@@ -63,4 +68,16 @@ void handleRelayNotification(swss::SubscriberStateTable &ipHelpersTable, std::un
  *
  * @return                  none
  */
-void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries, std::unordered_map<std::string, relay_config> &vlans);
+void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries, std::unordered_map<std::string, relay_config> &vlans,
+                              std::shared_ptr<swss::DBConnector> config_db);
+
+/**
+ * @code                    bool check_is_lla_ready(std::string vlan)
+ * 
+ * @brief                   Check whether link local address appear in vlan interface
+ *
+ * @param vlan              string of vlan name
+ *
+ * @return                  bool value indicates whether lla ready
+ */
+bool check_is_lla_ready(std::string vlan);
