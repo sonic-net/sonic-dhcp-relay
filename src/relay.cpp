@@ -895,6 +895,8 @@ void client_callback(evutil_socket_t fd, short event, void *arg) {
         }
 
         std::string intf(interfaceName);
+        // For Vlans that lla is not ready, they wouldn't be added into vlan_map, hence it would be blocked here, no need to 
+        // add is_lla_ready flag check in this callback func
         auto vlan = vlan_map.find(intf);
         if (vlan == vlan_map.end()) {
             if (intf.find(CLIENT_IF_PREFIX) != std::string::npos) {
@@ -1088,6 +1090,10 @@ void server_callback_dualtor(evutil_socket_t fd, short event, void *arg) {
             syslog(LOG_WARNING, "Invalid DHCPv6 header content on loopback socket, packet will be dropped\n");
             continue;
         }
+        if (!config->is_lla_ready) {
+            syslog(LOG_WARNING, "Link local address for %s is not ready, packet will be dropped\n", config->interface.c_str());
+            continue;
+        }
         auto loopback_str = std::string(loopback);
         increase_counter(config->state_db, loopback_str, msg_type);
         relay_relay_reply(server_recv_buffer, buffer_sz, config);
@@ -1279,40 +1285,29 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
         }
     }
 
-    for(auto &vlan : vlans) {
-        int gua_sock = 0;
-        int lla_sock = 0;
-        vlan.second.config_db = config_db;
-        vlan.second.mux_table = mStateDbMuxTablePtr;
-        vlan.second.state_db = state_db;
-        vlan.second.mux_key = vlan_member + vlan.second.interface + "|";
+    // Add timer to periodly check lla un-ready vlan
+    struct event *timer_event;
+    struct timeval tv;
+    auto timer_args = new std::tuple<
+        std::unordered_map<std::string, struct relay_config> &,
+        std::shared_ptr<swss::DBConnector>,
+        std::shared_ptr<swss::DBConnector>,
+        std::shared_ptr<swss::Table>,
+        std::vector<int>,
+        int,
+        int,
+        struct event *
+    >(vlans, config_db, state_db, mStateDbMuxTablePtr, sockets, lo_sock, lo_sock, nullptr);
+    timer_event = event_new(base, -1, EV_PERSIST, lla_check_callback, timer_args);
+    std::get<7>(*timer_args) = timer_event;
+    evutil_timerclear(&tv);
+    // Check timer is set to 60s
+    tv.tv_sec = 60;
+    event_add(timer_event, &tv);
 
-        update_vlan_mapping(vlan.first, config_db);
-
-        initialize_counter(vlan.second.state_db, vlan.second.interface);
-        
-        if (prepare_vlan_sockets(gua_sock, lla_sock, vlan.second) != -1) {
-            vlan.second.gua_sock = gua_sock;
-            vlan.second.lla_sock = lla_sock;
-            vlan.second.lo_sock = lo_sock;
-
-            sockets.push_back(gua_sock);
-            sockets.push_back(lla_sock);
-            prepare_relay_config(vlan.second, gua_sock, filter);
-            if (!dual_tor_sock) {
-	            auto event = event_new(base, gua_sock, EV_READ|EV_PERSIST,
-                                       server_callback, &(vlan.second));
-                if (event == NULL) {
-                    syslog(LOG_ERR, "libevent: Failed to create server listen libevent\n");
-                }
-                event_add(event, NULL);
-                syslog(LOG_INFO, "libevent: add server listen socket for %s\n", vlan.first.c_str());
-            }
-        } else {
-            syslog(LOG_ERR, "Failed to create dualtor loopback listen socket");
-            exit(EXIT_FAILURE);
-        }
-    }
+    // We set check timer to be executed every 60s, it would case that its first excution be delayed 60s,
+    // hence manually invoke it here to immediate execute it
+    lla_check_callback(-1, 0, timer_args);
 
     if(signal_init() == 0 && signal_start() == 0) {
         shutdown_relay();
@@ -1349,5 +1344,86 @@ void clear_counter(std::shared_ptr<swss::DBConnector> state_db) {
     auto keys = state_db->keys(match_pattern);
     for (auto &itr : keys) {
         state_db->del(itr);
+    }
+}
+
+/**
+ * @code                void lla_check_callback(evutil_socket_t fd, short event, void *arg);
+ * 
+ * @brief               callback for libevent timer to check whether lla is ready for vlan
+ *
+ * @param fd            libevent socket
+ * @param event         libevent triggered event  
+ * @param arg           callback argument provided by user
+ *
+ * @return              none
+ */
+void lla_check_callback(evutil_socket_t fd, short event, void *arg) {
+    auto args = reinterpret_cast<std::tuple<
+        std::unordered_map<std::string, struct relay_config> *,
+        std::shared_ptr<swss::DBConnector>,
+        std::shared_ptr<swss::DBConnector>,
+        std::shared_ptr<swss::Table>,
+        std::vector<int>,
+        int,
+        int,
+        struct event *
+    > *>(arg);
+    auto vlans = std::get<0>(*args);
+    auto config_db = std::get<1>(*args);
+    auto state_db = std::get<2>(*args);
+    auto mStateDbMuxTablePtr = std::get<3>(*args);
+    auto sockets = std::get<4>(*args);
+    auto lo_sock = std::get<5>(*args);
+    auto filter = std::get<6>(*args);
+    auto timer_event = std::get<7>(*args);
+
+    bool all_llas_are_ready = true;
+    for(auto &vlan : *vlans) {
+        if (vlan.second.is_lla_ready) {
+            continue;
+        }
+        if (!check_is_lla_ready(vlan.first)) {
+            syslog(LOG_WARNING, "Link local address for %s is not ready\n", vlan.first.c_str());
+            all_llas_are_ready = false;
+            continue;
+        }
+        vlan.second.is_lla_ready = true;
+        int gua_sock = 0;
+        int lla_sock = 0;
+        vlan.second.config_db = config_db;
+        vlan.second.mux_table = mStateDbMuxTablePtr;
+        vlan.second.state_db = state_db;
+        vlan.second.mux_key = vlan_member + vlan.second.interface + "|";
+
+        update_vlan_mapping(vlan.first, config_db);
+
+        initialize_counter(vlan.second.state_db, vlan.second.interface);
+        
+        if (prepare_vlan_sockets(gua_sock, lla_sock, vlan.second) != -1) {
+            vlan.second.gua_sock = gua_sock;
+            vlan.second.lla_sock = lla_sock;
+            vlan.second.lo_sock = lo_sock;
+
+            sockets.push_back(gua_sock);
+            sockets.push_back(lla_sock);
+            prepare_relay_config(vlan.second, gua_sock, filter);
+            if (!dual_tor_sock) {
+	            auto server_callback_event = event_new(base, gua_sock, EV_READ|EV_PERSIST,
+                                       server_callback, &(vlan.second));
+                if (server_callback_event == NULL) {
+                    syslog(LOG_ERR, "libevent: Failed to create server listen libevent\n");
+                }
+                event_add(server_callback_event, NULL);
+                syslog(LOG_INFO, "libevent: add server listen socket for %s\n", vlan.first.c_str());
+            }
+        } else {
+            syslog(LOG_ERR, "Failed to create dualtor loopback listen socket");
+            exit(EXIT_FAILURE);
+        }
+    }
+    if (all_llas_are_ready) {
+        syslog(LOG_INFO, "All Vlans' lla are ready, terminate check timer");
+        event_del(timer_event);
     }
 }
