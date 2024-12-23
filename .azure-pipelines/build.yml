@@ -66,7 +66,8 @@ jobs:
       project: build
       pipeline: Azure.sonic-buildimage.common_libs
       runVersion: 'latestFromBranch'
-      runBranch: 'refs/heads/202405'
+      # common_libs doesn't support for building bookworm libs, hence we use 202411
+      runBranch: 'refs/heads/202411'
       path: $(Build.ArtifactStagingDirectory)/download
       ${{ if eq(parameters.arch, 'amd64') }}:
         artifact: common-lib
