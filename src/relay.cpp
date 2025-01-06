@@ -271,6 +271,7 @@ bool DHCPv6Msg::UnmarshalBinary(const uint8_t *packet, uint16_t len) {
  * @return              none
  */
 void initialize_counter(std::shared_ptr<swss::DBConnector> state_db, std::string &ifname) {
+    clear_counter(state_db);
     std::string table_name = counter_table + ifname;
     for (auto &intr : counterMap) {
         state_db->hset(table_name, intr.second, toString(0)); 
@@ -1333,4 +1334,20 @@ void shutdown_relay() {
     event_free(ev_sigterm);
     event_base_free(base);
     deinitialize_swss();
+}
+
+/**
+ * @code clear_counter(std::shared_ptr<swss::DBConnector> state_db);
+ * 
+ * @brief Clear all counter
+ * 
+ * @param state_db      state_db connector pointer
+ * 
+ */
+void clear_counter(std::shared_ptr<swss::DBConnector> state_db) {
+    std::string match_pattern = counter_table + std::string("*");
+    auto keys = state_db->keys(match_pattern);
+    for (auto &itr : keys) {
+        state_db->del(itr);
+    }
 }
