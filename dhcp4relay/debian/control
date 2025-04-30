@@ -1,0 +1,14 @@
+Source: sonic-dhcp4relay
+Section: devel
+Priority: optional
+Maintainer: Ashutosh Agrawal <ashu@cisco.com>
+Build-Depends: debhelper (>= 12.0.0), libevent-dev, libboost-thread-dev, libboost-system-dev, libswsscommon-dev
+Standards-Version: 3.9.3
+Homepage: https://github.com/Azure/sonic-buildimage
+XS-Go-Import-Path: github.com/Azure/sonic-buildimage
+
+Package: sonic-dhcp4relay
+Architecture: any
+Built-Using: ${misc:Built-Using}
+Depends: ${shlibs:Depends}
+Description: SONiC DHCPv4 Relay

@@ -1,0 +1,5 @@
+sonic-dhcp4relay (1.0.0-0) UNRELEASED; urgency=medium
+
+  * Initial release.
+
+ -- Ashutosh Agrawal <ashu@cisco.com>  Thu, 16 Jan 2025 09:11:40 -0700 
