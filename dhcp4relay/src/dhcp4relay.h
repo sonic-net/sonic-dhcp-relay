@@ -29,7 +29,8 @@
 #define CLIENT_IF_PREFIX "Ethernet"
 #define BUFFER_SIZE 9200        // TODO: change to dynamic size based on MTU
 #define MAX_DHCP_PKT_SIZE 1472  // 1500 - (IP + UDP)headers
-#define MAC_ADDR_LEN 6
+#define MAC_ADDR_STR_LEN 17
+#define DHCP_MAGIC_NUMBER 0x63538263
 
 #define BOOTPREQUEST 1
 #define BOOTPREPLY 2
@@ -102,7 +103,6 @@ struct relay_config {
     sockaddr_in link_address_netmask;
     sockaddr_in src_intf_sel_addr;
     uint32_t link_ifindex;
-    uint8_t host_mac_addr[MAC_ADDR_LEN];
     std::shared_ptr<swss::DBConnector> state_db;
     std::string vlan;
     std::string phy_interface;
@@ -112,7 +112,6 @@ struct relay_config {
     std::string server_id_override_opt;
     std::string vrf_selection_opt;
     std::string agent_relay_mode;
-    std::string hostname;
     std::vector<std::string> servers;
     std::vector<sockaddr_in> servers_sock;
     bool is_interface_id;
@@ -272,7 +271,6 @@ void update_vlan_mapping(std::string vlan, bool is_add);
  * @return              none
  */
 void pkt_in_callback(evutil_socket_t fd, short event, void *arg);
-bool string_to_mac_addr(const std::string &mac_str, std::array<uint8_t, 6> &mac_addr);
 void config_event_callback(evutil_socket_t fd, short event, void *arg);
 uint8_t *decode_tlv(const uint8_t *buf, uint8_t t, uint8_t &l, uint32_t options_total_size);
 uint8_t encode_tlv(uint8_t *buf, uint8_t t, uint8_t l, uint8_t *v);

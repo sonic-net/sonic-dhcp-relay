@@ -1,4 +1,3 @@
-
 #include "dhcp4relay_mgr.h"
 
 #include <algorithm>
@@ -10,6 +9,9 @@ static std::unordered_map<std::string, relay_config> vlans_copy;
 #ifdef UNIT_TEST
 using namespace swss;
 #endif
+
+std::string host_mac_addr;
+std::string hostname = "sonic";
 
 /**
  * @brief Initializes the configuration listener for the DHCP manager.
@@ -105,11 +107,6 @@ void DHCPMgr::handle_swss_notification() {
  * @param entries A deque of KeyOpFieldsValuesTuple containing device metadata notifications.
  */
 void DHCPMgr::process_device_metadata_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries) {
-    // If there is no DHCPv4 Relay config, then no need to send event for metadata update.
-    if (vlans_copy.empty()) {
-        return;
-    }
-
     for (auto &entry : entries) {
         std::string key = kfvKey(entry);
         std::vector<swss::FieldValueTuple> field_values = kfvFieldsValues(entry);
@@ -118,39 +115,19 @@ void DHCPMgr::process_device_metadata_notification(std::deque<swss::KeyOpFieldsV
             continue;
         }
 
-        relay_config *device_data = nullptr;
-        try {
-            device_data = new relay_config();
-        } catch (const std::bad_alloc &e) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
-            return;
-        }
-
         for (auto &field : field_values) {
             std::string f = fvField(field);
             std::string v = fvValue(field);
 
             if (f == "hostname") {
-                device_data->hostname = v;
+                hostname = v;
             } else if (f == "mac") {
-                std::array<uint8_t, MAC_ADDR_LEN> host_mac_addr;
-                string_to_mac_addr(v, host_mac_addr);
-                std::copy(host_mac_addr.begin(), host_mac_addr.end(), device_data->host_mac_addr);
+                host_mac_addr = v;
             }
         }
-
-        // Sending sonic as default hostname if it is not present in metadata
-        if (device_data->hostname.length() == 0) {
-            device_data->hostname = "sonic";
-        }
-
-        event_config metadata_event;
-        metadata_event.type = DHCPv4_RELAY_METADATA_UPDATE;
-        metadata_event.msg = static_cast<void *>(device_data);
-        // Write event to config pipe
-        if (write(config_pipe[1], &metadata_event, sizeof(metadata_event)) == -1) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to write metadata update event to pipe: %s", strerror(errno));
-            delete device_data;
+        /* Re-set hostname to default value if hostname is deleted */
+        if (hostname.length() == 0) {
+            hostname = "sonic";
         }
     }
 }

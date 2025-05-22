@@ -59,9 +59,9 @@ std::unordered_map<std::string, DHCPCounters> DHCPCounter_table::get_counters_da
  * @return              none
  */
 void DHCPCounter_table::db_update_loop() {
-    std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector>("STATE_DB", 0);
+    std::shared_ptr<swss::DBConnector> cntrs_db = std::make_shared<swss::DBConnector>("COUNTERS_DB", 0);
     std::shared_ptr<swss::Table> cntr_table = std::make_shared<swss::Table>(
-        state_db.get(), "DHCPV4_COUNTER_TABLE");
+        cntrs_db.get(), "COUNTERS_DHCPV4");
 
     while (!stop_thread) {
         std::this_thread::sleep_for(std::chrono::seconds(DHCP_RELAY_DB_UPDATE_TIMER_VAL));

@@ -26,6 +26,9 @@ struct event *ev_sigterm;
 static std::string vlan_member = "VLAN_MEMBER|";
 static std::string counter_table = "DHCPv4_COUNTER_TABLE|";
 
+extern std::string host_mac_addr;
+extern std::string hostname;
+
 static uint8_t client_recv_buffer[BUFFER_SIZE];
 int config_pipe[2];
 
@@ -265,6 +268,13 @@ int prepare_vrf_sockets(relay_config &config) {
             }
         }
 
+        /* Bind socket with UDP port to DHCP src number */
+        struct sockaddr_in addr = {0};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        addr.sin_port = htons(RELAY_PORT);
+        bind(vrf_sock, (struct sockaddr*)&addr, sizeof(addr));
+
         /* Update the map */
         vrf_sock_map[config.vrf] = {vrf_sock, 1};
     }
@@ -403,7 +413,7 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
 
     /* Encode circuit ID sub-option */
     /* | 1 | 4 | hostname:interface_alias:vlan | */
-    std::string circuit_id = config->hostname + ":" + intf_alias + ":" + config->vlan;
+    std::string circuit_id = hostname + ":" + intf_alias + ":" + config->vlan;
     auto offset = encode_tlv(buf, OPTION82_SUBOPT_CIRCUIT_ID, circuit_id.length(),
                              (uint8_t *)circuit_id.c_str());
     buf_offset += offset;
@@ -411,7 +421,7 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
     /* Encode remote ID sub-option */
     /* | 2 | 6 | my_mac| */
     offset = encode_tlv((buf + buf_offset), OPTION82_SUBOPT_REMOTE_ID,
-                        MAC_ADDR_LEN, (uint8_t *)(config->host_mac_addr));
+                        MAC_ADDR_STR_LEN, (uint8_t *)(host_mac_addr.c_str()));
     buf_offset += offset;
 
     /* TODO: this sub-option should be set if source interface selection is enabled */
@@ -480,7 +490,11 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
             dhcp_pkt->getDhcpHeader()->gatewayIpAddress =
                 config.link_address.sin_addr.s_addr;
         }
-        encode_relay_option(dhcp_pkt, &config);
+        if ((dhcp_pkt->getDhcpHeader()->magicNumber) &&
+            (dhcp_pkt->getDhcpHeader()->magicNumber) == DHCP_MAGIC_NUMBER) {
+            syslog(LOG_WARNING, "[DHCPV4_RELAY] encode DHCP relay option");
+            encode_relay_option(dhcp_pkt, &config);
+        }
     } else {
         /* If the relay packet is from another relay, we should act based on
            configuration of agent_relay_mode.
@@ -578,38 +592,36 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
     auto agent_option = dhcp_pkt->getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
     auto options_ptr = agent_option.getValue();
     auto agent_option_size = agent_option.getDataSize();
-    if (options_ptr == NULL) {
-        syslog(LOG_ERR, "[DHCPV4_RELAY] Relay options for reply packets are missing from server %s",
-               src_ip.c_str());
-        return;
-    }
 
-    uint8_t circuit_id_len = 0;
-    auto circuit_id_ptr = decode_tlv((const uint8_t *)options_ptr, OPTION82_SUBOPT_CIRCUIT_ID,
-                                     circuit_id_len, agent_option_size);
-    if (circuit_id_ptr == NULL) {
-        syslog(LOG_ERR,
-               "[DHCPV4_RELAY] Circuit id sub-option is missing in relay"
-               " agent option from server %s",
-               src_ip.c_str());
-        return;
-    }
+    /* If option 82 is available fetch Vlan information from circuit ID */
+    if (options_ptr != NULL) {
+        uint8_t circuit_id_len = 0;
+        auto circuit_id_ptr = decode_tlv((const uint8_t *)options_ptr, OPTION82_SUBOPT_CIRCUIT_ID,
+                circuit_id_len, agent_option_size);
+        if (circuit_id_ptr == NULL) {
+            syslog(LOG_ERR,
+                    "[DHCPV4_RELAY] Circuit id sub-option is missing in relay"
+                    " agent option from server %s",
+                    src_ip.c_str());
+            return;
+        }
 
-    std::string circuit_id((const char *)circuit_id_ptr, circuit_id_len);
+        std::string circuit_id((const char *)circuit_id_ptr, circuit_id_len);
 
-    std::string vlan_interface;
-    auto vlan_intf_pos = circuit_id.rfind(':');
-    if (vlan_intf_pos != std::string::npos) {
-        vlan_interface = circuit_id.substr(vlan_intf_pos + 1);
-    }
+        std::string vlan_interface;
+        auto vlan_intf_pos = circuit_id.rfind(':');
+        if (vlan_intf_pos != std::string::npos) {
+            vlan_interface = circuit_id.substr(vlan_intf_pos + 1);
+        }
 
-    if (vlan_interface.length() > 0) {
-        config_itr = vlans->find(vlan_interface);
-        if (config_itr == vlans->end()) {
-            syslog(LOG_INFO,
-                   "[DHCPV4_RELAY] Vlan config not found for the circuit"
-                   "id encoded interface  %s\n",
-                   vlan_interface.c_str());
+        if (vlan_interface.length() > 0) {
+            config_itr = vlans->find(vlan_interface);
+            if (config_itr == vlans->end()) {
+                syslog(LOG_INFO,
+                        "[DHCPV4_RELAY] Vlan config not found for the circuit"
+                        "id encoded interface  %s\n",
+                        vlan_interface.c_str());
+            }
         }
     }
 
@@ -639,7 +651,7 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
         //  find vlan attach using vlan map. Relay config is mapped to vlan.
 
         /* Expecting interface is SVI interface of vlan */
-        auto config_itr = vlans->find(intf_name);
+        config_itr = vlans->find(intf_name);
         if (config_itr == vlans->end()) {
             syslog(LOG_ERR, "[DHCPV4_RELAY] Config not found for vlan %s\n", intf_name.c_str());
             return;
@@ -664,31 +676,6 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
                config.vlan.c_str(), src_ip.c_str());
         dhcp_cntr_table.increment_counter(config.vlan, "TX", (int)dhcp_pkt->getMessageType());
     }
-}
-
-bool string_to_mac_addr(const std::string &mac_str, std::array<uint8_t, 6> &mac_addr) {
-    if (mac_str.size() != 17) {
-        return false;
-    }
-
-    std::istringstream iss(mac_str);
-    int byte;
-    char separator;
-
-    for (size_t i = 0; i < mac_addr.size(); ++i) {
-        if (!(iss >> std::hex >> byte)) {
-            return false;
-        }
-        mac_addr[i] = static_cast<uint8_t>(byte);
-
-        if (i < mac_addr.size() - 1) {
-            if (!(iss >> separator) || (separator != ':' && separator != '-')) {
-                return false;
-            }
-        }
-    }
-
-    return true;
 }
 
 /**
@@ -1035,18 +1022,6 @@ void config_event_callback(evutil_socket_t fd, short event, void *arg) {
                     memset(&(*vlans)[relay_msg->vlan].src_intf_sel_addr, 0, sizeof(sockaddr_in));
                 }
                 delete relay_msg;
-            }
-        } else if (received_event.type == DHCPv4_RELAY_METADATA_UPDATE) {
-            relay_config *device_data = static_cast<relay_config *>(received_event.msg);
-            if (device_data) {
-                syslog(LOG_INFO, "[DHCPV4_RELAY] Processing Device Metadata Event Update.");
-
-                for (auto &vlan : *vlans) {
-                    vlan.second.hostname = device_data->hostname;
-                    std::copy(std::begin(device_data->host_mac_addr), std::end(device_data->host_mac_addr),
-                              std::begin(vlan.second.host_mac_addr));
-                }
-                delete device_data;
             }
         }
     } else {

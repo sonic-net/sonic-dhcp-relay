@@ -62,7 +62,7 @@ $(DHCP4RELAY_TARGET): $(PCAPPP_DONE) $(OBJS)
 
 $(BUILD_TEST_DIR)/%.o: %.cpp
 	@mkdir -p $(@D)
-	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(CPPFLAGS_TEST) -c -o $@ $<
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(CPPFLAGS_TEST) $(LDLIBS) -c -o $@ $<
 
 $(DHCP4RELAY_TEST_TARGET): $(TEST_OBJS)
 	$(CXX) $(LDFLAGS) $^ $(LDLIBS) $(LDLIBS_TEST) -o $@
