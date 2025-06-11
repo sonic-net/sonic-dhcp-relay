@@ -53,7 +53,7 @@ jobs:
             libnl-genl-3-dev \
             libgmock-dev \
             dh-exec \
-            swig3.0 \
+            swig \
             uuid-dev \
             libzmq3-dev \
             libyang-dev \
