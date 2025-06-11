@@ -74,10 +74,10 @@ jobs:
         set -x
         cd ..
         git clone https://github.com/sonic-net/sonic-swss-common
-        pushd sonic-swss-common
+        cd sonic-swss-common
         ./autogen.sh
         fakeroot dpkg-buildpackage -us -uc -b
-        popd
+        cd ..
         dpkg-deb -x libswsscommon_1.0.0_amd64.deb $(dirname $GITHUB_WORKSPACE)
         dpkg-deb -x libswsscommon-dev_1.0.0_amd64.deb $(dirname $GITHUB_WORKSPACE)
 
