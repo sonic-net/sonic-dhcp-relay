@@ -16,7 +16,9 @@ on:
 jobs:
   analyze:
     name: Analyze
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
+    container:
+      image: sonicdev-microsoft.azurecr.io:443/sonic-slave-bullseye:latest
     permissions:
       actions: read
       contents: read
