@@ -63,6 +63,7 @@ jobs:
 
     - name: reset-submodules
       run: |
+        git config --global --add safe.directory /__w/sonic-dhcp-relay/sonic-dhcp-relay
         git submodule foreach --recursive 'git clean -xfdf || true'
         git submodule foreach --recursive 'git reset --hard || true'
         git submodule foreach --recursive 'git remote update || true'
