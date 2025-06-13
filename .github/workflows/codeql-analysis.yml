@@ -16,7 +16,9 @@ on:
 jobs:
   analyze:
     name: Analyze
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
+    container:
+      image: sonicdev-microsoft.azurecr.io:443/sonic-slave-bullseye:latest
     permissions:
       actions: read
       contents: read
@@ -51,7 +53,7 @@ jobs:
             libnl-genl-3-dev \
             libgmock-dev \
             dh-exec \
-            swig3.0 \
+            swig \
             uuid-dev \
             libzmq3-dev \
             libyang-dev \
@@ -61,6 +63,7 @@ jobs:
 
     - name: reset-submodules
       run: |
+        git config --global --add safe.directory /__w/sonic-dhcp-relay/sonic-dhcp-relay
         git submodule foreach --recursive 'git clean -xfdf || true'
         git submodule foreach --recursive 'git reset --hard || true'
         git submodule foreach --recursive 'git remote update || true'
@@ -71,10 +74,10 @@ jobs:
         set -x
         cd ..
         git clone https://github.com/sonic-net/sonic-swss-common
-        pushd sonic-swss-common
+        cd sonic-swss-common
         ./autogen.sh
         fakeroot dpkg-buildpackage -us -uc -b
-        popd
+        cd ..
         dpkg-deb -x libswsscommon_1.0.0_amd64.deb $(dirname $GITHUB_WORKSPACE)
         dpkg-deb -x libswsscommon-dev_1.0.0_amd64.deb $(dirname $GITHUB_WORKSPACE)
 
