@@ -23,11 +23,15 @@ using namespace swss;
 
 extern std::string host_mac_addr;
 extern std::string hostname;
+extern uint32_t deployment_id;
+extern bool feature_dhcp_server_enabled;
+extern std::unordered_map<std::string, relay_config> vlans_copy;
+extern std::string global_dhcp_server_ip;
 
 MOCK_GLOBAL_FUNC1(getifaddrs, int(struct ifaddrs **));
 MOCK_GLOBAL_FUNC1(freeifaddrs, void(struct ifaddrs *));
 MOCK_GLOBAL_FUNC3(write, ssize_t(int, const void*, size_t));
-MOCK_GLOBAL_FUNC4(send_udp, bool(int, uint8_t *, struct sockaddr_in, uint32_t));
+MOCK_GLOBAL_FUNC6(send_udp, bool(int, uint8_t *, struct sockaddr_in, uint32_t, in_addr, bool));
 
 void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config);
 void to_client(pcpp::DhcpLayer* dhcp_pkt, std::unordered_map<std::string, relay_config > *vlans,
@@ -176,7 +180,6 @@ TEST(prepareConfig, prepare_vlan_sockets)
   config.vlan = "Vlan200";
   EXPECT_EQ(prepare_vlan_sockets(config), 0);
   EXPECT_GE(config.client_sock, 0);
-  EXPECT_GE(config.lo_sock, 0);
 }
 
 TEST(prepareConfig, prepare_vrf_sockets) {
@@ -290,7 +293,6 @@ TEST(relayConfig, handle_vlan_events) {
     EXPECT_EQ(vrf_sock_map["default"].ref_count, 1);
 
     EXPECT_GE(vlans["Vlan200"].client_sock, 0);
-    EXPECT_GE(vlans["Vlan200"].lo_sock, 0);
 
     /*Vlan deletion.*/
     relay_config *config_del = new relay_config();
@@ -298,7 +300,6 @@ TEST(relayConfig, handle_vlan_events) {
     config_del->is_add = false;
    
     vlans["Vlan200"].client_sock = -1; 
-    vlans["Vlan200"].lo_sock = -1; 
     vlans["Vlan200"].vrf_sock = -1; 
     event.msg = static_cast<void *>(config_del);
 
@@ -335,6 +336,13 @@ TEST(relayConfig, handle_interface_events) {
     ASSERT_TRUE(vlans.find("Vlan100") != vlans.end());
     EXPECT_EQ(vlans["Vlan100"].src_intf_sel_addr.sin_family, AF_INET);
     EXPECT_EQ(vlans["Vlan100"].src_intf_sel_addr.sin_addr.s_addr, inet_addr("192.168.1.1"));
+
+    event.type = DHCPv4_SERVER_FEATURE_UPDATE;
+    event.msg = NULL;
+    ASSERT_NE(write(pipe_fds[1], &event, sizeof(event)), -1);
+
+    config_event_callback(pipe_fds[0], 0, &vlans);
+
     close(pipe_fds[0]);
     close(pipe_fds[1]);
 }
@@ -372,8 +380,20 @@ TEST(DHCPMgrTest, initialize_config_listner) {
     swss::Table loopback_intf_table(config_db.get(), "LOOPBACK_INTERFACE");
     swss::Table portchannel_intf_table(config_db.get(), "PORTCHANNEL_INTERFACE");
     swss::Table metadata_table(config_db.get(), "DEVICE_METADATA");
+    swss::Table vlan_member_table(config_db.get(), "VLAN_MEMBER");
+    swss::Table vlan_interface_table(config_db.get(), "VLAN_INTERFACE");
 
-    std::string dhcp_key = "Vlan200";
+    std::string vlan_member_key = "Vlan200|Ethernet8";
+    std::vector<std::pair<std::string, std::string>> vlan_member_values = {
+            {"tagging_mode", "untagged"},
+    };
+   
+    std::string vlan_interface_key = "Vlan200|200.200.200.1/24";
+    std::vector<std::pair<std::string, std::string>> vlan_interface_values = {
+            {"vrf_name", "VrfRed"},
+    };
+
+    std::string vlan = "Vlan200";
     std::vector<std::pair<std::string, std::string>> dhcp_values = {
             {"dhcpv4_servers", "1.1.1.1,1.1.1.2"},
 	    {"server_vrf", "VrfRed"},
@@ -384,7 +404,7 @@ TEST(DHCPMgrTest, initialize_config_listner) {
 	    {"vrf_selection", "enable"}
     };
 
-    dhcp_table.set(dhcp_key, dhcp_values);
+    dhcp_table.set(vlan, dhcp_values);
 
     std::string intf_key = "Ethernet4|192.168.1.1/24";
     std::vector<std::pair<std::string, std::string>> intf_values = {
@@ -403,14 +423,122 @@ TEST(DHCPMgrTest, initialize_config_listner) {
 
     metadata_table.set("host", metadata_values);
     metadata_table.set(metadata_key, metadata_values);
-
-    std::this_thread::sleep_for(std::chrono::seconds(2));
+    vlan_member_table.set(vlan_member_key, vlan_member_values);
+    vlan_interface_table.set(vlan_interface_key, intf_values);
+    vlan_interface_table.set(vlan, vlan_interface_values);
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    dhcpMgr.stop_db_updates();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 }
 
-void mac_to_string(const uint8_t mac[6], char *out_str, char sep = ':') {
-    sprintf(out_str, "%02X%c%02X%c%02X%c%02X%c%02X%c%02X",
-            mac[0], sep, mac[1], sep, mac[2], sep,
-            mac[3], sep, mac[4], sep, mac[5]);
+TEST(DHCPMgrTest, process_vlan_events) {
+    DHCPMgr dhcpMgr;
+    EXPECT_GLOBAL_CALL(write, write(_, _, _))
+                     .Times(AtLeast(1))
+                     .WillRepeatedly(Return(-1));
+    vlans_copy.clear();
+    relay_config *config = new relay_config();
+    config->vlan = "Vlan100";
+    config->is_add = true;
+    vlans_copy["Vlan100"] = *config;
+    std::deque<swss::KeyOpFieldsValuesTuple> entries;
+    entries.emplace_back("Vlan100", "SET", std::vector<swss::FieldValueTuple>{}); 
+    dhcpMgr.process_vlan_notification(entries);
+}
+
+TEST(DHCPMgrTest, dhcp_server_feature_enable) {
+    DHCPMgr dhcpMgr;
+    EXPECT_GLOBAL_CALL(write, write(_, _, _))
+                     .Times(AtLeast(1))
+                     .WillRepeatedly(Return(0));
+    dhcpMgr.initialize_config_listner();
+
+    std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+    std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+
+    swss::Table feature_table(config_db.get(), "FEATURE");
+    swss::Table vlan_table(config_db.get(), "VLAN");
+    swss::Table dhcp_server_table(config_db.get(), "DHCP_SERVER_IPV4");
+    swss::Table dhcp_server_ip_table(state_db.get(), "DHCP_SERVER_IPV4_SERVER_IP");
+
+    std::string vlan = "Vlan200";
+    std::vector<std::pair<std::string, std::string>> enable_dhcp_server = {
+            {"state", "enabled"},
+    };
+
+    std::vector<std::pair<std::string, std::string>> server_ip_values = {
+            {"ip", "240.127.1.2"},
+    };
+    
+    std::vector<std::pair<std::string, std::string>> vlan_values = {
+            {"vlanid", "200"},
+    };
+
+    vlan_table.set(vlan, vlan_values);
+    dhcp_server_ip_table.set("eth0", server_ip_values);
+    dhcp_server_table.set(vlan, enable_dhcp_server);
+    feature_table.set("dhcp_server", enable_dhcp_server);
+
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    dhcpMgr.stop_db_updates();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    
+    EXPECT_EQ(global_dhcp_server_ip, "240.127.1.2");
+    feature_dhcp_server_enabled = false;
+    global_dhcp_server_ip.clear();
+}
+
+TEST(DHCPMgrTest, dhcp_server_feature_disable) {
+    DHCPMgr dhcpMgr;
+    EXPECT_GLOBAL_CALL(write, write(_, _, _))
+                     .Times(AtLeast(1))
+                     .WillRepeatedly(Return(0));
+    dhcpMgr.initialize_config_listner();
+    std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+
+    swss::Table feature_table(config_db.get(), "FEATURE");
+    std::vector<std::pair<std::string, std::string>> disable_dhcp_server = {
+            {"state", "disabled"},
+    };
+    feature_dhcp_server_enabled = true;
+    feature_table.set("dhcp_server", disable_dhcp_server);
+
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    dhcpMgr.stop_db_updates();;
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    feature_dhcp_server_enabled = false;
+}
+
+TEST(DHCPMgrTest, dhcp_server_ip_modification) {
+    DHCPMgr dhcpMgr;
+    EXPECT_GLOBAL_CALL(write, write(_, _, _))
+                     .Times(AtLeast(1))
+                     .WillRepeatedly(Return(0));
+    global_dhcp_server_ip = "240.127.1.3";
+    std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+    std::deque<swss::KeyOpFieldsValuesTuple> entries;
+    swss::Select select;
+    entries.emplace_back("eth0", "SET", std::vector<swss::FieldValueTuple>{
+        {"ip", "240.127.1.2"}
+    });
+
+    dhcpMgr.process_dhcp_server_ipv4_ip_notification(entries, select, config_db);
+     EXPECT_EQ(global_dhcp_server_ip, "240.127.1.2");
+}
+
+TEST(DHCPMgrTest, dhcp_server_ip_deletion) {
+    DHCPMgr dhcpMgr;
+    EXPECT_GLOBAL_CALL(write, write(_, _, _))
+                     .Times(AtLeast(1))
+                     .WillRepeatedly(Return(0));
+    std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+    std::deque<swss::KeyOpFieldsValuesTuple> entries;
+    swss::Select select;
+    entries.emplace_back("eth0", "DEL", std::vector<swss::FieldValueTuple>{});
+
+    dhcpMgr.process_dhcp_server_ipv4_ip_notification(entries, select,config_db);
+    EXPECT_TRUE(global_dhcp_server_ip.empty());
+    EXPECT_TRUE(vlans_copy.empty());
 }
 
 TEST(DHCPRelayTest, encode_relay_option) {
@@ -534,7 +662,8 @@ TEST(DHCPRelayTest, to_client) {
     struct ifaddrs *mock_ifaddrs = CreateMockIfaddrs("192.168.1.1", "255.255.255.0", "Vlan100", "192.168.1.2", "Ethernet4");
     EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_)).WillOnce(DoAll(testing::SetArgPointee<0>(mock_ifaddrs), Return(0)));
     EXPECT_GLOBAL_CALL(freeifaddrs, freeifaddrs(_)).Times(1);
-    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _)).WillOnce([](int sock, uint8_t* hdr, struct sockaddr_in target, uint32_t n) {
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _)).WillOnce([]
+		(int sock, uint8_t* hdr, struct sockaddr_in target, uint32_t len, in_addr src_ip, bool use_src_ip) {
         pcpp::dhcp_header* dhcp_hdr = (pcpp::dhcp_header*)hdr;
         EXPECT_EQ((dhcp_hdr->opCode), 1);
         EXPECT_EQ((dhcp_hdr->hops), 1);
@@ -581,7 +710,8 @@ TEST(DHCPRelayTest, from_client) {
    //struct ifaddrs *mock_ifaddrs = CreateMockIfaddrs("192.168.1.1", "255.255.255.0", "Vlan100", "192.168.1.2", "Ethernet4");
     //EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_)).WillOnce(DoAll(testing::SetArgPointee<0>(mock_ifaddrs), Return(0)));
     //EXPECT_GLOBAL_CALL(freeifaddrs, freeifaddrs(_)).Times(1);
-    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _)).WillOnce([](int sock, uint8_t* hdr, struct sockaddr_in target, uint32_t n) {
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _)).WillOnce([]
+		    (int sock, uint8_t* hdr, struct sockaddr_in target, uint32_t len, in_addr src_ip, bool use_src_ip) {
         pcpp::dhcp_header* dhcp_hdr = (pcpp::dhcp_header*)hdr;
         EXPECT_EQ((dhcp_hdr->opCode), 0);
         EXPECT_EQ((dhcp_hdr->hops), 1);

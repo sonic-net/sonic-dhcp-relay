@@ -12,6 +12,11 @@
         }
     },
     "DATABASES" : {
+        "COUNTERS_DB" : {
+            "id" : 2,
+            "separator": "|",
+            "instance" : "redis"
+        },
         "CONFIG_DB" : {
             "id" : 4,
             "separator": "|",

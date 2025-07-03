@@ -67,6 +67,7 @@ extern int config_pipe[2];
 #define DHCP_OPTION_LEN (DHCP_MTU_MAX - DHCP_FIXED_LEN)
 
 #define BATCH_SIZE 64
+#define VLAN_MASK  0x0FFF
 
 extern char loopback[IF_NAMESIZE];
 
@@ -97,7 +98,6 @@ struct relay_config {
     int client_sock;
     /* Server facing socket, use to send packet to server */
     int vrf_sock;
-    int lo_sock;
     int filter;
     sockaddr_in link_address;
     sockaddr_in link_address_netmask;
@@ -123,12 +123,29 @@ typedef enum {
     DHCPv4_RELAY_CONFIG_UNKNOWN,
     DHCPv4_RELAY_CONFIG_UPDATE,
     DHCPv4_RELAY_INTERFACE_UPDATE,
-    DHCPv4_RELAY_METADATA_UPDATE
+    DHCPv4_RELAY_VLAN_MEMBER_UPDATE,
+    DHCPv4_RELAY_VLAN_INTERFACE_UPDATE,
+    DHCPv4_SERVER_RELAY_CONFIG_UPDATE,
+    DHCPv4_SERVER_FEATURE_UPDATE,
+    DHCPv4_SERVER_IP_UPDATE,
+    DHCPv4_SERVER_IP_DELETE,
+    DHCPv4_RELAY_DUAL_TOR_UPDATE
 } event_type;
 
 struct event_config {
     event_type type;
     void *msg;
+};
+
+struct vlan_member_config {
+    std::string vlan;
+    std::string interface;
+    bool is_add;
+};
+
+struct vlan_interface_config {
+    std::string vlan;
+    std::string vrf;
 };
 
 /**
