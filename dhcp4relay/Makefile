@@ -17,8 +17,8 @@ LD_PCAPPLUSPLUS_LIB := -lPcap++ -lPacket++ -lCommon++
 
 #pcap plus plus zip file pcappp_v24.09.zip
 PCAPPPVAR := 24.09
-PCAPPP_URL = https://github.com/seladb/PcapPlusPlus/releases/download/v${PCAPPPVAR}/pcapplusplus-${PCAPPPVAR}-ubuntu-20.04-gcc-9.4.0-x86_64.tar.gz
-PCAPPLUSPLUS_DIR := $(WORKING_DIR)/pcapplusplus-$(PCAPPPVAR)-ubuntu-20.04-gcc-9.4.0-x86_64
+PCAPPPZIP_FILE := pcappp_v${PCAPPPVAR}.zip
+PCAPPLUSPLUS_DIR := $(WORKING_DIR)/PcapPlusPlus-$(PCAPPPVAR)
 PCAPPP_DONE = $(WORKING_DIR)/pcappp.stamp
 INCLUDE_DIR = $(PCAPPLUSPLUS_DIR)/include
 LIB_DIR = $(PCAPPLUSPLUS_DIR)/lib
@@ -33,10 +33,28 @@ PWD := $(shell pwd)
 
 .PHONY: $(PCAPPP_DONE)
 $(PCAPPP_DONE):
-	wget $(PCAPPP_URL) -O pcapplusplus.tar.gz
-	tar -xzf pcapplusplus.tar.gz
-	touch $@ 
-    
+
+        # Remove stale files
+        rm -rf $(PCAPPLUSPLUS_DIR)
+
+        unzip ${PCAPPPZIP_FILE}
+        pushd $(PCAPPLUSPLUS_DIR)
+
+	# Create a git repository here for stg to apply patches
+	git init
+	git add -f *
+	git commit -qm "initial commit"
+
+	# Apply patches
+	stg init
+	stg import -s ../patch/series
+	popd
+
+        cd $(PCAPPLUSPLUS_DIR) && cmake -S . -B build && cmake --build build
+        cd build && make && sudo cmake --install .
+
+	touch $@
+
 all: $(DHCP4RELAY_TARGET) $(DHCP4RELAY_TEST_TARGET)
 
 -include src/subdir.mk
@@ -79,7 +97,7 @@ uninstall:
 	$(RM) $(DESTDIR)/usr/sbin/$(notdir $(DHCP4RELAY_TARGET))
 
 clean:
-	-$(RM) $(BUILD_DIR) $(BUILD_TEST_DIR) *.html *.xml pcap*
+	-$(RM) $(BUILD_DIR) $(BUILD_TEST_DIR) *.html *.xml
 	$(FIND) . -name *.gcda -exec rm -f {} \;
 	$(FIND) . -name *.gcno -exec rm -f {} \;
 	$(FIND) . -name *.gcov -exec rm -f {} \;

@@ -31,6 +31,7 @@
 #define MAX_DHCP_PKT_SIZE 1472  // 1500 - (IP + UDP)headers
 #define MAC_ADDR_STR_LEN 17
 #define DHCP_MAGIC_NUMBER 0x63538263
+#define MAX_HOP_COUNT 16
 
 #define BOOTPREQUEST 1
 #define BOOTPREPLY 2
@@ -112,6 +113,7 @@ struct relay_config {
     std::string server_id_override_opt;
     std::string vrf_selection_opt;
     std::string agent_relay_mode;
+    uint8_t max_hop_count = MAX_HOP_COUNT;
     std::vector<std::string> servers;
     std::vector<sockaddr_in> servers_sock;
     bool is_interface_id;
@@ -129,7 +131,8 @@ typedef enum {
     DHCPv4_SERVER_FEATURE_UPDATE,
     DHCPv4_SERVER_IP_UPDATE,
     DHCPv4_SERVER_IP_DELETE,
-    DHCPv4_RELAY_DUAL_TOR_UPDATE
+    DHCPv4_RELAY_DUAL_TOR_UPDATE,
+    DHCPv4_RELAY_PORT_UPDATE
 } event_type;
 
 struct event_config {
@@ -146,6 +149,12 @@ struct vlan_member_config {
 struct vlan_interface_config {
     std::string vlan;
     std::string vrf;
+};
+
+struct port_config {
+    std::string phy_interface;
+    std::string alias;
+    bool is_add;
 };
 
 /**

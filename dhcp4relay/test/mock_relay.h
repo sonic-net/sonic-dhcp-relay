@@ -15,3 +15,5 @@ extern std::unordered_map<std::string, std::string> vlan_map;
 extern std::unordered_map<std::string, std::string> vlan_vrf_map;
 extern swss::Select swssSelect;
 extern std::unordered_map<std::string, VrfSocketInfo> vrf_sock_map;
+extern std::unordered_map<std::string, std::string> phy_interface_alias_map;
+extern std::vector<std::string> interface_list;

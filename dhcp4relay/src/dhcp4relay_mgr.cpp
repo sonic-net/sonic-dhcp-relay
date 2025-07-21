@@ -67,6 +67,7 @@ void DHCPMgr::handle_swss_notification() {
     swss::SubscriberStateTable config_db_vlan_table(config_db_ptr.get(), "VLAN");
     config_db_dhcp_server_ipv4_ptr = std::make_shared<swss::SubscriberStateTable>(config_db_ptr.get(), "DHCP_SERVER_IPV4");
     state_db_dhcp_server_ipv4_ip_ptr = std::make_shared<swss::SubscriberStateTable>(state_db_ptr.get(), "DHCP_SERVER_IPV4_SERVER_IP");
+    swss::SubscriberStateTable config_db_port_table(config_db_ptr.get(), "PORT");
 
     std::deque<swss::KeyOpFieldsValuesTuple> entries;
     swss::Select swss_select;
@@ -81,6 +82,7 @@ void DHCPMgr::handle_swss_notification() {
     swss_select.addSelectable(&config_db_vlan_table);
     swss_select.addSelectable(config_db_dhcp_server_ipv4_ptr.get());
     swss_select.addSelectable(state_db_dhcp_server_ipv4_ip_ptr.get());
+    swss_select.addSelectable(&config_db_port_table);
 
     while (!stop_thread) {
         swss::Selectable *selectable;
@@ -135,6 +137,9 @@ void DHCPMgr::handle_swss_notification() {
         } else if (selectable == static_cast<swss::Selectable *>(&config_db_vlan_table)) {
             config_db_vlan_table.pops(entries);
             process_vlan_notification(entries);
+	} else if (selectable == static_cast<swss::Selectable *>(&config_db_port_table)) {
+            config_db_port_table.pops(entries);
+            process_port_notification(entries);
 	}
     }
 }
@@ -345,6 +350,8 @@ void DHCPMgr::process_relay_notification(std::deque<swss::KeyOpFieldsValuesTuple
                     relay_msg->vrf_selection_opt = v;
                 } else if (f == "agent_relay_mode") {
                     relay_msg->agent_relay_mode = v;
+                } else if (f == "max_hop_count") {
+                    relay_msg->max_hop_count = static_cast<uint8_t>(std::stoi(v));
                 }
                 syslog(LOG_DEBUG, "[DHCPV4_RELAY] key: %s, Operation: %s, f: %s, v: %s", vlan.c_str(), operation.c_str(), f.c_str(), v.c_str());
             }
@@ -782,6 +789,43 @@ void DHCPMgr::process_vlan_notification(std::deque<swss::KeyOpFieldsValuesTuple>
             delete relay_msg;
         }
     }
+}
+
+void DHCPMgr::process_port_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries) {
+     for (auto &entry : entries) {
+        std::string interface = kfvKey(entry);
+        std::string operation = kfvOp(entry);
+        std::vector<swss::FieldValueTuple> fv = kfvFieldsValues(entry);
+        port_config *port_msg = nullptr;
+        try {
+            port_msg = new port_config();
+        } catch (const std::bad_alloc &e) {
+            syslog(LOG_ERR, "[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
+            return;
+        }
+
+        port_msg->phy_interface = interface;
+        if (operation == "SET") {
+            port_msg->is_add = true;
+             for (auto &fv : kfvFieldsValues(entry)) {
+                 if (fvField(fv) == "alias") {
+                     port_msg->alias = fvValue(fv);
+                     break;
+                 }
+            }
+        } else {
+            port_msg->is_add = false;
+        }
+
+        event_config event;
+        event.type = DHCPv4_RELAY_PORT_UPDATE;
+        event.msg = static_cast<void *>(port_msg);
+
+        if (write(config_pipe[1], &event, sizeof(event)) == -1) {
+            syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to send port table update for interface %s", interface.c_str());
+            delete port_msg;
+        }
+     }
 }
 
 /**

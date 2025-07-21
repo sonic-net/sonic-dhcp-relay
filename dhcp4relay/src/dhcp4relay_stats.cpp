@@ -49,6 +49,41 @@ std::unordered_map<std::string, DHCPCounters> DHCPCounter_table::get_counters_da
 }
 
 /**
+ * @brief Helper function to update RX/TX counters in the DB for a given interface and direction.
+ *
+ * @param cntr_table Shared pointer to the swss::Table for updating the DB.
+ * @param interface Name of the interface.
+ * @param direction "RX" or "TX".
+ * @param counters_map Reference to the map of counters (either RX or TX).
+ */
+void update_interface_counters_in_db(
+    std::shared_ptr<swss::Table> cntr_table,
+    const std::string& interface,
+    const std::string& direction,
+    const std::unordered_map<std::string, uint64_t> counters_map)
+{
+    std::vector<swss::FieldValueTuple> existing_fields;
+    std::string key = interface + swss::TableBase::getTableSeparator(COUNTERS_DB) + direction;
+    cntr_table->get(key, existing_fields);
+
+    std::vector<swss::FieldValueTuple> fields;
+    std::unordered_map<std::string, uint64_t> counter_map;
+
+    // Populate existing counters
+    for (const auto& field : existing_fields) {
+        counter_map[fvField(field)] = std::stoi(fvValue(field));
+    }
+
+    // Update with new values
+    for (const auto& [type, value] : counters_map) {
+        counter_map[type] += value;
+        fields.emplace_back(type, std::to_string(counter_map[type]));
+    }
+
+    cntr_table->set(key, fields);
+}
+
+/**
  * @code                DHCPCounter_table::db_update_loop();
  *
  * @brief               Loop to update dhcp stats to the DB periodically.
@@ -79,47 +114,8 @@ void DHCPCounter_table::db_update_loop() {
            3. Populate to DB
         */
         for (const auto& [interface, counters] : interfaces_copy) {
-            // RX counters
-            std::vector<swss::FieldValueTuple> existing_rx_fields;
-            std::string rx_key = interface + "|RX";
-            cntr_table->get(rx_key, existing_rx_fields);
-
-            std::vector<swss::FieldValueTuple> rx_fields;
-            std::unordered_map<std::string, int> rx_counter_map;
-
-            // Populate existing counters
-            for (const auto& field : existing_rx_fields) {
-                rx_counter_map[fvField(field)] = std::stoi(fvValue(field));
-            }
-
-            // Update with new values
-            for (const auto& [type, value] : counters.RX) {
-                rx_counter_map[type] += value;
-                rx_fields.emplace_back(type, std::to_string(rx_counter_map[type]));
-            }
-
-            cntr_table->set(rx_key, rx_fields);
-
-            // TX counters (similar logic)
-            std::vector<swss::FieldValueTuple> existing_tx_fields;
-            std::string tx_key = interface + "|TX";
-            cntr_table->get(tx_key, existing_tx_fields);
-
-            std::vector<swss::FieldValueTuple> tx_fields;
-            std::unordered_map<std::string, int> tx_counter_map;
-
-            // Populate existing counters
-            for (const auto& field : existing_tx_fields) {
-                tx_counter_map[fvField(field)] = std::stoi(fvValue(field));
-            }
-
-            // Update with new values
-            for (const auto& [type, value] : counters.TX) {
-                tx_counter_map[type] += value;
-                tx_fields.emplace_back(type, std::to_string(tx_counter_map[type]));
-            }
-
-            cntr_table->set(tx_key, tx_fields);
+            update_interface_counters_in_db(cntr_table, interface, "RX", counters.RX);
+            update_interface_counters_in_db(cntr_table, interface, "TX", counters.TX);
         }
 
         // Update local changes after syncing to Redis

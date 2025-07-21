@@ -37,4 +37,5 @@ class DHCPMgr {
 		                      swss::Select &select, std::shared_ptr<swss::DBConnector> config_db_ptr);
     void process_dhcp_server_ipv4_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
     void process_vlan_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
+    void process_port_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
 };

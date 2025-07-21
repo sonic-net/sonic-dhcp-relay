@@ -24,7 +24,6 @@ struct event_base *base;
 struct event *ev_sigint;
 struct event *ev_sigterm;
 static std::string vlan_member = "VLAN_MEMBER|";
-static std::string counter_table = "DHCPv4_COUNTER_TABLE|";
 
 extern std::string host_mac_addr;
 extern std::string hostname;
@@ -463,11 +462,6 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
     std::string intf_alias;
     if (phy_interface_alias_map.find(config->phy_interface) != phy_interface_alias_map.end()) {
         intf_alias = phy_interface_alias_map[config->phy_interface];
-    } else {
-        std::shared_ptr<swss::Table> port_tbl =
-            std::make_shared<swss::Table>(config->config_db.get(), CFG_PORT_TABLE_NAME);
-        port_tbl->hget(config->phy_interface.c_str(), "alias", intf_alias);
-        phy_interface_alias_map[config->phy_interface] = intf_alias;
     }
 
     /* Encode circuit ID sub-option */
@@ -508,7 +502,9 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
     /* Encode VSS sub-option 151 if client is not default VRF */
     /* | 151 | vrf_len | 0 | vrf_name | */
     uint8_t vss_buf[32] = {0};
-    if (config->vrf_selection_opt == "enable") {
+    /* Enable VSS only if client and server are in two different VRF's */
+    if ((config->vrf_selection_opt == "enable") && (vrf != "default") &&
+        (config->vrf != vrf)) {
         uint8_t zero_encode = 0;
         memcpy(vss_buf, &zero_encode, sizeof(uint8_t));
         memcpy((vss_buf + 1), (uint8_t *)vrf.c_str(), (uint8_t)vrf.length());
@@ -580,8 +576,16 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
         }
     }
 
+    /* Drop the packet if the hop count exceeds the configured maximum. */
+    if (dhcp_pkt->getDhcpHeader()->hops >= config.max_hop_count) {
+        syslog(LOG_NOTICE, "[DHCPV4_RELAY] Dropping packet: hop count %d exceeds max allowed %d\n",
+               dhcp_pkt->getDhcpHeader()->hops, config.max_hop_count);
+        // increment drop counter
+        dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
+        return;
+    }
+
     /* Increase the hop count */
-    /*TODO: check hops count is less than max hops count allowed */
     dhcp_pkt->getDhcpHeader()->hops = dhcp_pkt->getDhcpHeader()->hops + 1;
     int sock = config.vrf_sock;
     uint32_t index = 0;
@@ -611,17 +615,28 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
 
 uint8_t *decode_tlv(const uint8_t *buf, uint8_t t, uint8_t &l, uint32_t options_total_size) {
     uint8_t *temp = (uint8_t *)buf;
+    uint32_t offset = 0;
     uint8_t len = 0;
 
-    while (temp && (len < options_total_size)) {
+    while (temp && ((offset + DHCP_SUB_OPT_TLV_HEADER_LEN) <= options_total_size)) {
         len = *(temp + DHCP_SUB_OPT_TLV_LENGTH_OFFSET);
+        if ((offset + DHCP_SUB_OPT_TLV_LENGTH_OFFSET + len) > options_total_size) {
+            /* Malformed packet */
+            syslog(LOG_ERR, "[DHCPV4_INFO] Failed to decode realy agent sub-option %d"
+                       " exceeded total option len %d offset %d sub-option len %d\n",
+                       t, options_total_size, offset, len);
+            l = 0;
+            return NULL;
+        }
         if (t == *temp) {
             syslog(LOG_INFO, "[DHCPV4_INFO] Decoding realy agent sub-option %d of len %d\n", t, len);
             l = len;
             return (temp + DHCP_SUB_OPT_TLV_HEADER_LEN);
         }
+        offset +=  (len + DHCP_SUB_OPT_TLV_HEADER_LEN);
         temp += (len + DHCP_SUB_OPT_TLV_HEADER_LEN);
     }
+    l = 0;
     return NULL;
 }
 
@@ -889,7 +904,7 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
         auto itr = std::find(interface_list.begin(), interface_list.end(), intf);
         /* To avoid duplicate packets, we are only processing packets from
            interface in PORT_TABLE and packets from VXLAN interface */
-        if ((itr == interface_list.end()) && (intf.find("VXLAN") != std::string::npos)) {
+        if ((itr == interface_list.end()) && (intf.rfind("VXLAN", 0) != 0)) {
             continue;
         }
 
@@ -980,6 +995,7 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
             if (vlan_str.empty()) {
                 continue;
             }
+
             auto config_itr = vlans->find(vlan_str);
             if (config_itr == vlans->end()) {
                 syslog(LOG_WARNING, "[DHCPV4_RELAY] Config not found for vlan %s\n", intf.c_str());
@@ -1339,6 +1355,24 @@ void config_event_callback(evutil_socket_t fd, short event, void *arg) {
                 }
                 delete relay_msg;
             }
+	} else if (received_event.type == DHCPv4_RELAY_PORT_UPDATE) {
+               port_config *port_msg = static_cast<port_config *>(received_event.msg);
+               if (port_msg) {
+                   syslog(LOG_INFO, "[DHCPV4_RELAY] Updating interface %s event", port_msg->phy_interface.c_str());
+                    if (port_msg->is_add) {
+                       if (std::find(interface_list.begin(), interface_list.end(), port_msg->phy_interface) == interface_list.end()) {
+                           interface_list.push_back(port_msg->phy_interface);
+                       }
+                       phy_interface_alias_map[port_msg->phy_interface] = port_msg->alias;
+                   } else {
+                       auto it = std::find(interface_list.begin(), interface_list.end(), port_msg->phy_interface);
+                       if (it != interface_list.end()) {
+                           interface_list.erase(it);
+                       }
+                       phy_interface_alias_map.erase(port_msg->phy_interface);
+                   }
+                   delete port_msg;
+               }
         }
     } else {
         syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to read config update: expected %lu bytes, got %zd bytes", sizeof(received_event), bytes_read);
