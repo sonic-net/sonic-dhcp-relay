@@ -34,11 +34,11 @@ PWD := $(shell pwd)
 .PHONY: $(PCAPPP_DONE)
 $(PCAPPP_DONE):
 
-        # Remove stale files
-        rm -rf $(PCAPPLUSPLUS_DIR)
+	# Remove stale files
+	rm -rf $(PCAPPLUSPLUS_DIR)
 
-        unzip ${PCAPPPZIP_FILE}
-        pushd $(PCAPPLUSPLUS_DIR)
+	unzip ${PCAPPPZIP_FILE}
+	pushd $(PCAPPLUSPLUS_DIR)
 
 	# Create a git repository here for stg to apply patches
 	git init
@@ -50,8 +50,8 @@ $(PCAPPP_DONE):
 	stg import -s ../patch/series
 	popd
 
-        cd $(PCAPPLUSPLUS_DIR) && cmake -S . -B build && cmake --build build
-        cd build && make && sudo cmake --install .
+	cd $(PCAPPLUSPLUS_DIR) && cmake -S . -B build && cmake --build build
+	cd build && make && sudo cmake --install .
 
 	touch $@
 

@@ -4,6 +4,8 @@
 #include "dhcp4relay.h"
 #include "table.h"
 
+using namespace swss;
+
 /* DHCPv4 counter name map */
 std::map<int, std::string> counter_map = {
     {DHCPv4_MESSAGE_TYPE_UNKNOWN, "Unknown"},
@@ -96,7 +98,7 @@ void update_interface_counters_in_db(
 void DHCPCounter_table::db_update_loop() {
     std::shared_ptr<swss::DBConnector> cntrs_db = std::make_shared<swss::DBConnector>("COUNTERS_DB", 0);
     std::shared_ptr<swss::Table> cntr_table = std::make_shared<swss::Table>(
-        cntrs_db.get(), "COUNTERS_DHCPV4");
+        cntrs_db.get(), COUNTERS_DHCPv4_TABLE);
 
     while (!stop_thread) {
         std::this_thread::sleep_for(std::chrono::seconds(DHCP_RELAY_DB_UPDATE_TIMER_VAL));

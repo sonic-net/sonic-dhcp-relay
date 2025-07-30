@@ -21,13 +21,6 @@
 using namespace ::testing;
 using namespace swss;
 
-extern std::string host_mac_addr;
-extern std::string hostname;
-extern uint32_t deployment_id;
-extern bool feature_dhcp_server_enabled;
-extern std::unordered_map<std::string, relay_config> vlans_copy;
-extern std::string global_dhcp_server_ip;
-
 MOCK_GLOBAL_FUNC1(getifaddrs, int(struct ifaddrs **));
 MOCK_GLOBAL_FUNC1(freeifaddrs, void(struct ifaddrs *));
 MOCK_GLOBAL_FUNC3(write, ssize_t(int, const void*, size_t));
@@ -86,11 +79,6 @@ void FreeMockIfaddrs(struct ifaddrs *mock_ifaddrs) {
     }
 }
 
-TEST(helper, to_string)
-{
-    EXPECT_EQ("0", to_string(0));
-}
-
 TEST(EncodeDecodeTLV, EncodeAndDecode) {
     uint8_t buffer[10] = {};
     uint8_t value[3] = {0x11, 0x22, 0x33};
@@ -112,8 +100,7 @@ TEST(EncodeDecodeTLV, EncodeAndDecode) {
     EXPECT_EQ(decoded_value[2], 0x33);
 }
 
-TEST(sock, sock_open)
-{ 
+TEST(sock, sock_open) {
   struct sock_filter ether_relay_filter[] = {
       { 0x6, 0, 0, 0x00040000 },
   };
@@ -124,8 +111,7 @@ TEST(sock, sock_open)
   EXPECT_GE(sock_open(&ether_relay_fprog), 0);
 }
 
-TEST(sock, sock_open_invalid_filter)
-{
+TEST(sock, sock_open_invalid_filter) {
   const struct sock_fprog ether_relay_fprog = {0,{}};
   EXPECT_EQ(sock_open(&ether_relay_fprog), -1);
 }
@@ -161,13 +147,12 @@ TEST(prepareConfig, prepare_relay_interface_config) {
 
     EXPECT_EQ(interface_config.link_address.sin_addr.s_addr, inet_addr("192.168.1.1"));
     EXPECT_EQ(interface_config.link_address_netmask.sin_addr.s_addr, inet_addr("255.255.255.0"));
-    EXPECT_EQ(interface_config.src_intf_sel_addr.sin_addr.s_addr, inet_addr("192.168.1.2"));  // Now should pass!
+    EXPECT_EQ(interface_config.src_intf_sel_addr.sin_addr.s_addr, inet_addr("192.168.1.2"));
 
     FreeMockIfaddrs(mock_ifaddrs);
 }
 
-TEST(prepareConfig, prepare_vlan_sockets)
-{
+TEST(prepareConfig, prepare_vlan_sockets) {
   struct relay_config config{};
   config.link_address.sin_addr.s_addr = htonl(0x01010101);
   struct iphdr ip_hdr;
@@ -193,9 +178,7 @@ TEST(prepareConfig, prepare_vrf_sockets) {
     vrf_sock_map.clear();
 }
 
-TEST(prepareConfig, update_vlan_mapping)
-{
-    std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+TEST(prepareConfig, update_vlan_mapping) {
     swss::Table vlan_member_table(config_db.get(), "VLAN_MEMBER");
     swss::Table vlan_interface_table(config_db.get(), "VLAN_INTERFACE");
 
@@ -231,8 +214,6 @@ TEST(relayConfig, handle_vlan_events) {
                      .Times(AtLeast(1)) 
                      .WillRepeatedly(Invoke(RealWrite));
     std::unordered_map<std::string, relay_config> vlans;
-    std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
-    std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
     
     swss::Table vlan_member_table(config_db.get(), "VLAN_MEMBER");
     swss::Table vlan_interface_table(config_db.get(), "VLAN_INTERFACE");
@@ -257,8 +238,6 @@ TEST(relayConfig, handle_vlan_events) {
     relay_config *config = new relay_config();
     config->vlan = "Vlan200";
     config->is_add = true;
-    config->config_db = config_db;
-    config->state_db = state_db;
     config->source_interface = "Ethernet8";
     config->servers = {"192.168.1.1","10.0.0.1"};
     config->vrf = "default";
@@ -405,7 +384,10 @@ TEST(relayConfig, handle_vlan_member_events) {
 }
 
 TEST(relayConfig, handle_vlan_interface_events) {
+    struct ifaddrs *mock_ifaddrs = CreateMockIfaddrs("192.168.5.5", "255.255.255.0", "Vlan100", "192.168.1.2", "Ethernet4");
     int pipe_fds[2];
+    EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_)).WillOnce(DoAll(testing::SetArgPointee<0>(mock_ifaddrs), Return(0)));
+    EXPECT_GLOBAL_CALL(freeifaddrs, freeifaddrs(_)).Times(1);
     EXPECT_GLOBAL_CALL(write, write(_, _, _))
                      .Times(AtLeast(1))
                      .WillRepeatedly(Invoke(RealWrite));
@@ -442,6 +424,8 @@ TEST(relayConfig, handle_vlan_interface_events) {
     config_event_callback(pipe_fds[0], 0, &vlans);
 
     EXPECT_GE(vlans["Vlan100"].client_sock, 0);
+    EXPECT_EQ(vlans["Vlan100"].link_address.sin_addr.s_addr, inet_addr("192.168.5.5"));
+    EXPECT_EQ(vlans["Vlan100"].link_address_netmask.sin_addr.s_addr, inet_addr("255.255.255.0"));
 
     close(pipe_fds[0]);
     close(pipe_fds[1]);
@@ -514,9 +498,8 @@ TEST(DHCPMgrTest, initialize_config_listner) {
                      .Times(AtLeast(1))
                      .WillRepeatedly(Return(-1));
     dhcpMgr.initialize_config_listner();
-    std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
     
-    swss::Table dhcp_table(config_db.get(), "DHCPV4_RELAY");
+    swss::Table dhcp_table(config_db.get(), CFG_DHCPv4_RELAY_TABLE);
     swss::Table intf_table(config_db.get(), "INTERFACE");
     swss::Table loopback_intf_table(config_db.get(), "LOOPBACK_INTERFACE");
     swss::Table portchannel_intf_table(config_db.get(), "PORTCHANNEL_INTERFACE");
@@ -601,13 +584,12 @@ TEST(DHCPMgrTest, dhcp_server_feature_enable) {
                      .WillRepeatedly(Return(0));
     dhcpMgr.initialize_config_listner();
 
-    std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
     std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
 
     swss::Table feature_table(config_db.get(), "FEATURE");
     swss::Table vlan_table(config_db.get(), "VLAN");
-    swss::Table dhcp_server_table(config_db.get(), "DHCP_SERVER_IPV4");
-    swss::Table dhcp_server_ip_table(state_db.get(), "DHCP_SERVER_IPV4_SERVER_IP");
+    swss::Table dhcp_server_table(config_db.get(), CFG_DHCPv4_SERVER_TABLE_NAME);
+    swss::Table dhcp_server_ip_table(state_db.get(), STATE_DHCPv4_SERVER_IPv4_SERVER_IP_TABLE);
 
     std::string vlan = "Vlan200";
     std::vector<std::pair<std::string, std::string>> enable_dhcp_server = {
@@ -642,7 +624,6 @@ TEST(DHCPMgrTest, dhcp_server_feature_disable) {
                      .Times(AtLeast(1))
                      .WillRepeatedly(Return(0));
     dhcpMgr.initialize_config_listner();
-    std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
 
     swss::Table feature_table(config_db.get(), "FEATURE");
     std::vector<std::pair<std::string, std::string>> disable_dhcp_server = {
@@ -663,7 +644,6 @@ TEST(DHCPMgrTest, dhcp_server_ip_modification) {
                      .Times(AtLeast(1))
                      .WillRepeatedly(Return(0));
     global_dhcp_server_ip = "240.127.1.3";
-    std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
     std::deque<swss::KeyOpFieldsValuesTuple> entries;
     swss::Select select;
     entries.emplace_back("eth0", "SET", std::vector<swss::FieldValueTuple>{
@@ -671,7 +651,7 @@ TEST(DHCPMgrTest, dhcp_server_ip_modification) {
     });
 
     dhcpMgr.process_dhcp_server_ipv4_ip_notification(entries, select, config_db);
-     EXPECT_EQ(global_dhcp_server_ip, "240.127.1.2");
+    EXPECT_EQ(global_dhcp_server_ip, "240.127.1.2");
 }
 
 TEST(DHCPMgrTest, dhcp_server_ip_deletion) {
@@ -679,7 +659,6 @@ TEST(DHCPMgrTest, dhcp_server_ip_deletion) {
     EXPECT_GLOBAL_CALL(write, write(_, _, _))
                      .Times(AtLeast(1))
                      .WillRepeatedly(Return(0));
-    std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
     std::deque<swss::KeyOpFieldsValuesTuple> entries;
     swss::Select select;
     entries.emplace_back("eth0", "DEL", std::vector<swss::FieldValueTuple>{});
@@ -709,7 +688,6 @@ TEST(DHCPRelayTest, encode_relay_option) {
     phy_interface_alias_map["Ethernet12"] = "eth12";
 
     relay_config config = {};
-    config.config_db = config_db;
     config.phy_interface = "Ethernet12";
     config.vlan = "Vlan10";
     config.link_selection_opt = "enable";
@@ -719,8 +697,8 @@ TEST(DHCPRelayTest, encode_relay_option) {
     config.vrf_selection_opt = "enable";
     vlan_vrf_map["Vlan10"] = "Vrf01";
 
-    hostname = "cisco";
-    host_mac_addr = "12:32:54:24:95:36";
+    m_config.hostname = "cisco";
+    m_config.host_mac_addr = "12:32:54:24:95:36";
 
     encode_relay_option(&dhcpLayer, &config);
 
@@ -739,7 +717,7 @@ TEST(DHCPRelayTest, encode_relay_option) {
     auto remote_id_ptr = decode_tlv((const uint8_t *)options_ptr, OPTION82_SUBOPT_REMOTE_ID,
                                remote_id_len, agent_option_size);
 
-    EXPECT_EQ(memcmp(host_mac_addr.c_str(), remote_id_ptr, 17), 0);
+    EXPECT_EQ(memcmp(m_config.host_mac_addr.c_str(), remote_id_ptr, 17), 0);
 
     uint8_t link_sel_len = 0;
     auto link_sel_ip_ptr = decode_tlv((const uint8_t *)options_ptr, OPTION82_SUBOPT_LINK_SELECTION,
@@ -784,7 +762,6 @@ TEST(DHCPRelayTest, encode_relay_option_server_client_same_vrf) {
     phy_interface_alias_map["Ethernet12"] = "eth12";
 
     relay_config config = {};
-    config.config_db = config_db;
     config.phy_interface = "Ethernet12";
     config.vlan = "Vlan10";
     config.vrf = "Vrf01";
@@ -795,8 +772,8 @@ TEST(DHCPRelayTest, encode_relay_option_server_client_same_vrf) {
     config.vrf_selection_opt = "enable";
     vlan_vrf_map["Vlan10"] = "Vrf01";
 
-    hostname = "cisco";
-    host_mac_addr = "12:32:54:24:95:36";
+    m_config.hostname = "cisco";
+    m_config.host_mac_addr = "12:32:54:24:95:36";
 
     encode_relay_option(&dhcpLayer, &config);
 
@@ -815,7 +792,7 @@ TEST(DHCPRelayTest, encode_relay_option_server_client_same_vrf) {
     auto remote_id_ptr = decode_tlv((const uint8_t *)options_ptr, OPTION82_SUBOPT_REMOTE_ID,
                                remote_id_len, agent_option_size);
 
-    EXPECT_EQ(memcmp(host_mac_addr.c_str(), remote_id_ptr, 17), 0);
+    EXPECT_EQ(memcmp(m_config.host_mac_addr.c_str(), remote_id_ptr, 17), 0);
 
     uint8_t link_sel_len = 0;
     auto link_sel_ip_ptr = decode_tlv((const uint8_t *)options_ptr, OPTION82_SUBOPT_LINK_SELECTION,
@@ -837,7 +814,6 @@ TEST(DHCPRelayTest, encode_relay_option_server_client_same_vrf) {
 }
 
 TEST(DHCPRelayTest, to_client) {
-    std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
     pcpp::EthLayer ethLayer(pcpp::MacAddress("00:13:72:25:fa:cd"), pcpp::MacAddress("00:e0:b1:49:39:02"));
     std::unordered_map<std::string, relay_config> vlans;
 
@@ -859,7 +835,6 @@ TEST(DHCPRelayTest, to_client) {
     phy_interface_alias_map["Ethernet12"] = "eth12";
 
     relay_config config = {};
-    config.config_db = config_db;
     config.phy_interface = "Ethernet12";
     config.vlan = "Vlan10";
     config.link_selection_opt = "enable";
@@ -869,7 +844,7 @@ TEST(DHCPRelayTest, to_client) {
     config.vrf_selection_opt = "enable";
     vlan_vrf_map["Vlan10"] = "Vrf01";
 
-    host_mac_addr = "12:32:54:24:95:36";
+    m_config.host_mac_addr = "12:32:54:24:95:36";
     vlans["Vlan10"] = config;
     encode_relay_option(&dhcpLayer, &config);
 
@@ -888,7 +863,6 @@ TEST(DHCPRelayTest, to_client) {
 }
 
 TEST(DHCPRelayTest, from_client) {
-    std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
 
     pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
     pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_DISCOVER, clientMac);
@@ -900,7 +874,6 @@ TEST(DHCPRelayTest, from_client) {
     phy_interface_alias_map["Ethernet12"] = "eth12";
 
     relay_config config = {};
-    config.config_db = config_db;
     config.phy_interface = "Ethernet12";
     config.vlan = "Vlan10";
     config.link_selection_opt = "enable";
@@ -915,12 +888,9 @@ TEST(DHCPRelayTest, from_client) {
     config.vrf_selection_opt = "enable";
     vlan_vrf_map["Vlan10"] = "Vrf01";
 
-    host_mac_addr = "12:32:54:24:95:36";
+    m_config.host_mac_addr = "12:32:54:24:95:36";
     encode_relay_option(&dhcpLayer, &config);
 
-   //struct ifaddrs *mock_ifaddrs = CreateMockIfaddrs("192.168.1.1", "255.255.255.0", "Vlan100", "192.168.1.2", "Ethernet4");
-    //EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_)).WillOnce(DoAll(testing::SetArgPointee<0>(mock_ifaddrs), Return(0)));
-    //EXPECT_GLOBAL_CALL(freeifaddrs, freeifaddrs(_)).Times(1);
     EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _)).WillOnce([]
 		    (int sock, uint8_t* hdr, struct sockaddr_in target, uint32_t len, in_addr src_ip, bool use_src_ip) {
         pcpp::dhcp_header* dhcp_hdr = (pcpp::dhcp_header*)hdr;

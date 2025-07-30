@@ -262,17 +262,6 @@ void shutdown_relay();
 /* Helper functions */
 
 /**
- * @code                std::string to_string(uint64_t count);
- *
- * @brief               convert uint64_t to string
- *
- * @param count         count of messages in counter
- *
- * @return              count in string
- */
-std::string to_string(uint64_t count);
-
-/**
  * @code                update_vlan_mapping(std::string vlan, bool is_add);
  *
  * @brief               build vlan member interface to vlan mapping table

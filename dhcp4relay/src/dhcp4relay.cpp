@@ -12,8 +12,6 @@
 #include <signal.h>
 #include <unistd.h>
 
-#include <sstream>
-
 #include "configdb.h"
 #include "dhcp4_sender.h"
 #include "dhcp4relay_mgr.h"
@@ -23,14 +21,9 @@
 struct event_base *base;
 struct event *ev_sigint;
 struct event *ev_sigterm;
-static std::string vlan_member = "VLAN_MEMBER|";
-
-extern std::string host_mac_addr;
-extern std::string hostname;
-extern uint32_t deployment_id;
 extern bool feature_dhcp_server_enabled;
 extern std::string global_dhcp_server_ip;
-extern bool is_dualTor;
+extern metadata_config m_config;
 
 static uint8_t client_recv_buffer[BUFFER_SIZE];
 int config_pipe[2];
@@ -103,21 +96,6 @@ using namespace swss;
 std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector>("CONFIG_DB", 0);
 
 std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector>("STATE_DB", 0);
-/**
- * @code                std::string to_string(uint64_t count);
- *
- * @brief               convert uint16_t to string
- *
- * @param count         count of messages in counter
- *
- * @return              count in string
- */
-std::string to_string(uint64_t count) {
-    std::stringstream ss;
-    ss << count;
-    std::string count_value = ss.str();
-    return count_value;
-}
 
 /**
  * @code                sock_open(const struct sock_fprog *fprog);
@@ -248,7 +226,7 @@ void prepare_relay_interface_config(relay_config &interface_config) {
         return;
     }
 
-    if (is_dualTor) {
+    if (m_config.is_dualTor) {
         /* If DualTor is enabled, we set source interface to "Loopback0"
            and link_selection option will be enabled during encoding if is_dualTor is enabled */
         interface_config.source_interface = "Loopback0";
@@ -468,9 +446,9 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
     /* | 1 | 4 | hostname:interface_alias:vlan | */
     std::string circuit_id;
     if (feature_dhcp_server_enabled) {
-        circuit_id = hostname + ":" + intf_alias;
+        circuit_id = m_config.hostname + ":" + intf_alias;
     } else {
-        circuit_id = hostname + ":" + intf_alias + ":" + config->vlan;
+        circuit_id = m_config.hostname + ":" + intf_alias + ":" + config->vlan;
     }
     auto offset = encode_tlv(buf, OPTION82_SUBOPT_CIRCUIT_ID, circuit_id.length(),
                              (uint8_t *)circuit_id.c_str());
@@ -479,12 +457,12 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
     /* Encode remote ID sub-option */
     /* | 2 | 6 | my_mac| */
     offset = encode_tlv((buf + buf_offset), OPTION82_SUBOPT_REMOTE_ID,
-                        MAC_ADDR_STR_LEN, (uint8_t *)(host_mac_addr.c_str()));
+                        MAC_ADDR_STR_LEN, (uint8_t *)(m_config.host_mac_addr.c_str()));
     buf_offset += offset;
 
     /* TODO: this sub-option should be set if source interface selection is enabled */
     /* | 5 | 4 | ipv4 | */
-    if (is_dualTor || config->link_selection_opt == "enable") {
+    if (m_config.is_dualTor || config->link_selection_opt == "enable") {
         uint32_t link_sel_ip = ((config->link_address.sin_addr.s_addr) &
                                 (config->link_address_netmask.sin_addr.s_addr));
         offset = encode_tlv((buf + buf_offset), OPTION82_SUBOPT_LINK_SELECTION, sizeof(uint32_t),
@@ -593,7 +571,7 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
     // Backward compatibility for deployment_id 8. If deployment_id is 8, use client interface IP as source IP
     bool use_intf_ip_as_src_ip = false;
     in_addr src_ip = {0};
-    if (deployment_id == 8) {
+    if (m_config.deployment_id == 8) {
         use_intf_ip_as_src_ip = true;
         src_ip.s_addr = config.link_address.sin_addr.s_addr;
     }
@@ -1168,8 +1146,6 @@ void config_event_callback(evutil_socket_t fd, short event, void *arg) {
                         /*If entry not exist then creating the entry with empty structure.*/
                         (*vlans)[relay_msg->vlan] = relay_config{};
                         (*vlans)[relay_msg->vlan].vlan = relay_msg->vlan;
-                        (*vlans)[relay_msg->vlan].config_db = config_db;
-                        (*vlans)[relay_msg->vlan].state_db = state_db;
                         update_vlan_mapping(relay_msg->vlan, true);
                         if (prepare_vlan_sockets((*vlans)[relay_msg->vlan]) == -1) {
                             syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to create Vlan listen socket");
@@ -1327,7 +1303,7 @@ void config_event_callback(evutil_socket_t fd, short event, void *arg) {
                     if (relay_msg->is_add) {
                             prepare_relay_interface_config(vlan.second);
                     } else {
-                        std::shared_ptr<swss::Table> v4_relay_intf_tbl = std::make_shared<swss::Table>(config_db.get(), "DHCPV4_RELAY");
+                        std::shared_ptr<swss::Table> v4_relay_intf_tbl = std::make_shared<swss::Table>(config_db.get(), CFG_DHCPv4_RELAY_TABLE);
                         std::string value;
 
                         // Check for the presence of specific keys
