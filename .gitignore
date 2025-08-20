@@ -1,5 +1,5 @@
-debian/*
-!debian/changelog
-!debian/compat
-!debian/control
-!debian/rules
+dhcp6relay/debian/*
+!dhcp6relay/debian/changelog
+!dhcp6relay/debian/compat
+!dhcp6relay/debian/control
+!dhcp6relay/debian/rules
