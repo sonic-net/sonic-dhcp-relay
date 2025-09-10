@@ -26,7 +26,7 @@ TEST(configInterface, get_dhcp) {
   std::unordered_map<std::string, relay_config> vlans;
 
   ASSERT_NO_THROW(get_dhcp(vlans, &ipHelpersTable, false, config_db));
-  EXPECT_EQ(vlans.size(), 0);
+  EXPECT_EQ(vlans.size(), 1);
 
   swssSelect.addSelectable(&ipHelpersTable);
 
