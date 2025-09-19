@@ -99,9 +99,10 @@ jobs:
         sudo dpkg -i sonic-swss-common/libswsscommon-dev_1.0.0_${{ parameters.arch }}.deb
     displayName: "Install sonic swss common"
   - script: |
-      rm ../*.deb
+      rm ../*.deb || true
       dpkg-buildpackage -us -uc -b -j$(nproc)
       cp ../*.deb $(Build.ArtifactStagingDirectory)
+    workingDirectory: dhcp6relay
     displayName: "Compile sonic dhcp-relay"
   - publish: $(Build.ArtifactStagingDirectory)
     artifact: sonic-dhcp-relay.${{ parameters.arch }}
