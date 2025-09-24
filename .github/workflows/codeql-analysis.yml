@@ -18,7 +18,7 @@ jobs:
     name: Analyze
     runs-on: ubuntu-latest
     container:
-      image: sonicdev-microsoft.azurecr.io:443/sonic-slave-bullseye:latest
+      image: sonicdev-microsoft.azurecr.io:443/sonic-slave-bookworm:latest
     permissions:
       actions: read
       contents: read
@@ -56,9 +56,6 @@ jobs:
             swig \
             uuid-dev \
             libzmq3-dev \
-            libyang-dev \
-            libpython2.7-dev \
-            python \
             nlohmann-json3-dev
 
     - name: reset-submodules
@@ -69,17 +66,18 @@ jobs:
         git submodule foreach --recursive 'git remote update || true'
         git submodule update --init --recursive
 
-    - name: build-swss-common
+    - name: install-dependency
       run: |
         set -x
         cd ..
-        git clone https://github.com/sonic-net/sonic-swss-common
-        cd sonic-swss-common
-        ./autogen.sh
-        fakeroot dpkg-buildpackage -us -uc -b
-        cd ..
+        curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libswsscommon_1.0.0_amd64.deb" -o libswsscommon_1.0.0_amd64.deb
+        curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libswsscommon-dev_1.0.0_amd64.deb" -o libswsscommon-dev_1.0.0_amd64.deb
+        curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libnl-3-dev_3.7.0-0.2%2Bb1sonic1_amd64.deb" -o libnl-3-dev_3.7.0-0.2+b1sonic1_amd64.deb
+        curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libnl-3-200_3.7.0-0.2%2Bb1sonic1_amd64.deb" -o libnl-3-200_3.7.0-0.2+b1sonic1_amd64.deb
         dpkg-deb -x libswsscommon_1.0.0_amd64.deb $(dirname $GITHUB_WORKSPACE)
         dpkg-deb -x libswsscommon-dev_1.0.0_amd64.deb $(dirname $GITHUB_WORKSPACE)
+        dpkg -i libnl-3-200_3.7.0-0.2+b1sonic1_amd64.deb
+        dpkg-deb -x libnl-3-dev_3.7.0-0.2+b1sonic1_amd64.deb $(dirname $GITHUB_WORKSPACE)
 
     - name: build
       run: |
