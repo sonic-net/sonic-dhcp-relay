@@ -87,6 +87,7 @@ jobs:
 
       - name: build
         run: |
+          cd dhcp6relay
           make all LDFLAGS="-L$(dirname $GITHUB_WORKSPACE)/usr/lib/x86_64-linux-gnu -L/usr/lib/x86_64-linux-gnu" \
             CPPFLAGS="-I$(dirname $GITHUB_WORKSPACE)/usr/include -I$(dirname $GITHUB_WORKSPACE)/usr/include/swss"
 
