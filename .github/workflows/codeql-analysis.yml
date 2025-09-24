@@ -88,8 +88,7 @@ jobs:
       - name: build
         run: |
           make all LDFLAGS="-L$(dirname $GITHUB_WORKSPACE)/usr/lib/x86_64-linux-gnu -L/usr/lib/x86_64-linux-gnu" \
-            CPPFLAGS="-I$(dirname $GITHUB_WORKSPACE)/usr/include -I$(dirname $GITHUB_WORKSPACE)/usr/include/swss" \
-            LIBS="-lnl-3 -lnl-route-3 -lnl-nf-3 -lnl-genl-3"
+            CPPFLAGS="-I$(dirname $GITHUB_WORKSPACE)/usr/include -I$(dirname $GITHUB_WORKSPACE)/usr/include/swss"
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v2.1.29
