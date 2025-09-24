@@ -1,5 +1,4 @@
-# For more infomation, please visit: https://github.com/github/codeql-action
-
+# For more information, please visit: https://github.com/github/codeql-action
 name: "CodeQL"
 
 on:
@@ -18,32 +17,30 @@ jobs:
     name: Analyze
     runs-on: ubuntu-latest
     container:
-      image: sonicdev-microsoft.azurecr.io:443/sonic-slave-bullseye:latest
+      image: sonicdev-microsoft.azurecr.io:443/sonic-slave-bookworm:latest
     permissions:
       actions: read
       contents: read
       security-events: write
-
     strategy:
       fail-fast: false
       matrix:
         language: [ 'cpp' ]
-
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-    # Initializes the CodeQL tools for scanning.
-    - name: Initialize CodeQL
-      uses: github/codeql-action/init@v2.1.29
-      with:
-        config-file: ./.github/codeql/codeql-config.yml
-        languages: ${{ matrix.language }}
+      # Initializes the CodeQL tools for scanning.
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v2.1.29
+        with:
+          config-file: ./.github/codeql/codeql-config.yml
+          languages: ${{ matrix.language }}
 
-    - name: prepare
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y libboost-system-dev \
+      - name: prepare
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libboost-system-dev \
             libboost-thread-dev \
             libevent-dev \
             libhiredis-dev \
@@ -56,36 +53,44 @@ jobs:
             swig \
             uuid-dev \
             libzmq3-dev \
-            libyang-dev \
-            libpython2.7-dev \
-            python \
-            nlohmann-json3-dev
+            nlohmann-json3-dev \
 
-    - name: reset-submodules
-      run: |
-        git config --global --add safe.directory /__w/sonic-dhcp-relay/sonic-dhcp-relay
-        git submodule foreach --recursive 'git clean -xfdf || true'
-        git submodule foreach --recursive 'git reset --hard || true'
-        git submodule foreach --recursive 'git remote update || true'
-        git submodule update --init --recursive
+      - name: reset-submodules
+        run: |
+          git config --global --add safe.directory /__w/sonic-dhcp-relay/sonic-dhcp-relay
+          git submodule foreach --recursive 'git clean -xfdf || true'
+          git submodule foreach --recursive 'git reset --hard || true'
+          git submodule foreach --recursive 'git remote update || true'
+          git submodule update --init --recursive
 
-    - name: build-swss-common
-      run: |
-        set -x
-        cd ..
-        git clone https://github.com/sonic-net/sonic-swss-common
-        cd sonic-swss-common
-        ./autogen.sh
-        fakeroot dpkg-buildpackage -us -uc -b
-        cd ..
-        dpkg-deb -x libswsscommon_1.0.0_amd64.deb $(dirname $GITHUB_WORKSPACE)
-        dpkg-deb -x libswsscommon-dev_1.0.0_amd64.deb $(dirname $GITHUB_WORKSPACE)
+      - name: install-dependency
+        run: |
+          set -x
+          cd ..
+          curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libswsscommon_1.0.0_amd64.deb" -o libswsscommon_1.0.0_amd64.deb
+          curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libswsscommon-dev_1.0.0_amd64.deb" -o libswsscommon-dev_1.0.0_amd64.deb
+          curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libnl-3-dev_3.7.0-0.2%2Bb1sonic1_amd64.deb" -o libnl-3-dev_3.7.0-0.2+b1sonic1_amd64.deb
+          curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libnl-3-200_3.7.0-0.2%2Bb1sonic1_amd64.deb" -o libnl-3-200_3.7.0-0.2+b1sonic1_amd64.deb
+          curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libnl-route-3-200_3.7.0-0.2%2Bb1sonic1_amd64.deb" -o libnl-route-3-200_3.7.0-0.2+b1sonic1_amd64.deb
+          curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libnl-route-3-dev_3.7.0-0.2%2Bb1sonic1_amd64.deb" -o libnl-route-3-dev_3.7.0-0.2+b1sonic1_amd64.deb
+          curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libnl-genl-3-200_3.7.0-0.2%2Bb1sonic1_amd64.deb" -o libnl-genl-3-200_3.7.0-0.2+b1sonic1_amd64.deb
+          curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libnl-genl-3-dev_3.7.0-0.2%2Bb1sonic1_amd64.deb" -o libnl-genl-3-dev_3.7.0-0.2+b1sonic1_amd64.deb
+          curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libnl-nf-3-200_3.7.0-0.2%2Bb1sonic1_amd64.deb" -o libnl-nf-3-200_3.7.0-0.2+b1sonic1_amd64.deb
+          curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libnl-nf-3-dev_3.7.0-0.2%2Bb1sonic1_amd64.deb" -o libnl-nf-3-dev_3.7.0-0.2+b1sonic1_amd64.deb
+          curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libyang_1.0.73_amd64.deb" -o libyang_1.0.73_amd64.deb
+          curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libyang-cpp_1.0.73_amd64.deb" -o llibyang-cpp_1.0.73_amd64.deb
+          curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libyang-dev_1.0.73_amd64.deb" -o libyang-dev_1.0.73_amd64.deb
+          dpkg-deb -x libswsscommon_1.0.0_amd64.deb $(dirname $GITHUB_WORKSPACE)
+          dpkg-deb -x libswsscommon-dev_1.0.0_amd64.deb $(dirname $GITHUB_WORKSPACE)
+          dpkg -i libnl*.deb
+          dpkg -i libyang*.deb
 
-    - name: build
-      run: |
-        make all LDFLAGS="-L$(dirname $GITHUB_WORKSPACE)/usr/lib/x86_64-linux-gnu" CPPFLAGS="-I$(dirname $GITHUB_WORKSPACE)/usr/include -I$(dirname $GITHUB_WORKSPACE)/usr/include/swss"
+      - name: build
+        run: |
+          make all LDFLAGS="-L$(dirname $GITHUB_WORKSPACE)/usr/lib/x86_64-linux-gnu -L/usr/lib/x86_64-linux-gnu" \
+            CPPFLAGS="-I$(dirname $GITHUB_WORKSPACE)/usr/include -I$(dirname $GITHUB_WORKSPACE)/usr/include/swss"
 
-    - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v2.1.29
-      with:
-        category: "/language:${{matrix.language}}"
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v2.1.29
+        with:
+          category: "/language:${{matrix.language}}"
