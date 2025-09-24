@@ -69,15 +69,12 @@ jobs:
         git submodule foreach --recursive 'git remote update || true'
         git submodule update --init --recursive
 
-    - name: build-swss-common
+    - name: download-swss-common
       run: |
         set -x
         cd ..
-        git clone https://github.com/sonic-net/sonic-swss-common
-        cd sonic-swss-common
-        ./autogen.sh
-        fakeroot dpkg-buildpackage -us -uc -b
-        cd ..
+        curl "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libswsscommon_1.0.0_amd64.deb" -o libswsscommon_1.0.0_amd64.deb
+        curl "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libswsscommon-dev_1.0.0_amd64.deb" -o libswsscommon-dev_1.0.0_amd64.deb
         dpkg-deb -x libswsscommon_1.0.0_amd64.deb $(dirname $GITHUB_WORKSPACE)
         dpkg-deb -x libswsscommon-dev_1.0.0_amd64.deb $(dirname $GITHUB_WORKSPACE)
 
