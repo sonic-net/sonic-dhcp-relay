@@ -73,8 +73,10 @@ jobs:
         curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libswsscommon_1.0.0_amd64.deb" -o libswsscommon_1.0.0_amd64.deb
         curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libswsscommon-dev_1.0.0_amd64.deb" -o libswsscommon-dev_1.0.0_amd64.deb
         curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libnl-3-dev_3.7.0-0.2%2Bb1sonic1_amd64.deb" -o libnl-3-dev_3.7.0-0.2+b1sonic1_amd64.deb
+        curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libnl-3-200_3.7.0-0.2%2Bb1sonic1_amd64.deb" -o libnl-3-200_3.7.0-0.2+b1sonic1_amd64.deb
         dpkg-deb -x libswsscommon_1.0.0_amd64.deb $(dirname $GITHUB_WORKSPACE)
         dpkg-deb -x libswsscommon-dev_1.0.0_amd64.deb $(dirname $GITHUB_WORKSPACE)
+        dpkg-deb -x libnl-3-200_3.7.0-0.2+b1sonic1_amd64.deb $(dirname $GITHUB_WORKSPACE)
         dpkg-deb -x libnl-3-dev_3.7.0-0.2+b1sonic1_amd64.deb $(dirname $GITHUB_WORKSPACE)
 
     - name: build
