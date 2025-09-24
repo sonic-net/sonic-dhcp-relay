@@ -56,9 +56,6 @@ jobs:
             swig \
             uuid-dev \
             libzmq3-dev \
-            libyang-dev \
-            libpython2.7-dev \
-            python \
             nlohmann-json3-dev
 
     - name: reset-submodules
