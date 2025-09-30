@@ -10,4 +10,3 @@
 
 extern bool pollSwssNotifcation;
 extern swss::Select swssSelect;
-
