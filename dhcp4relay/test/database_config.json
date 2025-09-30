@@ -1,0 +1,32 @@
+{
+    "INSTANCES": {
+        "redis":{
+            "hostname" : "127.0.0.1",
+            "port" : 6379,
+	    "unix_socket_path" : "/var/run/redis/redis.sock"
+        },
+        "redis_chassis":{
+            "hostname" : "redis_chassis.server",
+            "port" : 6380,
+            "unix_socket_path" : "/var/run/redis/redis_chassis.sock"
+        }
+    },
+    "DATABASES" : {
+        "COUNTERS_DB" : {
+            "id" : 2,
+            "separator": "|",
+            "instance" : "redis"
+        },
+        "CONFIG_DB" : {
+            "id" : 4,
+            "separator": "|",
+            "instance" : "redis"
+        },
+        "STATE_DB" : {
+            "id" : 6,
+            "separator": "|",
+            "instance" : "redis"
+        }
+    },
+    "VERSION" : "1.0"
+}
