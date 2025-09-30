@@ -22,12 +22,12 @@ jobs:
   steps:
   - ${{ if and(eq(parameters.arch, 'amd64'), parameters.codeCoverage) }}:
     - script: |
-        wget https://packages.microsoft.com/config/ubuntu/20.04/packages-microsoft-prod.deb -O packages-microsoft-prod.deb
+        wget https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb -O packages-microsoft-prod.deb
         sudo dpkg -i packages-microsoft-prod.deb
         rm packages-microsoft-prod.deb
         sudo apt-get update
         sudo apt-get install -y apt-transport-https
-        sudo apt-get install -y dotnet-sdk-6.0
+        sudo apt-get install -y dotnet-sdk-8.0
       displayName: install .Net
   - script: |
       set -ex
@@ -73,8 +73,8 @@ jobs:
       ${{ else }}:
         artifact: common-lib.${{ parameters.arch }}
       patterns: |
-        target/debs/bookworm/libyang-*.deb
-        target/debs/bookworm/libyang_*.deb
+        target/debs/bookworm/libyang-*_1.0*.deb
+        target/debs/bookworm/libyang_1.0*.deb
     displayName: "Download libyang from common lib"
   - script: |
       set -ex
@@ -99,9 +99,10 @@ jobs:
         sudo dpkg -i sonic-swss-common/libswsscommon-dev_1.0.0_${{ parameters.arch }}.deb
     displayName: "Install sonic swss common"
   - script: |
-      rm ../*.deb
+      rm ../*.deb || true
       dpkg-buildpackage -us -uc -b -j$(nproc)
       cp ../*.deb $(Build.ArtifactStagingDirectory)
+    workingDirectory: dhcp6relay
     displayName: "Compile sonic dhcp-relay"
   - publish: $(Build.ArtifactStagingDirectory)
     artifact: sonic-dhcp-relay.${{ parameters.arch }}
