@@ -952,7 +952,7 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
         /* Validate UDP checksum is correct */
         auto udp_checksum = udp_layer->calculateChecksum(false);
         if (htobe16(udp_checksum) != udp_layer->getUdpHeader()->headerChecksum) {
-            syslog(LOG_WARNING, "[DHCPV4_REALY] UDP checksum validation is failing "
+            syslog(LOG_WARNING, "[DHCPV4_RELAY] UDP checksum validation is failing "
                         " packet is from interface %s\n", intf.c_str());
             if (vlan_id != 0 && !vlan_str.empty()) {
                 dhcp_cntr_table.increment_counter(vlan_str, "RX", DHCPv4_MESSAGE_TYPE_MALFORMED);
@@ -1381,7 +1381,7 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
         exit(EXIT_FAILURE);
     }
 
-    /* Keep a list of physical interafce available in config DB*/
+    /* Keep a list of physical interface available in config DB*/
     auto match_pattern = std::string("PORT|*");
     auto keys = config_db->keys(match_pattern);
 

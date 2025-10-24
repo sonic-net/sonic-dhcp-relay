@@ -169,7 +169,7 @@ void DHCPCounter_table::stop_db_updates() {
  *
  * @brief               Method to initialize counters in DB for a particular interface
  *
-.* @param interface     Name of the interface for which RX and TX counters need to be initialized
+ * @param interface     Name of the interface for which RX and TX counters need to be initialized
  *
  * @return              none
  */
@@ -191,7 +191,7 @@ void DHCPCounter_table::initialize_interface(const std::string& interface) {
  * @brief               Method to increment counters in DB for a particular interface,
  *                      direction(RX|TX) and dhcp_message_type_t
  *
-.* @param interface     Name of the interface for which counters need to be incremented
+ * @param interface     Name of the interface for which counters need to be incremented
  *
  * @return              none
  */
@@ -217,7 +217,7 @@ void DHCPCounter_table::increment_counter(const std::string& interface,
  *
  * @brief               Method to remove counters from global datastructure.
  *
-.* @param interface     Name of the interface for which counters need to be removed.
+ * @param interface     Name of the interface for which counters need to be removed.
  *
  * @return              none
  */

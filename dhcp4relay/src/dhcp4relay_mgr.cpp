@@ -118,7 +118,7 @@ void DHCPMgr::handle_swss_notification() {
                 process_dhcp_server_ipv4_ip_notification(entries, swss_select, config_db_ptr);
 	    }
 	}
-        
+
 	if (selectable == static_cast<swss::Selectable *>(&config_db_device_metadata_table)) {
             config_db_device_metadata_table.pops(entries);
             process_device_metadata_notification(entries);
@@ -394,16 +394,16 @@ void DHCPMgr::process_relay_notification(std::deque<swss::KeyOpFieldsValuesTuple
 }
 
 /**
- * @brief Processes the feature table updates to configure the dhcp_server enabled/disbaled.
+ * @brief Processes the feature table updates to configure the dhcp_server enabled/disabled.
  *
  * This method iterates over a deque of relay configuration entries, parses each entry,
  * if the entry is for 'dhcp_server' then based on the 'state' value it will process the entry.
- * If the "state" is "enable" then it will send the delete event to main thread to remove all the 
+ * If the "state" is "enable" then it will send the delete event to main thread to remove all the
  * existing dhcp_relay config and then restart the listeners for dhcp_server related tables.
  * If the "state" is "disable" then it will send the delete event to main thread to remove all the
  * auto configured dhcp_server config and then restart the listeners dhcp_relay related table.
  *
- * The method will handle the clean up for the vlan cache entries and  also logs relevant information 
+ * The method will handle the clean up for the vlan cache entries and  also logs relevant information
  * and errors using syslog.
  *
  * @param entries A deque of KeyOpFieldsValuesTuple objects representing feature table notifications.
@@ -484,7 +484,7 @@ void DHCPMgr::process_feature_notification(std::deque<swss::KeyOpFieldsValuesTup
  * If the operation is "DEL" then it will send the delete event to main thread to remove all the
  * auto configured dhcp_server config, as without IP, the relay config can't be formed.
  *
- * The method will handle the clean up for the vlan cache entries and  also logs relevant information 
+ * The method will handle the clean up for the vlan cache entries and  also logs relevant information
  * and errors using syslog.
  *
  * @param entries A deque of KeyOpFieldsValuesTuple objects representing dhcp_server_ip table notifications.
@@ -497,7 +497,7 @@ void DHCPMgr::process_dhcp_server_ipv4_ip_notification(std::deque<swss::KeyOpFie
    for (auto &entry : entries) {
         std::string server_intf = kfvKey(entry);
         std::string operation = kfvOp(entry);
- 
+
 	if (server_intf != "eth0") {
             continue;
         }
@@ -651,7 +651,7 @@ void DHCPMgr::process_vlan_interface_notification(std::deque<swss::KeyOpFieldsVa
  * If the operation is "SET" then based on the "state" value it will proceed entry,
  * it will adds the vlan and server IP to for the relay_config and send the event to main thread.
  * If the server IP is not updated then it will get the entry from DB and fill it.
- * related as it is the new configuration of the IP. 
+ * related as it is the new configuration of the IP.
  * If the Vlan is not present in the VLAN table then it will not send the config event to main thread.
  * If the operation is "DEL" then it will send the delete entry event to the main thread.
  *
@@ -710,7 +710,7 @@ void DHCPMgr::process_dhcp_server_ipv4_notification(std::deque<swss::KeyOpFields
 	    }
         } else {
 	    relay_msg->is_add = false;
-	}   
+	}
 
 	// Update the vlan cache entry
 	if (relay_msg->is_add) {
@@ -750,8 +750,8 @@ void DHCPMgr::process_vlan_notification(std::deque<swss::KeyOpFieldsValuesTuple>
     for (auto &entry : entries) {
         std::string vlan = kfvKey(entry);
         std::string operation = kfvOp(entry);
-        
-        //If the vlan is not configured in DHCPV4 table then skip the entry.	
+
+        //If the vlan is not configured in DHCPV4 table then skip the entry.
 	if (vlans_copy.find(vlan) == vlans_copy.end()) {
             continue;
 	}
@@ -765,7 +765,7 @@ void DHCPMgr::process_vlan_notification(std::deque<swss::KeyOpFieldsValuesTuple>
         }
 
 	relay_msg->vlan = vlan;
-	
+
 	if (operation == "SET") {
            *relay_msg = vlans_copy[relay_msg->vlan];
            relay_msg->is_add = true;
