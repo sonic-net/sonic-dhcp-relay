@@ -600,14 +600,14 @@ uint8_t *decode_tlv(const uint8_t *buf, uint8_t t, uint8_t &l, uint32_t options_
         len = *(temp + DHCP_SUB_OPT_TLV_LENGTH_OFFSET);
         if ((offset + DHCP_SUB_OPT_TLV_LENGTH_OFFSET + len) > options_total_size) {
             /* Malformed packet */
-            syslog(LOG_ERR, "[DHCPV4_INFO] Failed to decode realy agent sub-option %d"
+            syslog(LOG_ERR, "[DHCPV4_INFO] Failed to decode relay agent sub-option %d"
                        " exceeded total option len %d offset %d sub-option len %d\n",
                        t, options_total_size, offset, len);
             l = 0;
             return NULL;
         }
         if (t == *temp) {
-            syslog(LOG_INFO, "[DHCPV4_INFO] Decoding realy agent sub-option %d of len %d\n", t, len);
+            syslog(LOG_INFO, "[DHCPV4_INFO] Decoding relay agent sub-option %d of len %d\n", t, len);
             l = len;
             return (temp + DHCP_SUB_OPT_TLV_HEADER_LEN);
         }
