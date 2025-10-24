@@ -25,8 +25,8 @@ std::map<int, std::string> counter_map = {
  *
  * @brief               Helper function to calculate safe delta with overflow handling.
  *
-.* @param new_value     new uint64_t value
-.* @param old_value     old uint64_t value
+ * @param new_value     new uint64_t value
+ * @param old_value     old uint64_t value
  *
  * @return              delta value
  */
@@ -112,7 +112,7 @@ void DHCPCounter_table::db_update_loop() {
 
         /* These steps are followed before updating to Redis:
            1. Fetch present values from redis - existing _fields
-           2. Update counters with 'cache values' + 'existing_feilds'
+           2. Update counters with 'cache values' + 'existing_fields'
            3. Populate to DB
         */
         for (const auto& [interface, counters] : interfaces_copy) {
@@ -122,7 +122,7 @@ void DHCPCounter_table::db_update_loop() {
 
         // Update local changes after syncing to Redis
         // We will take the delta values of running data in interfaces_cntr_table
-        // and previosuly copied interfaces_copy values.
+        // and previously copied interfaces_copy values.
         {
             // Taking lock inside a block so that is released automatically
             std::lock_guard<std::mutex> lock(interfaces_mutex);
