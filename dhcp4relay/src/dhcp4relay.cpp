@@ -740,6 +740,29 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
 }
 
 /**
+ * @code                update_interface_vlan_mapping(std::string interface, std::string vlan, bool is_add);
+ *
+ * @brief               update interface to vlan mapping and DHCP counter table
+ *
+ * @param interface     interface name string
+ * @param vlan          vlan name string
+ * @param is_add        add or delete entry
+ *
+ * @return              none
+ */
+void update_interface_vlan_mapping(std::string interface, std::string vlan, bool is_add) {
+    if (is_add) {
+        vlan_map[interface] = vlan;
+        dhcp_cntr_table.initialize_interface(vlan);
+        syslog(LOG_INFO, "[DHCPV4_RELAY] Add <%s, %s> into interface vlan map\n", interface.c_str(), vlan.c_str());
+    } else {
+        vlan_map.erase(interface);
+        dhcp_cntr_table.remove_interface(vlan);
+        syslog(LOG_INFO, "[DHCPV4_RELAY] Remove <%s, %s> from interface vlan map\n", interface.c_str(), vlan.c_str());
+    }
+}
+
+/**
  * @code                update_vlan_mapping(std::string vlan, bool is_add);
  *
  * @brief               build vlan member interface to vlan mapping table
@@ -756,7 +779,7 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
  * and updates the global VLAN map with the interface and VLAN information.
  *
  * @param vlan The VLAN identifier as a string.
- * @param cfgdb A shared pointer to the configuration database connector.
+ * @param is_add Determines if its ADD or DELETE operation.
  */
 void update_vlan_mapping(std::string vlan, bool is_add) {
 #ifdef UNIT_TEST
@@ -770,15 +793,7 @@ void update_vlan_mapping(std::string vlan, bool is_add) {
     for (auto &itr : keys) {
         auto found = itr.find_last_of('|');
         auto interface = itr.substr(found + 1);
-        if (is_add) {
-            vlan_map[interface] = vlan;
-            dhcp_cntr_table.initialize_interface(vlan);
-            syslog(LOG_INFO, "[DHCPV4_RELAY] Add <%s, %s> into interface vlan map\n", interface.c_str(), vlan.c_str());
-        } else {
-            vlan_map.erase(interface);
-            dhcp_cntr_table.remove_interface(vlan);
-            syslog(LOG_INFO, "[DHCPV4_RELAY] Remove <%s, %s> from interface vlan map\n", interface.c_str(), vlan.c_str());
-        }
+        update_interface_vlan_mapping(interface, vlan, is_add);
     }
 
     /* get VRF attached to the vlan from VLAN_INTERFACE table */
@@ -1223,15 +1238,7 @@ void config_event_callback(evutil_socket_t fd, short event, void *arg) {
                        close((*vlans)[msg->vlan].client_sock);
                    }
 
-                   if (msg->is_add) {
-                       vlan_map[msg->interface] = msg->vlan;
-                       dhcp_cntr_table.initialize_interface(msg->vlan);
-                       syslog(LOG_INFO, "[DHCPV4_RELAY] Add <%s, %s> into interface vlan map\n", msg->interface.c_str(), msg->vlan.c_str());
-                   } else {
-                       vlan_map.erase(msg->interface);
-                       dhcp_cntr_table.remove_interface(msg->vlan);
-                       syslog(LOG_INFO, "[DHCPV4_RELAY] Remove <%s, %s> from interface vlan map\n", msg->interface.c_str(), msg->vlan.c_str());
-                   }
+                   update_interface_vlan_mapping(msg->interface, msg->vlan, msg->is_add);
                    if (prepare_vlan_sockets((*vlans)[msg->vlan]) == -1) {
                        syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to create Vlan listen socket");
                        return;
