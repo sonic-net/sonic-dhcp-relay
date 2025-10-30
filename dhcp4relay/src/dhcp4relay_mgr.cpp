@@ -62,7 +62,7 @@ void DHCPMgr::handle_swss_notification() {
     swss::SubscriberStateTable config_db_vlan_interface_table(config_db_ptr.get(), "VLAN_INTERFACE");
     swss::SubscriberStateTable config_db_feature_table(config_db_ptr.get(), "FEATURE");
     swss::SubscriberStateTable config_db_vlan_table(config_db_ptr.get(), "VLAN");
-    config_db_dhcp_server_ipv4_ptr = std::make_shared<swss::SubscriberStateTable>(config_db_ptr.get(), CFG_DHCPv4_SERVER_TABLE_NAME);
+    config_db_dhcp_server_ipv4_ptr = std::make_shared<swss::SubscriberStateTable>(config_db_ptr.get(), CFG_DHCP_SERVER_IPV4_TABLE_NAME);
     state_db_dhcp_server_ipv4_ip_ptr = std::make_shared<swss::SubscriberStateTable>(state_db_ptr.get(), STATE_DHCPV4_SERVER_IPV4_SERVER_IP_TABLE);
     swss::SubscriberStateTable config_db_port_table(config_db_ptr.get(), "PORT");
 
@@ -445,7 +445,7 @@ void DHCPMgr::process_feature_notification(std::deque<swss::KeyOpFieldsValuesTup
                select.removeSelectable(state_db_dhcp_server_ipv4_ip_ptr.get());
             }
 
-            config_db_dhcp_server_ipv4_ptr = std::make_shared<swss::SubscriberStateTable>(config_db_ptr.get(), CFG_DHCPv4_SERVER_TABLE_NAME);
+            config_db_dhcp_server_ipv4_ptr = std::make_shared<swss::SubscriberStateTable>(config_db_ptr.get(), CFG_DHCP_SERVER_IPV4_TABLE_NAME);
             state_db_dhcp_server_ipv4_ip_ptr = std::make_shared<swss::SubscriberStateTable>(state_db_ptr.get(), STATE_DHCPV4_SERVER_IPV4_SERVER_IP_TABLE);
 
             select.addSelectable(config_db_dhcp_server_ipv4_ptr.get());
@@ -532,7 +532,7 @@ void DHCPMgr::process_dhcp_server_ipv4_ip_notification(std::deque<swss::KeyOpFie
                if (config_db_dhcp_server_ipv4_ptr) {
                    select.removeSelectable(config_db_dhcp_server_ipv4_ptr.get());
                }
-               config_db_dhcp_server_ipv4_ptr = std::make_shared<swss::SubscriberStateTable>(config_db_ptr.get(), CFG_DHCPv4_SERVER_TABLE_NAME);
+               config_db_dhcp_server_ipv4_ptr = std::make_shared<swss::SubscriberStateTable>(config_db_ptr.get(), CFG_DHCP_SERVER_IPV4_TABLE_NAME);
                select.addSelectable(config_db_dhcp_server_ipv4_ptr.get());
 	    }
         } else {

@@ -588,7 +588,7 @@ TEST(DHCPMgrTest, dhcp_server_feature_enable) {
 
     swss::Table feature_table(config_db.get(), "FEATURE");
     swss::Table vlan_table(config_db.get(), "VLAN");
-    swss::Table dhcp_server_table(config_db.get(), CFG_DHCPv4_SERVER_TABLE_NAME);
+    swss::Table dhcp_server_table(config_db.get(), CFG_DHCP_SERVER_IPV4_TABLE_NAME);
     swss::Table dhcp_server_ip_table(state_db.get(), STATE_DHCPV4_SERVER_IPV4_SERVER_IP_TABLE);
 
     std::string vlan = "Vlan200";
