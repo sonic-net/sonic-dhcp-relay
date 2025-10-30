@@ -157,6 +157,13 @@ struct port_config {
     bool is_add;
 };
 
+struct metadata_config {
+    std::string host_mac_addr;
+    std::string hostname = "sonic";
+    uint32_t deployment_id;
+    bool is_dualTor;
+};
+
 /**
  * @code                sock_open(const struct sock_fprog *fprog);
  *

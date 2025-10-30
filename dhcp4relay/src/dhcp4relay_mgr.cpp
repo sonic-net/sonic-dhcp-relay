@@ -53,7 +53,7 @@ void DHCPMgr::initialize_config_listner() {
 void DHCPMgr::handle_swss_notification() {
     std::shared_ptr<swss::DBConnector> config_db_ptr = std::make_shared<swss::DBConnector>("CONFIG_DB", 0);
     std::shared_ptr<swss::DBConnector> state_db_ptr = std::make_shared<swss::DBConnector>("STATE_DB", 0);
-    config_db_relaymgr_table_ptr = std::make_shared<swss::SubscriberStateTable>(config_db_ptr.get(), CFG_DHCPv4_RELAY_TABLE);
+    config_db_relaymgr_table_ptr = std::make_shared<swss::SubscriberStateTable>(config_db_ptr.get(), CFG_DHCPV4_RELAY_TABLE_NAME);
     swss::SubscriberStateTable config_db_interface_table(config_db_ptr.get(), "INTERFACE");
     swss::SubscriberStateTable config_db_loopback_table(config_db_ptr.get(), "LOOPBACK_INTERFACE");
     swss::SubscriberStateTable config_db_portchannel_table(config_db_ptr.get(), "PORTCHANNEL_INTERFACE");
@@ -63,7 +63,7 @@ void DHCPMgr::handle_swss_notification() {
     swss::SubscriberStateTable config_db_feature_table(config_db_ptr.get(), "FEATURE");
     swss::SubscriberStateTable config_db_vlan_table(config_db_ptr.get(), "VLAN");
     config_db_dhcp_server_ipv4_ptr = std::make_shared<swss::SubscriberStateTable>(config_db_ptr.get(), CFG_DHCPv4_SERVER_TABLE_NAME);
-    state_db_dhcp_server_ipv4_ip_ptr = std::make_shared<swss::SubscriberStateTable>(state_db_ptr.get(), STATE_DHCPv4_SERVER_IPv4_SERVER_IP_TABLE);
+    state_db_dhcp_server_ipv4_ip_ptr = std::make_shared<swss::SubscriberStateTable>(state_db_ptr.get(), STATE_DHCPV4_SERVER_IPV4_SERVER_IP_TABLE);
     swss::SubscriberStateTable config_db_port_table(config_db_ptr.get(), "PORT");
 
     std::deque<swss::KeyOpFieldsValuesTuple> entries;
@@ -446,7 +446,7 @@ void DHCPMgr::process_feature_notification(std::deque<swss::KeyOpFieldsValuesTup
             }
 
             config_db_dhcp_server_ipv4_ptr = std::make_shared<swss::SubscriberStateTable>(config_db_ptr.get(), CFG_DHCPv4_SERVER_TABLE_NAME);
-            state_db_dhcp_server_ipv4_ip_ptr = std::make_shared<swss::SubscriberStateTable>(state_db_ptr.get(), STATE_DHCPv4_SERVER_IPv4_SERVER_IP_TABLE);
+            state_db_dhcp_server_ipv4_ip_ptr = std::make_shared<swss::SubscriberStateTable>(state_db_ptr.get(), STATE_DHCPV4_SERVER_IPV4_SERVER_IP_TABLE);
 
             select.addSelectable(config_db_dhcp_server_ipv4_ptr.get());
             select.addSelectable(state_db_dhcp_server_ipv4_ip_ptr.get());
@@ -690,7 +690,7 @@ void DHCPMgr::process_dhcp_server_ipv4_notification(std::deque<swss::KeyOpFields
             if (state == "enabled") {
               if (global_dhcp_server_ip.empty()) {
                   std::shared_ptr<swss::DBConnector> state_db_ptr = std::make_shared<swss::DBConnector>("STATE_DB", 0);
-                  swss::Table ip_tbl(state_db_ptr.get(), STATE_DHCPv4_SERVER_IPv4_SERVER_IP_TABLE);
+                  swss::Table ip_tbl(state_db_ptr.get(), STATE_DHCPV4_SERVER_IPV4_SERVER_IP_TABLE);
 
                   std::string ip;
                   ip_tbl.hget("eth0", "ip", ip);
