@@ -44,7 +44,10 @@ jobs:
           libnl-route-3-dev \
           libnl-genl-3-dev \
           libnl-nf-3-dev \
-          redis-server
+          redis-server \
+          stgit \
+          cmake \
+          libpcap-dev
       sudo sed -ri 's/^# unixsocket/unixsocket/' /etc/redis/redis.conf
       sudo sed -ri 's/^unixsocketperm .../unixsocketperm 777/' /etc/redis/redis.conf
       sudo sed -ri 's/redis-server.sock/redis.sock/' /etc/redis/redis.conf
@@ -106,6 +109,12 @@ jobs:
     displayName: "Compile sonic dhcp6relay"
   - script: |
       rm ../*.deb || true
+      # Copy required files from parent directory for dhcp4relay build
+      cp -f ../pcappp_v24.09.zip ./ || true
+      cp -rf ../patch ./ || true
+      # Configure git identity for patch application
+      git config --global user.email "build@sonic.net"
+      git config --global user.name "SONiC Build"
       dpkg-buildpackage -us -uc -b -j$(nproc)
       cp ../*.deb $(Build.ArtifactStagingDirectory)
     workingDirectory: dhcp4relay
