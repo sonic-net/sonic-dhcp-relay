@@ -66,7 +66,7 @@ std::unordered_map<std::string, std::string> vlan_map;
 /* VRF sock map is created to avoid multiple sockets for same VRF
    We can expect multiple servers on same VRF, we no need to open VRF sockets
    for each VRF instead we can make use of existing VRF socket opened.
-   to map that i will maintain a map with VRF againist socket of vrf.
+   to map that i will maintain a map with VRF against socket of vrf.
    when ever there is a configuration to open a new socket for the VRF
    check in this MAP if exists update relay_config or else update created
    socket against VRF.
