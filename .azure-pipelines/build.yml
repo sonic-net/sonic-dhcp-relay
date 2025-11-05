@@ -44,7 +44,10 @@ jobs:
           libnl-route-3-dev \
           libnl-genl-3-dev \
           libnl-nf-3-dev \
-          redis-server
+          redis-server \
+          stgit \
+          cmake \
+          libpcap-dev
       sudo sed -ri 's/^# unixsocket/unixsocket/' /etc/redis/redis.conf
       sudo sed -ri 's/^unixsocketperm .../unixsocketperm 777/' /etc/redis/redis.conf
       sudo sed -ri 's/redis-server.sock/redis.sock/' /etc/redis/redis.conf
@@ -103,13 +106,24 @@ jobs:
       dpkg-buildpackage -us -uc -b -j$(nproc)
       cp ../*.deb $(Build.ArtifactStagingDirectory)
     workingDirectory: dhcp6relay
-    displayName: "Compile sonic dhcp-relay"
+    displayName: "Compile sonic dhcp6relay"
+  - script: |
+      rm ../*.deb || true
+      # Configure git identity for patch application
+      git config --global user.email "build@sonic.net"
+      git config --global user.name "SONiC Build"
+      dpkg-buildpackage -us -uc -b -j$(nproc)
+      cp ../*.deb $(Build.ArtifactStagingDirectory)
+    workingDirectory: dhcp4relay
+    displayName: "Compile sonic dhcp4relay"
   - publish: $(Build.ArtifactStagingDirectory)
     artifact: sonic-dhcp-relay.${{ parameters.arch }}
     displayName: "Archive dhcp-relay debian packages"
   - task: PublishTestResults@2
     inputs:
-      testResultsFiles: build-test/dhcp6relay-test-test-result.xml
+      testResultsFiles: |
+        build-test/dhcp6relay-test-test-result.xml
+        build-test/dhcp4relay-test-test-result.xml
   - ${{ if and(eq(parameters.arch, 'amd64'), parameters.codeCoverage) }}:
     - task: PublishCodeCoverageResults@1
       inputs:
@@ -117,3 +131,11 @@ jobs:
         pathToSources: $(Build.SourcesDirectory)
         reportDirectory: $(Build.SourcesDirectory)/build-test
         codeCoverageTool: 'Cobertura'
+      displayName: "Publish dhcp6relay code coverage"
+    - task: PublishCodeCoverageResults@1
+      inputs:
+        summaryFileLocation: build-test/dhcp4relay-test-code-coverage.xml
+        pathToSources: $(Build.SourcesDirectory)
+        reportDirectory: $(Build.SourcesDirectory)/build-test
+        codeCoverageTool: 'Cobertura'
+      displayName: "Publish dhcp4relay code coverage"

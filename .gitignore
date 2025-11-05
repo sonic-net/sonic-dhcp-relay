@@ -3,3 +3,8 @@ dhcp6relay/debian/*
 !dhcp6relay/debian/compat
 !dhcp6relay/debian/control
 !dhcp6relay/debian/rules
+dhcp4relay/debian/*
+!dhcp4relay/debian/changelog
+!dhcp4relay/debian/compat
+!dhcp4relay/debian/control
+!dhcp4relay/debian/rules
