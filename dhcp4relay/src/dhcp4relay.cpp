@@ -1310,7 +1310,7 @@ void config_event_callback(evutil_socket_t fd, short event, void *arg) {
                     if (relay_msg->is_add) {
                             prepare_relay_interface_config(vlan.second);
                     } else {
-                        std::shared_ptr<swss::Table> v4_relay_intf_tbl = std::make_shared<swss::Table>(config_db.get(), CFG_DHCPV4_RELAY_TABLE_NAME);
+                        std::shared_ptr<swss::Table> v4_relay_intf_tbl = std::make_shared<swss::Table>(config_db.get(), "DHCPV4_RELAY");
                         std::string value;
 
                         // Check for the presence of specific keys

@@ -499,7 +499,7 @@ TEST(DHCPMgrTest, initialize_config_listner) {
                      .WillRepeatedly(Return(-1));
     dhcpMgr.initialize_config_listner();
     
-    swss::Table dhcp_table(config_db.get(), CFG_DHCPV4_RELAY_TABLE_NAME);
+    swss::Table dhcp_table(config_db.get(), "DHCPV4_RELAY");
     swss::Table intf_table(config_db.get(), "INTERFACE");
     swss::Table loopback_intf_table(config_db.get(), "LOOPBACK_INTERFACE");
     swss::Table portchannel_intf_table(config_db.get(), "PORTCHANNEL_INTERFACE");
@@ -588,8 +588,8 @@ TEST(DHCPMgrTest, dhcp_server_feature_enable) {
 
     swss::Table feature_table(config_db.get(), "FEATURE");
     swss::Table vlan_table(config_db.get(), "VLAN");
-    swss::Table dhcp_server_table(config_db.get(), CFG_DHCP_SERVER_IPV4_TABLE_NAME);
-    swss::Table dhcp_server_ip_table(state_db.get(), STATE_DHCPV4_SERVER_IPV4_SERVER_IP_TABLE);
+    swss::Table dhcp_server_table(config_db.get(), "DHCP_SERVER_IPV4");
+    swss::Table dhcp_server_ip_table(state_db.get(), "DHCP_SERVER_IPV4_SERVER_IP");
 
     std::string vlan = "Vlan200";
     std::vector<std::pair<std::string, std::string>> enable_dhcp_server = {
