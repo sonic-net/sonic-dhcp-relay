@@ -492,12 +492,12 @@ TEST(relay, signal_start) {
   EXPECT_EQ(signal_start(), 0);
 }
 
-TEST(DHCPMgrTest, initialize_config_listner) {
+TEST(DHCPMgrTest, initialize_config_listener) {
     DHCPMgr dhcpMgr;
     EXPECT_GLOBAL_CALL(write, write(_, _, _))
                      .Times(AtLeast(1))
                      .WillRepeatedly(Return(-1));
-    dhcpMgr.initialize_config_listner();
+    dhcpMgr.initialize_config_listener();
     
     swss::Table dhcp_table(config_db.get(), "DHCPV4_RELAY");
     swss::Table intf_table(config_db.get(), "INTERFACE");
@@ -582,7 +582,7 @@ TEST(DHCPMgrTest, dhcp_server_feature_enable) {
     EXPECT_GLOBAL_CALL(write, write(_, _, _))
                      .Times(AtLeast(1))
                      .WillRepeatedly(Return(0));
-    dhcpMgr.initialize_config_listner();
+    dhcpMgr.initialize_config_listener();
 
     std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
 
@@ -623,7 +623,7 @@ TEST(DHCPMgrTest, dhcp_server_feature_disable) {
     EXPECT_GLOBAL_CALL(write, write(_, _, _))
                      .Times(AtLeast(1))
                      .WillRepeatedly(Return(0));
-    dhcpMgr.initialize_config_listner();
+    dhcpMgr.initialize_config_listener();
 
     swss::Table feature_table(config_db.get(), "FEATURE");
     std::vector<std::pair<std::string, std::string>> disable_dhcp_server = {
