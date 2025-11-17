@@ -26,7 +26,7 @@ std::string global_dhcp_server_ip;
  *
  * @note The spawned thread is detached, so it will run independently of the main thread.
  */
-void DHCPMgr::initialize_config_listner() {
+void DHCPMgr::initialize_config_listener() {
     stop_thread = false;
     std::thread m_swss_thread(&DHCPMgr::handle_swss_notification, this);
     m_swss_thread.detach();
