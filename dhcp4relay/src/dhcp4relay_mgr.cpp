@@ -59,12 +59,12 @@ void DHCPMgr::handle_swss_notification() {
     swss::SubscriberStateTable config_db_portchannel_table(config_db_ptr.get(), "PORTCHANNEL_INTERFACE");
     swss::SubscriberStateTable config_db_device_metadata_table(config_db_ptr.get(), "DEVICE_METADATA");
     swss::SubscriberStateTable config_db_vlan_member_table(config_db_ptr.get(), "VLAN_MEMBER");
-    swss::SubscriberStateTable config_db_vlan_interface_table(config_db_ptr.get(), "VLAN_INTERFACE");
     swss::SubscriberStateTable config_db_feature_table(config_db_ptr.get(), "FEATURE");
     swss::SubscriberStateTable config_db_vlan_table(config_db_ptr.get(), "VLAN");
     config_db_dhcp_server_ipv4_ptr = std::make_shared<swss::SubscriberStateTable>(config_db_ptr.get(), "DHCP_SERVER_IPV4");
     state_db_dhcp_server_ipv4_ip_ptr = std::make_shared<swss::SubscriberStateTable>(state_db_ptr.get(), "DHCP_SERVER_IPV4_SERVER_IP");
     swss::SubscriberStateTable config_db_port_table(config_db_ptr.get(), "PORT");
+    swss::SubscriberStateTable state_db_interface_table(state_db_ptr.get(), "INTERFACE_TABLE");
 
     std::deque<swss::KeyOpFieldsValuesTuple> entries;
     swss::Select swss_select;
@@ -74,12 +74,12 @@ void DHCPMgr::handle_swss_notification() {
     swss_select.addSelectable(&config_db_portchannel_table);
     swss_select.addSelectable(&config_db_device_metadata_table);
     swss_select.addSelectable(&config_db_vlan_member_table);
-    swss_select.addSelectable(&config_db_vlan_interface_table);
     swss_select.addSelectable(&config_db_feature_table);
     swss_select.addSelectable(&config_db_vlan_table);
     swss_select.addSelectable(config_db_dhcp_server_ipv4_ptr.get());
     swss_select.addSelectable(state_db_dhcp_server_ipv4_ip_ptr.get());
     swss_select.addSelectable(&config_db_port_table);
+    swss_select.addSelectable(&state_db_interface_table);
 
     while (!stop_thread) {
         swss::Selectable *selectable;
@@ -125,8 +125,8 @@ void DHCPMgr::handle_swss_notification() {
         } else if (selectable == static_cast<swss::Selectable *>(&config_db_vlan_member_table)) {
             config_db_vlan_member_table.pops(entries);
             process_vlan_member_notification(entries);
-        } else if (selectable == static_cast<swss::Selectable *>(&config_db_vlan_interface_table)) {
-            config_db_vlan_interface_table.pops(entries);
+        } else if (selectable == static_cast<swss::Selectable *>(&state_db_interface_table)) {
+            state_db_interface_table.pops(entries);
             process_vlan_interface_notification(entries);
         } else if (selectable == static_cast<swss::Selectable *>(&config_db_feature_table)) {
             config_db_feature_table.pops(entries);
@@ -599,7 +599,11 @@ void DHCPMgr::process_vlan_member_notification(std::deque<swss::KeyOpFieldsValue
 
 void DHCPMgr::process_vlan_interface_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries) {
      for (auto &entry : entries) {
-        std::string key = kfvKey(entry);
+         std::string key = kfvKey(entry);
+         // Only process VLAN interfaces (keys starting with "Vlan" and Vlan with IP suffix)
+         if (key.rfind("Vlan", 0) != 0) {
+             continue;
+         }
 
          std::string vlan;
          std::string vrf;
@@ -608,7 +612,7 @@ void DHCPMgr::process_vlan_interface_notification(std::deque<swss::KeyOpFieldsVa
              vlan = key;
              vrf = "default";
              for (auto &fv : kfvFieldsValues(entry)) {
-                 if (fvField(fv) == "vrf_name") {
+                 if (fvField(fv) == "vrf") {
                      vrf = fvValue(fv);
                      break;
                  }

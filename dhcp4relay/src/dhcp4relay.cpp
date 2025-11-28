@@ -577,7 +577,7 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
     }
 
     for (auto server : config.servers_sock) {
-        if (send_udp(sock, (uint8_t *)dhcp_pkt->getDhcpHeader(), server, dhcp_pkt->getHeaderLen(), src_ip, use_intf_ip_as_src_ip)) {
+        if (send_udp(sock, (uint8_t *)dhcp_pkt->getDhcpHeader(), server, dhcp_pkt->getHeaderLen(), src_ip, use_intf_ip_as_src_ip, true)) {
             syslog(LOG_INFO, "[DHCPV4_RELAY] DHCP packet is sent to configured server: %s, interface: %s",
                    config.servers[index].c_str(), config.vlan.c_str());
             dhcp_cntr_table.increment_counter(config.vlan, "TX", (int)dhcp_pkt->getMessageType());
@@ -635,6 +635,7 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
     struct sockaddr_in target_addr = {0};
     uint32_t giaddr = dhcp_pkt->getDhcpHeader()->gatewayIpAddress;
     uint32_t broadcast_addr = DHCP_BROADCAST_IPADDR;
+    bool pad = false;
     std::unordered_map<std::string, relay_config>::iterator config_itr = vlans->end();
 
     if (getifaddrs(&ifa) == -1) {
@@ -731,8 +732,13 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
     in_addr ip_zero = {0};
     /* TODO: Send unicast message to client if BOOTP flag from client is set to unicast */
 
-    dhcp_pkt->removeOption(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
-    if (send_udp(config.client_sock, (uint8_t *)dhcp_pkt->getDhcpHeader(), target_addr, dhcp_pkt->getHeaderLen(), ip_zero, false)) {
+    /* Perform padding only when DHCP relay (Option 82) information has been stripped from the packet */
+    if(dhcp_pkt->removeOption(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS)) {
+        syslog(LOG_NOTICE, "Packet is stripped");
+        pad = true;
+    }
+
+    if (send_udp(config.client_sock, (uint8_t *)dhcp_pkt->getDhcpHeader(), target_addr, dhcp_pkt->getHeaderLen(), ip_zero, false, pad)) {
         syslog(LOG_INFO, "[DHCPV4_RELAY] dhcp relay message is broadcast to client %s from server %s",
                config.vlan.c_str(), src_ip.c_str());
         dhcp_cntr_table.increment_counter(config.vlan, "TX", (int)dhcp_pkt->getMessageType());
@@ -896,8 +902,8 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
         std::string intf(interface_name);
         auto itr = std::find(interface_list.begin(), interface_list.end(), intf);
         /* To avoid duplicate packets, we are only processing packets from
-           interface in PORT_TABLE and packets from VXLAN interface */
-        if ((itr == interface_list.end()) && (intf.rfind("VXLAN", 0) != 0)) {
+           interface in PORT_TABLE and packets from VXLAN interface and docker0 interfaces */
+        if ((itr == interface_list.end()) && (intf.rfind("VXLAN", 0) != 0) && (intf.rfind("docker0", 0) != 0)) {
             continue;
         }
 
