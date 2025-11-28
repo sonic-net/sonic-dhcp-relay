@@ -11,6 +11,7 @@
 #include <pcapplusplus/UdpLayer.h>
 #include <signal.h>
 #include <unistd.h>
+#include <fstream>
 
 #include "configdb.h"
 #include "dhcp4_sender.h"
@@ -430,9 +431,22 @@ uint8_t encode_tlv(uint8_t *buf, uint8_t t, uint8_t l, uint8_t *v) {
     return (l + DHCP_SUB_OPT_TLV_HEADER_LEN);
 }
 
+std::string get_mac_address(const std::string &ifname) {
+    std::string path = "/sys/class/net/" + ifname + "/address";
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        syslog(LOG_ERR, "Fetching mac address for interface %s", ifname.c_str());
+        return "";
+    }
+    std::string mac;
+    std::getline(file, mac);
+    return mac;
+}
+
 void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
     uint8_t buf[256] = {0};
     uint8_t buf_offset = 0;
+    std::string bm_mac;
 
     auto vrf = vlan_vrf_map[config->vlan.c_str()];
 
@@ -454,11 +468,22 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
                              (uint8_t *)circuit_id.c_str());
     buf_offset += offset;
 
+    if (!m_config.midplane_bridge.empty()) {
+        bm_mac = get_mac_address(m_config.midplane_bridge);
+    }
+
     /* Encode remote ID sub-option */
     /* | 2 | 6 | my_mac| */
-    offset = encode_tlv((buf + buf_offset), OPTION82_SUBOPT_REMOTE_ID,
-                        MAC_ADDR_STR_LEN, (uint8_t *)(m_config.host_mac_addr.c_str()));
-    buf_offset += offset;
+    /* if its SmartSwitch we need to fetch mac of bridge-midplane */
+    if ((m_config.is_SmartSwitch) && (!bm_mac.empty())) {
+        offset = encode_tlv((buf + buf_offset), OPTION82_SUBOPT_REMOTE_ID,
+                            MAC_ADDR_STR_LEN, (uint8_t *)(bm_mac.c_str()));
+        buf_offset += offset;
+    } else {
+        offset = encode_tlv((buf + buf_offset), OPTION82_SUBOPT_REMOTE_ID,
+                            MAC_ADDR_STR_LEN, (uint8_t *)(m_config.host_mac_addr.c_str()));
+        buf_offset += offset;
+    }
 
     /* TODO: this sub-option should be set if source interface selection is enabled */
     /* | 5 | 4 | ipv4 | */
@@ -914,6 +939,9 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
             if (vlan == vlan_map.end()) {
                 if (intf.find(CLIENT_IF_PREFIX) != std::string::npos) {
                     syslog(LOG_WARNING, "[DHCPV4_RELAY] Invalid input interface %s\n", interface_name);
+                } else if ((m_config.is_SmartSwitch) && (intf.rfind("dpu", 0) == 0) && !m_config.midplane_bridge.empty()) {
+                    // if its SmartSwitch, we need to check for bridge_midplane interface
+                    vlan_str = m_config.midplane_bridge;
                 }
             } else {
                 vlan_str = vlan->second;
