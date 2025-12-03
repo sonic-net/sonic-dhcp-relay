@@ -175,7 +175,7 @@ TEST_F(DHCPCounter_table_test, DBUpdate_loop_integration) {
     counter_table->stop_db_updates();
 
     std::shared_ptr<swss::DBConnector> cntrs_db = std::make_shared<swss::DBConnector> ("COUNTERS_DB", 0);
-    swss::Table cntr_table(cntrs_db.get(), COUNTERS_DHCPV4_TABLE);
+    swss::Table cntr_table(cntrs_db.get(), "COUNTERS_DHCPV4");
     std::vector<swss::FieldValueTuple> existing_rx_fields;
     std::vector<swss::FieldValueTuple> existing_tx_fields;
     cntr_table.get(interface+"|RX", existing_rx_fields);
