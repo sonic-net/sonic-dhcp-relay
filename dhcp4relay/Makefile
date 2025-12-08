@@ -15,9 +15,11 @@ GCOVR := gcovr
 
 LD_PCAPPLUSPLUS_LIB := -lPcap++ -lPacket++ -lCommon++
 
-#pcap plus plus zip file pcappp_v24.09.zip
+# PcapPlusPlus library configuration
 PCAPPPVAR := 24.09
-PCAPPPZIP_FILE := pcappp_v${PCAPPPVAR}.zip
+PCAPPP_URL := https://github.com/seladb/PcapPlusPlus/archive/refs/tags/v$(PCAPPPVAR).tar.gz
+PCAPPP_TARBALL := PcapPlusPlus-$(PCAPPPVAR).tar.gz
+PCAPPP_SHA256 := b14998ecf5718c2bfb6f709060e53f7ef67639b98bf2222a3cd23d820d70acdc
 PCAPPLUSPLUS_DIR := $(WORKING_DIR)/PcapPlusPlus-$(PCAPPPVAR)
 PCAPPP_DONE = $(WORKING_DIR)/pcappp.stamp
 INCLUDE_DIR = $(PCAPPLUSPLUS_DIR)/include
@@ -34,10 +36,20 @@ PWD := $(shell pwd)
 .PHONY: $(PCAPPP_DONE)
 $(PCAPPP_DONE):
 
+	# Download PcapPlusPlus from official GitHub release if not already present
+	if [ ! -f $(PCAPPP_TARBALL) ]; then \
+		echo "Downloading PcapPlusPlus v$(PCAPPPVAR)..."; \
+		wget -O $(PCAPPP_TARBALL) $(PCAPPP_URL); \
+	fi
+
+	# Verify checksum
+	echo "$(PCAPPP_SHA256)  $(PCAPPP_TARBALL)" | sha256sum -c -
+
 	# Remove stale files
 	rm -rf $(PCAPPLUSPLUS_DIR)
 
-	unzip ${PCAPPPZIP_FILE}
+	# Extract tarball (GitHub tarball extracts to PcapPlusPlus-<version> without 'v' prefix)
+	tar xzf $(PCAPPP_TARBALL)
 	pushd $(PCAPPLUSPLUS_DIR)
 
 	# Create a git repository here for stg to apply patches
@@ -98,6 +110,7 @@ uninstall:
 
 clean:
 	-$(RM) $(BUILD_DIR) $(BUILD_TEST_DIR) *.html *.xml
+	-$(RM) $(PCAPPLUSPLUS_DIR) $(PCAPPP_TARBALL) $(PCAPPP_DONE)
 	$(FIND) . -name *.gcda -exec rm -f {} \;
 	$(FIND) . -name *.gcno -exec rm -f {} \;
 	$(FIND) . -name *.gcov -exec rm -f {} \;

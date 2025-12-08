@@ -1,0 +1,15 @@
+# Build artifacts
+build/
+build-test/
+*.o
+*.d
+*.gcda
+*.gcno
+*.gcov
+*.html
+*.xml
+
+# PcapPlusPlus downloaded files
+PcapPlusPlus-*/
+PcapPlusPlus-*.tar.gz
+pcappp.stamp
