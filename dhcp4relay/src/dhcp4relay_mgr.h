@@ -22,7 +22,7 @@ class DHCPMgr {
     DHCPMgr() : stop_thread(false) {}
     ~DHCPMgr();
 
-    void initialize_config_listner();
+    void initialize_config_listener();
     void handle_swss_notification();
     void stop_db_updates();
     void process_relay_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
