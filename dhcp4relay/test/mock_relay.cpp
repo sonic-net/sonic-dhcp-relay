@@ -24,7 +24,7 @@ using namespace swss;
 MOCK_GLOBAL_FUNC1(getifaddrs, int(struct ifaddrs **));
 MOCK_GLOBAL_FUNC1(freeifaddrs, void(struct ifaddrs *));
 MOCK_GLOBAL_FUNC3(write, ssize_t(int, const void*, size_t));
-MOCK_GLOBAL_FUNC6(send_udp, bool(int, uint8_t *, struct sockaddr_in, uint32_t, in_addr, bool));
+MOCK_GLOBAL_FUNC7(send_udp, bool(int, uint8_t *, struct sockaddr_in, uint32_t, in_addr, bool, bool));
 
 void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config);
 void to_client(pcpp::DhcpLayer* dhcp_pkt, std::unordered_map<std::string, relay_config > *vlans,
@@ -851,8 +851,8 @@ TEST(DHCPRelayTest, to_client) {
     struct ifaddrs *mock_ifaddrs = CreateMockIfaddrs("192.168.1.1", "255.255.255.0", "Vlan100", "192.168.1.2", "Ethernet4");
     EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_)).WillOnce(DoAll(testing::SetArgPointee<0>(mock_ifaddrs), Return(0)));
     EXPECT_GLOBAL_CALL(freeifaddrs, freeifaddrs(_)).Times(1);
-    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _)).WillOnce([]
-		(int sock, uint8_t* hdr, struct sockaddr_in target, uint32_t len, in_addr src_ip, bool use_src_ip) {
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).WillOnce([]
+		(int sock, uint8_t* hdr, struct sockaddr_in target, uint32_t len, in_addr src_ip, bool use_src_ip, bool pad) {
         pcpp::dhcp_header* dhcp_hdr = (pcpp::dhcp_header*)hdr;
         EXPECT_EQ((dhcp_hdr->opCode), 1);
         EXPECT_EQ((dhcp_hdr->hops), 1);
@@ -891,8 +891,8 @@ TEST(DHCPRelayTest, from_client) {
     m_config.host_mac_addr = "12:32:54:24:95:36";
     encode_relay_option(&dhcpLayer, &config);
 
-    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _)).WillOnce([]
-		    (int sock, uint8_t* hdr, struct sockaddr_in target, uint32_t len, in_addr src_ip, bool use_src_ip) {
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).WillOnce([]
+		    (int sock, uint8_t* hdr, struct sockaddr_in target, uint32_t len, in_addr src_ip, bool use_src_ip, bool pad) {
         pcpp::dhcp_header* dhcp_hdr = (pcpp::dhcp_header*)hdr;
         EXPECT_EQ((dhcp_hdr->opCode), 0);
         EXPECT_EQ((dhcp_hdr->hops), 1);
