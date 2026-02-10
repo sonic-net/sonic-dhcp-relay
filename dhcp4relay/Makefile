@@ -23,7 +23,7 @@ PCAPPP_DONE = $(WORKING_DIR)/pcappp.stamp
 INCLUDE_DIR = $(PCAPPLUSPLUS_DIR)/include
 LIB_DIR = $(PCAPPLUSPLUS_DIR)/lib
 
-override LDLIBS += -levent -lhiredis -lswsscommon -pthread -lboost_thread -lboost_system $(LD_PCAPPLUSPLUS_LIB) -lpcap
+override LDLIBS += -levent -lhiredis -lswsscommon -pthread -lboost_thread $(LD_PCAPPLUSPLUS_LIB) -lpcap
 override CPPFLAGS += -Wall -std=c++17 -fPIE -I/usr/include/swss -I$(INCLUDE_DIR)
 override CPPFLAGS += -MMD -MP -MF"$(@:%.o=%.d)" -MT"$(@)"
 override LDFLAGS += -L$(LIB_DIR) -Wl,-rpath=$(abspath $(LIB_DIR))
