@@ -373,10 +373,18 @@ int prepare_vlan_sockets(relay_config &config) {
                 if (ifa_tmp->ifa_addr && (ifa_tmp->ifa_addr->sa_family == AF_INET)) {
                     if (strcmp(ifa_tmp->ifa_name, config.vlan.c_str()) == 0) {
                         struct sockaddr_in *in = (struct sockaddr_in *)ifa_tmp->ifa_addr;
-                        bind_client_addr = true;
-                        client_addr = *in;
-                        client_addr.sin_family = AF_INET;
-                        client_addr.sin_port = htons(RELAY_PORT);
+                        char ip_str[INET_ADDRSTRLEN];
+                        inet_ntop(AF_INET, &(in->sin_addr), ip_str, INET_ADDRSTRLEN);
+                        std::string value;
+                        std::shared_ptr<swss::Table> vlan_intf_tbl = std::make_shared<swss::Table>(config_db.get(), CFG_VLAN_INTF_TABLE_NAME);
+                        vlan_intf_tbl->hget((config.vlan + "|" + ip_str), "secondary", value);
+                        if ((value.size() == 0) || (value != "true")) {
+                            bind_client_addr = true;
+                            client_addr = *in;
+                            client_addr.sin_family = AF_INET;
+                            client_addr.sin_port = htons(RELAY_PORT);
+                            break;
+                        }
                     }
                 }
                 ifa_tmp = ifa_tmp->ifa_next;
