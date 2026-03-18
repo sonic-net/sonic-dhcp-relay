@@ -40,8 +40,8 @@ jobs:
       - name: prepare
         run: |
           sudo apt-get update
-          sudo apt-get install -y libboost-system-dev \
-            libboost-thread-dev \
+          sudo apt-get install -y libboost-system1.83-dev \
+            libboost-thread1.83-dev \
             libevent-dev \
             libhiredis-dev \
             libnl-3-dev \
