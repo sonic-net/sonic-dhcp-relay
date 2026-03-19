@@ -59,12 +59,13 @@ void DHCPMgr::handle_swss_notification() {
     swss::SubscriberStateTable config_db_portchannel_table(config_db_ptr.get(), "PORTCHANNEL_INTERFACE");
     swss::SubscriberStateTable config_db_device_metadata_table(config_db_ptr.get(), "DEVICE_METADATA");
     swss::SubscriberStateTable config_db_vlan_member_table(config_db_ptr.get(), "VLAN_MEMBER");
-    swss::SubscriberStateTable config_db_vlan_interface_table(config_db_ptr.get(), "VLAN_INTERFACE");
     swss::SubscriberStateTable config_db_feature_table(config_db_ptr.get(), "FEATURE");
     swss::SubscriberStateTable config_db_vlan_table(config_db_ptr.get(), "VLAN");
     config_db_dhcp_server_ipv4_ptr = std::make_shared<swss::SubscriberStateTable>(config_db_ptr.get(), "DHCP_SERVER_IPV4");
     state_db_dhcp_server_ipv4_ip_ptr = std::make_shared<swss::SubscriberStateTable>(state_db_ptr.get(), "DHCP_SERVER_IPV4_SERVER_IP");
     swss::SubscriberStateTable config_db_port_table(config_db_ptr.get(), "PORT");
+    swss::SubscriberStateTable config_db_dpu_table(config_db_ptr.get(), "DPUS");
+    swss::SubscriberStateTable state_db_interface_table(state_db_ptr.get(), "INTERFACE_TABLE");
 
     std::deque<swss::KeyOpFieldsValuesTuple> entries;
     swss::Select swss_select;
@@ -74,12 +75,13 @@ void DHCPMgr::handle_swss_notification() {
     swss_select.addSelectable(&config_db_portchannel_table);
     swss_select.addSelectable(&config_db_device_metadata_table);
     swss_select.addSelectable(&config_db_vlan_member_table);
-    swss_select.addSelectable(&config_db_vlan_interface_table);
     swss_select.addSelectable(&config_db_feature_table);
     swss_select.addSelectable(&config_db_vlan_table);
     swss_select.addSelectable(config_db_dhcp_server_ipv4_ptr.get());
     swss_select.addSelectable(state_db_dhcp_server_ipv4_ip_ptr.get());
     swss_select.addSelectable(&config_db_port_table);
+    swss_select.addSelectable(&config_db_dpu_table);
+    swss_select.addSelectable(&state_db_interface_table);
 
     while (!stop_thread) {
         swss::Selectable *selectable;
@@ -125,8 +127,8 @@ void DHCPMgr::handle_swss_notification() {
         } else if (selectable == static_cast<swss::Selectable *>(&config_db_vlan_member_table)) {
             config_db_vlan_member_table.pops(entries);
             process_vlan_member_notification(entries);
-        } else if (selectable == static_cast<swss::Selectable *>(&config_db_vlan_interface_table)) {
-            config_db_vlan_interface_table.pops(entries);
+        } else if (selectable == static_cast<swss::Selectable *>(&state_db_interface_table)) {
+            state_db_interface_table.pops(entries);
             process_vlan_interface_notification(entries);
         } else if (selectable == static_cast<swss::Selectable *>(&config_db_feature_table)) {
             config_db_feature_table.pops(entries);
@@ -136,6 +138,9 @@ void DHCPMgr::handle_swss_notification() {
             process_vlan_notification(entries);
 	} else if (selectable == static_cast<swss::Selectable *>(&config_db_port_table)) {
             config_db_port_table.pops(entries);
+            process_port_notification(entries);
+	} else if (selectable == static_cast<swss::Selectable *>(&config_db_dpu_table)) {
+            config_db_dpu_table.pops(entries);
             process_port_notification(entries);
 	}
     }
@@ -157,6 +162,8 @@ void DHCPMgr::process_device_metadata_notification(std::deque<swss::KeyOpFieldsV
         std::string key = kfvKey(entry);
         std::vector<swss::FieldValueTuple> field_values = kfvFieldsValues(entry);
         std::string operation = kfvOp(entry);
+        std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector>("CONFIG_DB", 0);
+        swss::Table midplane_tbl(config_db.get(), "MID_PLANE_BRIDGE");
 
         if (key != "localhost") {
             continue;
@@ -189,6 +196,20 @@ void DHCPMgr::process_device_metadata_notification(std::deque<swss::KeyOpFieldsV
                 // Covers both 'subtype' deleted and any value other than "DualToR"
                 m_config.is_dualTor = false;
                 send_dualTor_event = true;
+            }
+
+            // Handle is_SmartSwitch logic
+            if (subtype_found && subtype_value == "SmartSwitch") {
+                m_config.is_SmartSwitch = true;
+                std::string bridge_name;
+                bool ok = midplane_tbl.hget("GLOBAL", "bridge", bridge_name);
+                if (ok) {
+                    m_config.midplane_bridge = bridge_name;
+                } else {
+                    syslog(LOG_ERR, "Failed to read midplane bridge name\n");
+                }
+            } else if (m_config.is_SmartSwitch) {
+                m_config.is_SmartSwitch = false;
             }
 
             if (send_dualTor_event) {
@@ -599,7 +620,11 @@ void DHCPMgr::process_vlan_member_notification(std::deque<swss::KeyOpFieldsValue
 
 void DHCPMgr::process_vlan_interface_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries) {
      for (auto &entry : entries) {
-        std::string key = kfvKey(entry);
+         std::string key = kfvKey(entry);
+         // Only process VLAN interfaces (keys starting with "Vlan" and Vlan with IP suffix)
+         if (key.rfind("Vlan", 0) != 0) {
+             continue;
+         }
 
          std::string vlan;
          std::string vrf;
@@ -608,7 +633,7 @@ void DHCPMgr::process_vlan_interface_notification(std::deque<swss::KeyOpFieldsVa
              vlan = key;
              vrf = "default";
              for (auto &fv : kfvFieldsValues(entry)) {
-                 if (fvField(fv) == "vrf_name") {
+                 if (fvField(fv) == "vrf") {
                      vrf = fvValue(fv);
                      break;
                  }
@@ -720,8 +745,10 @@ void DHCPMgr::process_dhcp_server_ipv4_notification(std::deque<swss::KeyOpFields
 	}
 
 	/*Validation to check vlan is present in VLAN table or not */
+	/*If its a smartswitch, we are checking midplane_bridge details */
 	std::string value;
-        if (!vlan_tbl.hget(vlan, "vlanid", value)) {
+        if ((!vlan_tbl.hget(vlan, "vlanid", value))
+              && (!m_config.is_SmartSwitch || (!m_config.midplane_bridge.empty() && m_config.midplane_bridge != vlan))) {
             delete relay_msg;
             continue;
         }
@@ -806,6 +833,9 @@ void DHCPMgr::process_port_notification(std::deque<swss::KeyOpFieldsValuesTuple>
             port_msg->is_add = true;
              for (auto &fv : kfvFieldsValues(entry)) {
                  if (fvField(fv) == "alias") {
+                     port_msg->alias = fvValue(fv);
+                     break;
+                 } else if (fvField(fv) == "midplane_interface") {
                      port_msg->alias = fvValue(fv);
                      break;
                  }

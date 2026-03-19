@@ -1,7 +1,7 @@
-diff --git a/PcapPlusPlus-24.09/Packet++/header/DhcpLayer.h b/PcapPlusPlus-24.09/Packet++/header/DhcpLayer.h
+diff --git a/Packet++/header/DhcpLayer.h b/Packet++/header/DhcpLayer.h
 index 435becb..282d739 100644
---- a/PcapPlusPlus-24.09/Packet++/header/DhcpLayer.h
-+++ b/PcapPlusPlus-24.09/Packet++/header/DhcpLayer.h
+--- a/Packet++/header/DhcpLayer.h
++++ b/Packet++/header/DhcpLayer.h
 @@ -881,8 +881,8 @@ namespace pcpp
  
  	bool DhcpLayer::isDhcpPorts(uint16_t portSrc, uint16_t portDst)

@@ -162,6 +162,8 @@ struct metadata_config {
     std::string hostname = "sonic";
     uint32_t deployment_id;
     bool is_dualTor;
+    bool is_SmartSwitch;
+    std::string midplane_bridge;
 };
 
 /**
