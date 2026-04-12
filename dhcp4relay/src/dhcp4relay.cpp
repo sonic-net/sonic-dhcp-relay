@@ -754,7 +754,6 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
     target_addr.sin_family = AF_INET;
     target_addr.sin_port = htons(CLIENT_PORT);
 
-    in_addr ip_zero = {0};
     /* TODO: Send unicast message to client if BOOTP flag from client is set to unicast */
 
     /* Perform padding only when DHCP relay (Option 82) information has been stripped from the packet */
@@ -763,7 +762,8 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
         pad = true;
     }
 
-    if (send_udp(config.client_sock, (uint8_t *)dhcp_pkt->getDhcpHeader(), target_addr, dhcp_pkt->getHeaderLen(), ip_zero, false, pad)) {
+    /* Use the primary VLAN IP as source address to avoid picking a secondary IP */
+    if (send_udp(config.client_sock, (uint8_t *)dhcp_pkt->getDhcpHeader(), target_addr, dhcp_pkt->getHeaderLen(), config.link_address.sin_addr, true, pad)) {
         syslog(LOG_INFO, "[DHCPV4_RELAY] dhcp relay message is broadcast to client %s from server %s",
                config.vlan.c_str(), src_ip.c_str());
         dhcp_cntr_table.increment_counter(config.vlan, "TX", (int)dhcp_pkt->getMessageType());
