@@ -150,11 +150,40 @@ namespace swss
             std::shared_ptr<std::string> ptr(new std::string(value));
             return ptr;
         }
-        else
+        // Also try Table-style storage: split key at first "|" into tableName and subKey
+        auto first_bar = key.find('|');
+        if (first_bar != std::string::npos)
         {
-            return std::shared_ptr<std::string>(NULL);
+            std::string tableName = key.substr(0, first_bar);
+            std::string subKey = key.substr(first_bar + 1);
+            if (_hget(getDbId(), tableName, subKey, field, value))
+            {
+                std::shared_ptr<std::string> ptr(new std::string(value));
+                return ptr;
+            }
         }
+        return nullptr;
     }
+    std::vector<std::string> DBConnector::keys(const std::string &pattern)
+    {
+        std::vector<std::string> matched_keys;
+        auto star1 = pattern.find('*');
+        auto star2 = pattern.rfind('*');
+        if (star1 == 0 && star2 == pattern.size() - 1 && star1 != star2) {
+            // Pattern: *middle*
+            std::string middle = pattern.substr(1, pattern.size() - 2);
+            for (const auto &table : gDB[getDbId()]) {
+                for (const auto &entry : table.second) {
+                    std::string full_key = table.first + "|" + entry.first;
+                    if (full_key.find(middle) != std::string::npos) {
+                        matched_keys.push_back(full_key);
+                    }
+                }
+            }
+        }
+        return matched_keys;
+    }
+
 
     void ProducerTable::set(const std::string &key,
                             const std::vector<FieldValueTuple> &values,

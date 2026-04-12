@@ -204,6 +204,27 @@ int prepare_vrf_sockets(relay_config &config);
  *
  * @return                      none
  */
+/**
+ * @code                        addr_is_primary(const std::string &ifname, const struct in_addr *addr);
+ *
+ * @brief                       Check if the given IPv4 address is primary on the interface
+ *
+ * @param ifname                interface name (e.g. "Vlan1000")
+ * @param addr                  pointer to the IPv4 address to check
+ *
+ * @return                      true if the address is primary or not found in ConfigDB, false if secondary
+ */
+bool addr_is_primary(const std::string &ifname, const struct in_addr *addr);
+
+/**
+ * @code                        prepare_relay_interface_config(relay_config &interface_config);
+ *
+ * @brief                       prepare for specified relay interface config: server and link address
+ *
+ * @param interface_config      pointer to relay config to be prepared
+ *
+ * @return                      none
+ */
 void prepare_relay_interface_config(relay_config &interface_config);
 
 /**
