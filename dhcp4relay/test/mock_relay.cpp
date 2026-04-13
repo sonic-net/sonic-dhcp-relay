@@ -9,6 +9,7 @@
 #include "gtest/gtest.h"
 #include "gmock/gmock.h"
 #include "mock_relay.h"
+#include "mock_table.h"
 #include <sys/syscall.h>
 
 #include <pcapplusplus/DhcpLayer.h>
@@ -78,6 +79,7 @@ void FreeMockIfaddrs(struct ifaddrs *mock_ifaddrs) {
         delete mock_ifaddrs;
     }
 }
+
 
 TEST(EncodeDecodeTLV, EncodeAndDecode) {
     uint8_t buffer[10] = {};
@@ -150,6 +152,40 @@ TEST(prepareConfig, prepare_relay_interface_config) {
     EXPECT_EQ(interface_config.src_intf_sel_addr.sin_addr.s_addr, inet_addr("192.168.1.2"));
 
     FreeMockIfaddrs(mock_ifaddrs);
+}
+
+
+TEST(addrIsPrimary, primary_ip_returns_true) {
+    swss::Table vlan_intf_table(config_db.get(), "VLAN_INTERFACE");
+    std::vector<std::pair<std::string, std::string>> empty_values = {{"NULL", "NULL"}};
+    vlan_intf_table.set("Vlan1000|192.168.0.1/21", empty_values);
+
+    struct in_addr addr;
+    inet_pton(AF_INET, "192.168.0.1", &addr);
+    EXPECT_TRUE(addr_is_primary("Vlan1000", &addr));
+
+    testing_db::reset();
+}
+
+TEST(addrIsPrimary, secondary_ip_returns_false) {
+    swss::Table vlan_intf_table(config_db.get(), "VLAN_INTERFACE");
+    std::vector<std::pair<std::string, std::string>> secondary_values = {{"secondary", "true"}};
+    vlan_intf_table.set("Vlan1000|192.169.0.1/22", secondary_values);
+
+    struct in_addr addr;
+    inet_pton(AF_INET, "192.169.0.1", &addr);
+    EXPECT_FALSE(addr_is_primary("Vlan1000", &addr));
+
+    testing_db::reset();
+}
+
+TEST(addrIsPrimary, unknown_ip_returns_true) {
+    // An IP not in CONFIG_DB should be treated as primary
+    struct in_addr addr;
+    inet_pton(AF_INET, "10.10.10.10", &addr);
+    EXPECT_TRUE(addr_is_primary("Vlan1000", &addr));
+
+    testing_db::reset();
 }
 
 TEST(prepareConfig, prepare_vlan_sockets) {

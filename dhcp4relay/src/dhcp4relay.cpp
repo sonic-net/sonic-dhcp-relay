@@ -206,6 +206,38 @@ void prepare_relay_server_config(relay_config &interface_config) {
 }
 
 /**
+ * @code                        addr_is_primary(const std::string &ifname, const struct in_addr *addr);
+ *
+ * @brief                       Check if the given IPv4 address is primary on the interface
+ *                              by querying ConfigDB. Searches for matching VLAN_INTERFACE
+ *                              keys and checks the "secondary" field.
+ *
+ * @param ifname                interface name (e.g. "Vlan1000")
+ * @param addr                  pointer to the IPv4 address to check
+ *
+ * @return                      true if the address is primary or not found in ConfigDB, false if secondary
+ */
+bool addr_is_primary(const std::string &ifname, const struct in_addr *addr) {
+    auto match_pattern = std::string("*") + CFG_VLAN_INTF_TABLE_NAME + "|" + ifname + "|*";
+    auto keys = config_db->keys(match_pattern);
+
+    for (const auto &key : keys) {
+        auto last_bar = key.find_last_of('|');
+        auto last_slash = key.find_last_of('/');
+        if (last_bar == std::string::npos || last_slash == std::string::npos || last_bar >= last_slash) {
+            continue;
+        }
+        auto addr_str = key.substr(last_bar + 1, last_slash - last_bar - 1);
+        struct in_addr curr_addr;
+        if (inet_pton(AF_INET, addr_str.c_str(), &curr_addr) == 1 && curr_addr.s_addr == addr->s_addr) {
+            auto val = config_db->hget(key, "secondary");
+            return val == nullptr || *val != "true";
+        }
+    }
+    return true;
+}
+
+/**
  * @code                        prepare_relay_interface_config(relay_config &interface_config);
  *
  * @brief                       prepare for specified relay interface config: server and link address
@@ -253,12 +285,7 @@ void prepare_relay_interface_config(relay_config &interface_config) {
             struct sockaddr_in *in = (struct sockaddr_in *)ifa_tmp->ifa_addr;
             struct sockaddr_in *mask = (struct sockaddr_in *)ifa_tmp->ifa_netmask;
             if (strcmp(ifa_tmp->ifa_name, interface_config.vlan.c_str()) == 0) {
-                char ip_str[INET_ADDRSTRLEN];
-                inet_ntop(AF_INET, &(in->sin_addr), ip_str, INET_ADDRSTRLEN);
-                std::string value;
-                std::shared_ptr<swss::Table> vlan_intf_tbl = std::make_shared<swss::Table>(config_db.get(), CFG_VLAN_INTF_TABLE_NAME);
-                vlan_intf_tbl->hget((interface_config.vlan + "|" + ip_str), "secondary", value);
-                if ((value.size() == 0) || (value != "true")) {
+                if (addr_is_primary(interface_config.vlan, &in->sin_addr)) {
                     intf_addr = *in;
                     net_mask = *mask;
                     intf_name_set = true;
