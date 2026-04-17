@@ -400,10 +400,13 @@ int prepare_vlan_sockets(relay_config &config) {
                 if (ifa_tmp->ifa_addr && (ifa_tmp->ifa_addr->sa_family == AF_INET)) {
                     if (strcmp(ifa_tmp->ifa_name, config.vlan.c_str()) == 0) {
                         struct sockaddr_in *in = (struct sockaddr_in *)ifa_tmp->ifa_addr;
-                        bind_client_addr = true;
-                        client_addr = *in;
-                        client_addr.sin_family = AF_INET;
-                        client_addr.sin_port = htons(RELAY_PORT);
+                        if (addr_is_primary(config.vlan, &in->sin_addr)) {
+                            bind_client_addr = true;
+                            client_addr = *in;
+                            client_addr.sin_family = AF_INET;
+                            client_addr.sin_port = htons(RELAY_PORT);
+                            break;
+                        }
                     }
                 }
                 ifa_tmp = ifa_tmp->ifa_next;
