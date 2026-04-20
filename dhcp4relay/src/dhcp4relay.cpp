@@ -61,8 +61,8 @@ const struct sock_fprog ether_relay_fprog = {
     lengthof(ether_relay_filter),
     ether_relay_filter};
 
-/* interface to vlan mapping */
-std::unordered_map<std::string, std::string> vlan_map;
+/* Physical interface to relay interface mapping */
+std::unordered_map<std::string, std::string> interface_map;
 
 /* VRF sock map is created to avoid multiple sockets for same VRF
    We can expect multiple servers on same VRF, we no need to open VRF sockets
@@ -75,11 +75,14 @@ std::unordered_map<std::string, std::string> vlan_map;
 /* VRF sock map */
 std::unordered_map<std::string, VrfSocketInfo> vrf_sock_map;
 
-/* This map will have client vlan to client VRF mapping */
-std::unordered_map<std::string, std::string> vlan_vrf_map;
+/* This map will have relay interface to VRF mapping */
+std::unordered_map<std::string, std::string> interface_vrf_map;
 
 /* This map will have interface name to interface alias map */
 std::unordered_map<std::string, std::string> phy_interface_alias_map;
+
+/* This map will have circuit ID to interface mapping for reverse lookup */
+std::unordered_map<std::string, std::string> circuit_id_interface_map;
 
 /* DHCP Relay Counter Table Instance */
 DHCPCounter_table dhcp_cntr_table;
@@ -218,6 +221,7 @@ void prepare_relay_server_config(relay_config &interface_config) {
  * @return                      true if the address is primary or not found in ConfigDB, false if secondary
  */
 bool addr_is_primary(const std::string &ifname, const struct in_addr *addr) {
+    // Check VLAN_INTERFACE table first
     auto match_pattern = std::string("*") + CFG_VLAN_INTF_TABLE_NAME + "|" + ifname + "|*";
     auto keys = config_db->keys(match_pattern);
 
@@ -234,6 +238,25 @@ bool addr_is_primary(const std::string &ifname, const struct in_addr *addr) {
             return val == nullptr || *val != "true";
         }
     }
+
+    // If not found in VLAN_INTERFACE, check INTERFACE table for physical ports
+    auto match_pattern2 = std::string("*INTERFACE|") + ifname + "|*";
+    auto keys2 = config_db->keys(match_pattern2);
+
+    for (const auto &key : keys2) {
+        auto last_bar = key.find_last_of('|');
+        auto last_slash = key.find_last_of('/');
+        if (last_bar == std::string::npos || last_slash == std::string::npos || last_bar >= last_slash) {
+            continue;
+        }
+        auto addr_str = key.substr(last_bar + 1, last_slash - last_bar - 1);
+        struct in_addr curr_addr;
+        if (inet_pton(AF_INET, addr_str.c_str(), &curr_addr) == 1 && curr_addr.s_addr == addr->s_addr) {
+            auto val = config_db->hget(key, "secondary");
+            return val == nullptr || *val != "true";
+        }
+    }
+
     return true;
 }
 
@@ -265,7 +288,7 @@ void prepare_relay_interface_config(relay_config &interface_config) {
         interface_config.source_interface = "Loopback0";
         syslog(LOG_INFO,
                "[DHCPV4_INFO][DualTor] %s: link_selection_opt is enabled and source interface is set to %s\n",
-               interface_config.vlan.c_str(), interface_config.source_interface.c_str());
+               interface_config.interface.c_str(), interface_config.source_interface.c_str());
     }
 
     if (interface_config.source_interface.length() > 0) {
@@ -284,8 +307,8 @@ void prepare_relay_interface_config(relay_config &interface_config) {
         if (ifa_tmp->ifa_addr && ifa_tmp->ifa_addr->sa_family == AF_INET) {
             struct sockaddr_in *in = (struct sockaddr_in *)ifa_tmp->ifa_addr;
             struct sockaddr_in *mask = (struct sockaddr_in *)ifa_tmp->ifa_netmask;
-            if (strcmp(ifa_tmp->ifa_name, interface_config.vlan.c_str()) == 0) {
-                if (addr_is_primary(interface_config.vlan, &in->sin_addr)) {
+            if (strcmp(ifa_tmp->ifa_name, interface_config.interface.c_str()) == 0) {
+                if (addr_is_primary(interface_config.interface, &in->sin_addr)) {
                     intf_addr = *in;
                     net_mask = *mask;
                     intf_name_set = true;
@@ -355,16 +378,16 @@ int prepare_vrf_sockets(relay_config &config) {
 }
 
 /**
- * @code                prepare_vlan_sockets(int &client_sock, relay_config &config);
+ * @code                prepare_interface_sockets(relay_config &config);
  *
- * @brief               prepare vlan L3 socket for sending
+ * @brief               prepare interface L3 socket for sending (supports both VLANs and physical ports)
  *
- * @param client_sock      socket binded to ip address of vlan interface on which server is configured.
+ * @param config        relay configuration containing interface information
  *                      This socket will be used to send DHCP packet to server and client.
  *
- * @return              int
+ * @return              int (0 on success, -1 on failure)
  */
-int prepare_vlan_sockets(relay_config &config) {
+int prepare_interface_sockets(relay_config &config) {
 #ifdef UNIT_TEST
     config.client_sock = 1;
 #else
@@ -373,18 +396,18 @@ int prepare_vlan_sockets(relay_config &config) {
     int client_sock = 0;
     if ((client_sock = socket(AF_INET, SOCK_DGRAM, 0)) == -1) {
         syslog(LOG_ERR, "[DHCPV4_RELAY] socket: Failed to create client_addr socket on interface %s, error: %s\n",
-               config.vlan.c_str(), strerror(errno));
+               config.interface.c_str(), strerror(errno));
         return -1;
     }
 
     evutil_make_listen_socket_reuseable(client_sock);
     evutil_make_socket_nonblocking(client_sock);
 
-    /* Bind client socket to vlan interface */
-    if (setsockopt(client_sock, SOL_SOCKET, SO_BINDTODEVICE, config.vlan.c_str(),
-                   strlen(config.vlan.c_str())) < 0) {
-        syslog(LOG_ERR, "[DHCPV4_RELAY] failed to bind client_sock to vlan %s, error: %s\n",
-               config.vlan.c_str(), strerror(errno));
+    /* Bind client socket to interface (VLAN or physical port) */
+    if (setsockopt(client_sock, SOL_SOCKET, SO_BINDTODEVICE, config.interface.c_str(),
+                   strlen(config.interface.c_str())) < 0) {
+        syslog(LOG_ERR, "[DHCPV4_RELAY] failed to bind client_sock to interface %s, error: %s\n",
+               config.interface.c_str(), strerror(errno));
         close(client_sock);
         return -1;
     }
@@ -398,9 +421,9 @@ int prepare_vlan_sockets(relay_config &config) {
             ifa_tmp = ifa;
             while (ifa_tmp) {
                 if (ifa_tmp->ifa_addr && (ifa_tmp->ifa_addr->sa_family == AF_INET)) {
-                    if (strcmp(ifa_tmp->ifa_name, config.vlan.c_str()) == 0) {
+                    if (strcmp(ifa_tmp->ifa_name, config.interface.c_str()) == 0) {
                         struct sockaddr_in *in = (struct sockaddr_in *)ifa_tmp->ifa_addr;
-                        if (addr_is_primary(config.vlan, &in->sin_addr)) {
+                        if (addr_is_primary(config.interface, &in->sin_addr)) {
                             bind_client_addr = true;
                             client_addr = *in;
                             client_addr.sin_family = AF_INET;
@@ -418,13 +441,13 @@ int prepare_vlan_sockets(relay_config &config) {
             break;
         }
 
-        syslog(LOG_WARNING, "[DHCPV4_RELAY] Retry #%d to bind to sockets on interface %s\n", ++retry, config.vlan.c_str());
+        syslog(LOG_WARNING, "[DHCPV4_RELAY] Retry #%d to bind to sockets on interface %s\n", ++retry, config.interface.c_str());
         sleep(5);
     } while (retry < 6);
 
     if ((!bind_client_addr) || (bind(client_sock, (sockaddr *)&client_addr, sizeof(client_addr)) == -1)) {
         syslog(LOG_ERR, "[DHCPV4_RELAY] bind: Failed to bind socket to global ipv4 address on interface %s after %d retries with %s\n",
-               config.vlan.c_str(), retry, strerror(errno));
+               config.interface.c_str(), retry, strerror(errno));
         /* TODO: Need to close vrf socket if ref count is zero in all failure case */
         close(client_sock);
         return -1;
@@ -478,7 +501,7 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
     uint8_t buf_offset = 0;
     std::string bm_mac;
 
-    auto vrf = vlan_vrf_map[config->vlan.c_str()];
+    auto vrf = interface_vrf_map[config->interface.c_str()];
 
     /* Get interface alias */
     std::string intf_alias;
@@ -487,13 +510,40 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
     }
 
     /* Encode circuit ID sub-option */
-    /* | 1 | 4 | hostname:interface_alias:vlan | */
+    /* | 1 | 4 | circuit_id | */
     std::string circuit_id;
-    if (feature_dhcp_server_enabled) {
-        circuit_id = m_config.hostname + ":" + intf_alias;
+
+    /* Determine Circuit ID based on configured format */
+    bool is_routed_port = (config->interface.rfind("Vlan", 0) != 0);
+    if (!config->circuit_id_format.empty() && !is_routed_port) {
+        if (config->circuit_id_format == "interface_ip") {
+            /* Use interface IP address as Circuit ID */
+            char ip_str[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &(config->link_address.sin_addr), ip_str, INET_ADDRSTRLEN);
+            circuit_id = std::string(ip_str);
+        } else if (config->circuit_id_format == "custom") {
+            /* Use custom Circuit ID value */
+            circuit_id = config->circuit_id;
+        } else {
+            /* Default format: hostname:interface_alias:interface */
+            if (feature_dhcp_server_enabled) {
+                circuit_id = m_config.hostname + ":" + intf_alias;
+            } else {
+                circuit_id = m_config.hostname + ":" + intf_alias + ":" + config->interface;
+            }
+        }
     } else {
-        circuit_id = m_config.hostname + ":" + intf_alias + ":" + config->vlan;
+        /* No format specified, use default format */
+        if (feature_dhcp_server_enabled) {
+            circuit_id = m_config.hostname + ":" + intf_alias;
+        } else {
+            circuit_id = m_config.hostname + ":" + intf_alias + ":" + config->interface;
+        }
     }
+
+    /* Store Circuit ID to interface mapping for reverse lookup in to_client() */
+    circuit_id_interface_map[circuit_id] = config->interface;
+
     auto offset = encode_tlv(buf, OPTION82_SUBOPT_CIRCUIT_ID, circuit_id.length(),
                              (uint8_t *)circuit_id.c_str());
     buf_offset += offset;
@@ -553,7 +603,7 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
                "[DHCPV4_RELAY] %ld packet size is exceeding allowed size %d"
                " from interface %s",
                (dhcp_pkt->getHeaderLen() + buf_offset),
-               MAX_DHCP_PKT_SIZE, config->vlan.c_str());
+               MAX_DHCP_PKT_SIZE, config->interface.c_str());
         return;
     }
 
@@ -602,9 +652,9 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
             encode_relay_option(dhcp_pkt, &config);
         } else {
             /* By default it will discard packet from relay agent */
-            dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
+            dhcp_cntr_table.increment_counter(config.interface, "TX", DHCPv4_MESSAGE_TYPE_DROP);
             syslog(LOG_INFO, "[DHCPV4_RELAY] agent relay mode is discard, dropping the packet %s",
-                   config.vlan.c_str());
+                   config.interface.c_str());
             return;
         }
     }
@@ -614,7 +664,7 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
         syslog(LOG_NOTICE, "[DHCPV4_RELAY] Dropping packet: hop count %d exceeds max allowed %d\n",
                dhcp_pkt->getDhcpHeader()->hops, config.max_hop_count);
         // increment drop counter
-        dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
+        dhcp_cntr_table.increment_counter(config.interface, "TX", DHCPv4_MESSAGE_TYPE_DROP);
         return;
     }
 
@@ -634,13 +684,13 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
     for (auto server : config.servers_sock) {
         if (send_udp(sock, (uint8_t *)dhcp_pkt->getDhcpHeader(), server, dhcp_pkt->getHeaderLen(), src_ip, use_intf_ip_as_src_ip, true)) {
             syslog(LOG_INFO, "[DHCPV4_RELAY] DHCP packet is sent to configured server: %s, interface: %s",
-                   config.servers[index].c_str(), config.vlan.c_str());
-            dhcp_cntr_table.increment_counter(config.vlan, "TX", (int)dhcp_pkt->getMessageType());
+                   config.servers[index].c_str(), config.interface.c_str());
+            dhcp_cntr_table.increment_counter(config.interface, "TX", (int)dhcp_pkt->getMessageType());
         } else {
             syslog(LOG_NOTICE, "[DHCPV4_RELAY] DHCP packet sending FAILED for configured server: %s, interface: %s",
-                   config.servers[index].c_str(), config.vlan.c_str());
+                   config.servers[index].c_str(), config.interface.c_str());
             // increment drop counter
-            dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
+            dhcp_cntr_table.increment_counter(config.interface, "TX", DHCPv4_MESSAGE_TYPE_DROP);
         }
         index++;
     }
@@ -675,23 +725,23 @@ uint8_t *decode_tlv(const uint8_t *buf, uint8_t t, uint8_t &l, uint32_t options_
 
 /**
  * @code                void to_client(pcpp::DhcpLayer* dhcp_pkt, std::unordered_map<std::string,
-                                        relay_config > *vlans, std::string src_ip);
+                                        relay_config > *interfaces, std::string src_ip);
  *
  * @brief               API will send DHCP relay message to client.
  *
  * @param dhcp_pkt      DHCP layer class, which will have information of DHCP packet.
- * @param vlans         Client information including socket to send DHCP packet to client.
+ * @param interfaces    Client information including socket to send DHCP packet to client.
  *
  * @return              none
  */
-void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_config> *vlans,
+void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_config> *interfaces,
                std::string src_ip) {
     struct ifaddrs *ifa, *ifa_tmp;
     struct sockaddr_in target_addr = {0};
     uint32_t giaddr = dhcp_pkt->getDhcpHeader()->gatewayIpAddress;
     uint32_t broadcast_addr = DHCP_BROADCAST_IPADDR;
     bool pad = false;
-    std::unordered_map<std::string, relay_config>::iterator config_itr = vlans->end();
+    std::unordered_map<std::string, relay_config>::iterator config_itr = interfaces->end();
 
     if (getifaddrs(&ifa) == -1) {
         syslog(LOG_WARNING, "[DHCPV4_RELAY] getifaddrs: Unable to get network interfaces, error: %s\n", strerror(errno));
@@ -724,26 +774,33 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
 
         std::string circuit_id((const char *)circuit_id_ptr, circuit_id_len);
 
-        std::string vlan_interface;
-        auto vlan_intf_pos = circuit_id.rfind(':');
-        if (vlan_intf_pos != std::string::npos) {
-            vlan_interface = circuit_id.substr(vlan_intf_pos + 1);
+        std::string relay_interface;
+
+        /* First, try to find interface using the circuit_id_interface_map */
+        auto circuit_map_itr = circuit_id_interface_map.find(circuit_id);
+        if (circuit_map_itr != circuit_id_interface_map.end()) {
+            relay_interface = circuit_map_itr->second;
+        } else {
+            auto intf_pos = circuit_id.rfind(':');
+            if (intf_pos != std::string::npos) {
+                relay_interface = circuit_id.substr(intf_pos + 1);
+            }
         }
 
-        if (vlan_interface.length() > 0) {
-            config_itr = vlans->find(vlan_interface);
-            if (config_itr == vlans->end()) {
+        if (relay_interface.length() > 0) {
+            config_itr = interfaces->find(relay_interface);
+            if (config_itr == interfaces->end()) {
                 syslog(LOG_INFO,
-                        "[DHCPV4_RELAY] Vlan config not found for the circuit"
+                        "[DHCPV4_RELAY] Interface config not found for the circuit"
                         "id encoded interface  %s\n",
-                        vlan_interface.c_str());
+                        relay_interface.c_str());
             }
         }
     }
 
-    /* If we couldnt able to find vlan config using circuit ID
+    /* If we couldnt able to find interface config using circuit ID
        Walk through all the interfaces and match for giaddrs. */
-    if (config_itr == vlans->end()) {
+    if (config_itr == interfaces->end()) {
         std::string intf_name;
         ifa_tmp = ifa;
         while (ifa_tmp) {
@@ -764,12 +821,12 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
         }
 
         // TODO: Add check if interface is prefix with vlan or else try to get vlan attached to ethernet
-        //  find vlan attach using vlan map. Relay config is mapped to vlan.
+        //  find vlan attach using interface map. Relay config is mapped to interface.
 
-        /* Expecting interface is SVI interface of vlan */
-        config_itr = vlans->find(intf_name);
-        if (config_itr == vlans->end()) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Config not found for vlan %s\n", intf_name.c_str());
+        /* Expecting interface is SVI interface (VLAN or physical port) */
+        config_itr = interfaces->find(intf_name);
+        if (config_itr == interfaces->end()) {
+            syslog(LOG_ERR, "[DHCPV4_RELAY] Config not found for interface %s\n", intf_name.c_str());
             return;
         }
     } else {
@@ -777,7 +834,7 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
     }
     auto config = config_itr->second;
 
-    dhcp_cntr_table.increment_counter(config.vlan, "RX", (int)dhcp_pkt->getMessageType());
+    dhcp_cntr_table.increment_counter(config.interface, "RX", (int)dhcp_pkt->getMessageType());
     /* TODO: Also check it is matching remote ID*/
 
     memcpy(&target_addr.sin_addr, &broadcast_addr, sizeof(struct in_addr));
@@ -795,81 +852,99 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
 
     if (send_udp(config.client_sock, (uint8_t *)dhcp_pkt->getDhcpHeader(), target_addr, dhcp_pkt->getHeaderLen(), ip_zero, false, pad)) {
         syslog(LOG_INFO, "[DHCPV4_RELAY] dhcp relay message is broadcast to client %s from server %s",
-               config.vlan.c_str(), src_ip.c_str());
-        dhcp_cntr_table.increment_counter(config.vlan, "TX", (int)dhcp_pkt->getMessageType());
+               config.interface.c_str(), src_ip.c_str());
+        dhcp_cntr_table.increment_counter(config.interface, "TX", (int)dhcp_pkt->getMessageType());
     }
 }
 
 /**
- * @code                update_interface_vlan_mapping(std::string interface, std::string vlan, bool is_add);
+ * @code                update_port_interface_mapping(std::string port, std::string relay_interface, bool is_add);
  *
- * @brief               update interface to vlan mapping and DHCP counter table
+ * @brief               update port to relay interface mapping and DHCP counter table
  *
- * @param interface     interface name string
- * @param vlan          vlan name string
+ * @param port          physical port name string
+ * @param relay_interface relay interface name string (VLAN or physical port)
  * @param is_add        add or delete entry
  *
  * @return              none
  */
-void update_interface_vlan_mapping(std::string interface, std::string vlan, bool is_add) {
+void update_port_interface_mapping(std::string port, std::string relay_interface, bool is_add) {
     if (is_add) {
-        vlan_map[interface] = vlan;
-        dhcp_cntr_table.initialize_interface(vlan);
-        syslog(LOG_INFO, "[DHCPV4_RELAY] Add <%s, %s> into interface vlan map\n", interface.c_str(), vlan.c_str());
+        interface_map[port] = relay_interface;
+        dhcp_cntr_table.initialize_interface(relay_interface);
+        syslog(LOG_INFO, "[DHCPV4_RELAY] Add <%s, %s> into port interface map\n", port.c_str(), relay_interface.c_str());
     } else {
-        vlan_map.erase(interface);
-        dhcp_cntr_table.remove_interface(vlan);
-        syslog(LOG_INFO, "[DHCPV4_RELAY] Remove <%s, %s> from interface vlan map\n", interface.c_str(), vlan.c_str());
+        interface_map.erase(port);
+        dhcp_cntr_table.remove_interface(relay_interface);
+        syslog(LOG_INFO, "[DHCPV4_RELAY] Remove <%s, %s> from port interface map\n", port.c_str(), relay_interface.c_str());
     }
 }
 
 /**
- * @code                update_vlan_mapping(std::string vlan, bool is_add);
+ * @code                update_interface_mapping(std::string interface_name, bool is_add);
  *
- * @brief               build vlan member interface to vlan mapping table
+ * @brief               build interface mapping table for both VLANs and physical ports
  *
- * @param vlan          vlan name string
- * @param add           add or delete entry
+ * @param interface_name interface name string (VLAN or physical port)
+ * @param is_add        add or delete entry
  *
  * @return              none
  */
 /**
- * @brief Updates the VLAN mapping for a given VLAN.
+ * @brief Updates the interface mapping for a given interface (VLAN or physical port).
  *
  * This function retrieves all VLAN members for the specified VLAN from the configuration database
- * and updates the global VLAN map with the interface and VLAN information.
+ * and updates the global interface map with the port and interface information. For physical ports,
+ * it maps the port to itself (similar to DHCPv6 relay behavior).
  *
- * @param vlan The VLAN identifier as a string.
+ * @param interface_name The interface identifier as a string (VLAN or physical port).
  * @param is_add Determines if its ADD or DELETE operation.
  */
-void update_vlan_mapping(std::string vlan, bool is_add) {
+void update_interface_mapping(std::string interface_name, bool is_add) {
 #ifdef UNIT_TEST
     std::vector<std::string> keys;
     swss::Table vlan_member_table(config_db.get(), "VLAN_MEMBER");
     vlan_member_table.getKeys(keys);
 #else
-    auto match_pattern = std::string("VLAN_MEMBER|") + vlan + std::string("|*");
+    auto match_pattern = std::string("VLAN_MEMBER|") + interface_name + std::string("|*");
     auto keys = config_db->keys(match_pattern);
 #endif
-    for (auto &itr : keys) {
-        auto found = itr.find_last_of('|');
-        auto interface = itr.substr(found + 1);
-        update_interface_vlan_mapping(interface, vlan, is_add);
+
+    if (!keys.empty()) {
+        // This is a VLAN interface, map member ports to the VLAN
+        for (auto &itr : keys) {
+            auto found = itr.find_last_of('|');
+            auto port = itr.substr(found + 1);
+            update_port_interface_mapping(port, interface_name, is_add);
+        }
+    } else {
+        // This is a physical port, map it to itself
+        update_port_interface_mapping(interface_name, interface_name, is_add);
+        syslog(LOG_INFO, "[DHCPV4_RELAY] %s <%s, %s> %s interface map (physical port)\n",
+               is_add ? "Add" : "Remove", interface_name.c_str(), interface_name.c_str(),
+               is_add ? "into" : "from");
     }
 
-    /* get VRF attached to the vlan from VLAN_INTERFACE table */
+    /* get VRF attached to the interface from VLAN_INTERFACE or INTERFACE table */
     if (is_add) {
         std::string value;
         std::shared_ptr<swss::Table> vlan_intf_tbl = std::make_shared<swss::Table>(config_db.get(), CFG_VLAN_INTF_TABLE_NAME);
-        vlan_intf_tbl->hget(vlan, "vrf_name", value);
+        vlan_intf_tbl->hget(interface_name, "vrf_name", value);
+
+        // If not found in VLAN_INTERFACE, check INTERFACE table for physical ports
+        if (value.size() <= 0) {
+            std::shared_ptr<swss::Table> intf_tbl = std::make_shared<swss::Table>(config_db.get(), "INTERFACE");
+            intf_tbl->hget(interface_name, "vrf_name", value);
+        }
+
         if (value.size() <= 0) {
             /* use default instance as vrf */
-            vlan_vrf_map[vlan] = "default";
+            interface_vrf_map[interface_name] = "default";
         } else {
-            vlan_vrf_map[vlan] = value;
+            interface_vrf_map[interface_name] = value;
         }
     } else {
-        vlan_vrf_map.erase(vlan);
+        interface_vrf_map.erase(interface_name);
     }
 }
 
@@ -906,7 +981,7 @@ uint16_t ipv4_checksum_cal(const uint8_t* ipv4_header, size_t header_len) {
  * @return              none
  */
 void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
-    auto vlans = reinterpret_cast<std::unordered_map<std::string, struct relay_config> *>(arg);
+    auto interfaces = reinterpret_cast<std::unordered_map<std::string, struct relay_config> *>(arg);
     timeval time;
     struct cmsghdr *cmsg = NULL;
     struct tpacket_auxdata *aux = NULL;
@@ -962,22 +1037,22 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
             continue;
         }
 
-        std::string vlan_str;
+        std::string relay_intf_str;
         if (vlan_id == 0) {
             /* vlan_id can be 0 when we receive packet from the server */
-            auto vlan = vlan_map.find(intf);
-            if (vlan == vlan_map.end()) {
+            auto relay_intf = interface_map.find(intf);
+            if (relay_intf == interface_map.end()) {
                 if (intf.find(CLIENT_IF_PREFIX) != std::string::npos) {
                     syslog(LOG_WARNING, "[DHCPV4_RELAY] Invalid input interface %s\n", interface_name);
                 } else if ((m_config.is_SmartSwitch) && (intf.rfind("dpu", 0) == 0) && !m_config.midplane_bridge.empty()) {
                     // if its SmartSwitch, we need to check for bridge_midplane interface
-                    vlan_str = m_config.midplane_bridge;
+                    relay_intf_str = m_config.midplane_bridge;
                 }
             } else {
-                vlan_str = vlan->second;
+                relay_intf_str = relay_intf->second;
             }
         } else {
-            vlan_str = "Vlan" + std::to_string(vlan_id);
+            relay_intf_str = "Vlan" + std::to_string(vlan_id);
         }
 
         gettimeofday(&time, nullptr);
@@ -991,8 +1066,8 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
         pcpp::EthLayer *eth_layer = raw_pkt.getLayerOfType<pcpp::EthLayer>();
         if (eth_layer == nullptr) {
             syslog(LOG_WARNING, "[DHCPV4_RELAY] Invalid Ethernet packet from interface  %s\n", intf.c_str());
-            if (vlan_id != 0 && !vlan_str.empty()) {
-                dhcp_cntr_table.increment_counter(vlan_str, "RX", DHCPv4_MESSAGE_TYPE_MALFORMED);
+            if (vlan_id != 0 && !relay_intf_str.empty()) {
+                dhcp_cntr_table.increment_counter(relay_intf_str, "RX", DHCPv4_MESSAGE_TYPE_MALFORMED);
             }
             continue;
         }
@@ -1000,8 +1075,8 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
         pcpp::IPv4Layer *ip_layer = raw_pkt.getLayerOfType<pcpp::IPv4Layer>();
         if (ip_layer == nullptr) {
             syslog(LOG_WARNING, "[DHCPV4_RELAY] Invalid IP packet from interface  %s\n", intf.c_str());
-            if (vlan_id != 0 && !vlan_str.empty()) {
-                dhcp_cntr_table.increment_counter(vlan_str, "RX", DHCPv4_MESSAGE_TYPE_MALFORMED);
+            if (vlan_id != 0 && !relay_intf_str.empty()) {
+                dhcp_cntr_table.increment_counter(relay_intf_str, "RX", DHCPv4_MESSAGE_TYPE_MALFORMED);
             }
             continue;
         }
@@ -1010,8 +1085,8 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
         pcpp::iphdr* ip_hdr = ip_layer->getIPv4Header();
         auto ipv4_checksum = ipv4_checksum_cal((const uint8_t*)ip_hdr, ip_layer->getHeaderLen());
         if (ip_hdr->headerChecksum != htons(ipv4_checksum)) {
-            if (vlan_id != 0 && !vlan_str.empty()) {
-                dhcp_cntr_table.increment_counter(vlan_str, "RX", DHCPv4_MESSAGE_TYPE_MALFORMED);
+            if (vlan_id != 0 && !relay_intf_str.empty()) {
+                dhcp_cntr_table.increment_counter(relay_intf_str, "RX", DHCPv4_MESSAGE_TYPE_MALFORMED);
             }
             syslog(LOG_WARNING, "[DHCPV4_RELAY] Checksum failed for IP packet from interface %s\n", intf.c_str());
             continue;
@@ -1022,8 +1097,8 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
         pcpp::UdpLayer *udp_layer = raw_pkt.getLayerOfType<pcpp::UdpLayer>();
         if (udp_layer == nullptr) {
             syslog(LOG_WARNING, "[DHCPV4_RELAY] Invalid UDP packet from interface  %s\n", intf.c_str());
-            if (vlan_id != 0 && !vlan_str.empty()) {
-                dhcp_cntr_table.increment_counter(vlan_str, "RX", DHCPv4_MESSAGE_TYPE_MALFORMED);
+            if (vlan_id != 0 && !relay_intf_str.empty()) {
+                dhcp_cntr_table.increment_counter(relay_intf_str, "RX", DHCPv4_MESSAGE_TYPE_MALFORMED);
             }
             continue;
         }
@@ -1033,8 +1108,8 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
         if (htobe16(udp_checksum) != udp_layer->getUdpHeader()->headerChecksum) {
             syslog(LOG_WARNING, "[DHCPV4_RELAY] UDP checksum validation is failing "
                         " packet is from interface %s\n", intf.c_str());
-            if (vlan_id != 0 && !vlan_str.empty()) {
-                dhcp_cntr_table.increment_counter(vlan_str, "RX", DHCPv4_MESSAGE_TYPE_MALFORMED);
+            if (vlan_id != 0 && !relay_intf_str.empty()) {
+                dhcp_cntr_table.increment_counter(relay_intf_str, "RX", DHCPv4_MESSAGE_TYPE_MALFORMED);
             }
             continue;
         }
@@ -1042,32 +1117,32 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
         pcpp::DhcpLayer *dhcp_pkt = raw_pkt.getLayerOfType<pcpp::DhcpLayer>();
         if (dhcp_pkt == nullptr) {
             syslog(LOG_WARNING, "[DHCPV4_RELAY] Invalid DHCP packet from interface  %s\n", intf.c_str());
-            if (vlan_id != 0 && !vlan_str.empty()) {
-                dhcp_cntr_table.increment_counter(vlan_str, "RX", DHCPv4_MESSAGE_TYPE_MALFORMED);
+            if (vlan_id != 0 && !relay_intf_str.empty()) {
+                dhcp_cntr_table.increment_counter(relay_intf_str, "RX", DHCPv4_MESSAGE_TYPE_MALFORMED);
             }
             continue;
         }
 
         if (dhcp_pkt->getDhcpHeader()->opCode == BOOTPREQUEST) {
-            if (vlan_str.empty()) {
+            if (relay_intf_str.empty()) {
                 continue;
             }
 
-            auto config_itr = vlans->find(vlan_str);
-            if (config_itr == vlans->end()) {
-                syslog(LOG_WARNING, "[DHCPV4_RELAY] Config not found for vlan %s\n", intf.c_str());
+            auto config_itr = interfaces->find(relay_intf_str);
+            if (config_itr == interfaces->end()) {
+                syslog(LOG_WARNING, "[DHCPV4_RELAY] Config not found for interface %s\n", intf.c_str());
                 continue;
             }
             auto config = config_itr->second;
             config_itr->second.phy_interface = intf;
 
-            dhcp_cntr_table.increment_counter(config.vlan, "RX", (int)dhcp_pkt->getMessageType());
+            dhcp_cntr_table.increment_counter(config.interface, "RX", (int)dhcp_pkt->getMessageType());
             from_client(dhcp_pkt, config_itr->second);
         } else if (dhcp_pkt->getDhcpHeader()->opCode == BOOTPREPLY) {
-            to_client(dhcp_pkt, vlans, src_ip);
+            to_client(dhcp_pkt, interfaces, src_ip);
         } else {
-            if (vlan_id != 0 && !vlan_str.empty()) {
-                dhcp_cntr_table.increment_counter(vlan_str, "RX", DHCPv4_MESSAGE_TYPE_UNKNOWN);
+            if (vlan_id != 0 && !relay_intf_str.empty()) {
+                dhcp_cntr_table.increment_counter(relay_intf_str, "RX", DHCPv4_MESSAGE_TYPE_UNKNOWN);
             }
             continue;
         }
@@ -1153,27 +1228,27 @@ void dhcp4relay_stop() {
     event_base_loopexit(base, NULL);
 }
 
-int handle_server_sock(relay_config &vlan_config, std::string new_vrf)
+int handle_server_sock(relay_config &interface_config, std::string new_vrf)
 {
     /* Decrement the ref count for old vrf value in the vrf_sock_map and after decrement
      * if the value is zero then close the client socket and delete the entry in the map. */
-    if (vrf_sock_map.find(vlan_config.vrf) != vrf_sock_map.end()) {
-        vrf_sock_map[vlan_config.vrf].ref_count--;
-        if (vrf_sock_map[vlan_config.vrf].ref_count == 0) {
-            close(vlan_config.vrf_sock);
-            vrf_sock_map.erase((vlan_config.vrf));
+    if (vrf_sock_map.find(interface_config.vrf) != vrf_sock_map.end()) {
+        vrf_sock_map[interface_config.vrf].ref_count--;
+        if (vrf_sock_map[interface_config.vrf].ref_count == 0) {
+            close(interface_config.vrf_sock);
+            vrf_sock_map.erase((interface_config.vrf));
         }
     }
 
-    /*Updating the new vrf value to vlans structure. */
-    vlan_config.vrf = new_vrf;
+    /*Updating the new vrf value to interfaces structure. */
+    interface_config.vrf = new_vrf;
     /* For the new server vrf update case, if the entry exists in the vrf_sock_map then
      * increment the ref count only else create a socket and update the ref count. */
     if (vrf_sock_map.find(new_vrf) != vrf_sock_map.end()) {
-        vlan_config.vrf_sock = vrf_sock_map[new_vrf.c_str()].sock;
+        interface_config.vrf_sock = vrf_sock_map[new_vrf.c_str()].sock;
         vrf_sock_map[new_vrf].ref_count++;
     } else {
-        if (prepare_vrf_sockets(vlan_config) == -1) {
+        if (prepare_vrf_sockets(interface_config) == -1) {
             syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to create vrf listen socket");
             return -1;
         }
@@ -1182,33 +1257,33 @@ int handle_server_sock(relay_config &vlan_config, std::string new_vrf)
 }
 
 /**
- * @code                void delete_all_relay_configs(std::unordered_map<std::string, relay_config> *vlans);
+ * @code                void delete_all_relay_configs(std::unordered_map<std::string, relay_config> *interfaces);
  *
- * @brief               Delete all the existing vlan entries in case of dhcp_server is enabled/disbaled.
+ * @brief               Delete all the existing interface entries in case of dhcp_server is enabled/disabled.
  *
- * @param vlans         Client information including socket to send DHCP packet to client.
+ * @param interfaces    Client information including socket to send DHCP packet to client.
  *
  * @return              none
  */
-void delete_all_relay_configs(std::unordered_map<std::string, relay_config> *vlans) {
-   for (auto vlan = vlans->begin(); vlan != vlans->end(); ) {
-      if (vlan->second.client_sock > 0) {
-          close(vlan->second.client_sock);
+void delete_all_relay_configs(std::unordered_map<std::string, relay_config> *interfaces) {
+   for (auto intf = interfaces->begin(); intf != interfaces->end(); ) {
+      if (intf->second.client_sock > 0) {
+          close(intf->second.client_sock);
       }
-      if (vlan->second.vrf_sock > 0) {
-          vrf_sock_map[vlan->second.vrf].ref_count--;
-          if (vrf_sock_map[vlan->second.vrf].ref_count == 0) {
-              close(vlan->second.vrf_sock);
-              vrf_sock_map.erase(vlan->second.vrf);
+      if (intf->second.vrf_sock > 0) {
+          vrf_sock_map[intf->second.vrf].ref_count--;
+          if (vrf_sock_map[intf->second.vrf].ref_count == 0) {
+              close(intf->second.vrf_sock);
+              vrf_sock_map.erase(intf->second.vrf);
           }
        }
-       update_vlan_mapping(vlan->first, false);
-       vlan = vlans->erase(vlan);
+       update_interface_mapping(intf->first, false);
+       intf = interfaces->erase(intf);
    }
 }
 
 void config_event_callback(evutil_socket_t fd, short event, void *arg) {
-    std::unordered_map<std::string, relay_config> *vlans = static_cast<std::unordered_map<std::string, relay_config> *>(arg);
+    std::unordered_map<std::string, relay_config> *interfaces = static_cast<std::unordered_map<std::string, relay_config> *>(arg);
     event_config received_event;
     ssize_t bytes_read = read(fd, &received_event, sizeof(received_event));
 
@@ -1218,62 +1293,65 @@ void config_event_callback(evutil_socket_t fd, short event, void *arg) {
 	   (received_event.type == DHCPv4_SERVER_RELAY_CONFIG_UPDATE))	{
             relay_config *relay_msg = static_cast<relay_config *>(received_event.msg);
             if (relay_msg) {
-                syslog(LOG_INFO, "[DHCPV4_RELAY] Processing config update: VLAN %s", relay_msg->vlan.c_str());
+                syslog(LOG_INFO, "[DHCPV4_RELAY] Processing config update: Interface %s", relay_msg->interface.c_str());
 
                 if (relay_msg->is_add) {
-                    if (vlans->find(relay_msg->vlan) == vlans->end()) {
+                    if (interfaces->find(relay_msg->interface) == interfaces->end()) {
                         /*If entry not exist then creating the entry with empty structure.*/
-                        (*vlans)[relay_msg->vlan] = relay_config{};
-                        (*vlans)[relay_msg->vlan].vlan = relay_msg->vlan;
-                        update_vlan_mapping(relay_msg->vlan, true);
-                        if (prepare_vlan_sockets((*vlans)[relay_msg->vlan]) == -1) {
-                            syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to create Vlan listen socket");
+                        (*interfaces)[relay_msg->interface] = relay_config{};
+                        (*interfaces)[relay_msg->interface].interface = relay_msg->interface;
+                        update_interface_mapping(relay_msg->interface, true);
+                        if (prepare_interface_sockets((*interfaces)[relay_msg->interface]) == -1) {
+                            syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to create interface listen socket");
                             return;
                         }
-                        /* Intially filling the vlan interface IP address. */
+                        /* Initially filling the interface IP address. */
                         if (relay_msg->source_interface.empty()) {
-                            prepare_relay_interface_config((*vlans)[relay_msg->vlan]);
+                            prepare_relay_interface_config((*interfaces)[relay_msg->interface]);
                         }
                     }
 
-                    if ((*vlans)[relay_msg->vlan].servers != relay_msg->servers) {
-                        (*vlans)[relay_msg->vlan].servers = relay_msg->servers;
-                        prepare_relay_server_config((*vlans)[relay_msg->vlan]);
+                    if ((*interfaces)[relay_msg->interface].servers != relay_msg->servers) {
+                        (*interfaces)[relay_msg->interface].servers = relay_msg->servers;
+                        prepare_relay_server_config((*interfaces)[relay_msg->interface]);
                     }
 
                     /* Compare the existing vrf value and the new DB updated vrf value for vrf modification case. */
-                    if ((*vlans)[relay_msg->vlan].vrf != relay_msg->vrf) {
-                        if (handle_server_sock((*vlans)[relay_msg->vlan], relay_msg->vrf) < 0) {
+                    if ((*interfaces)[relay_msg->interface].vrf != relay_msg->vrf) {
+                        if (handle_server_sock((*interfaces)[relay_msg->interface], relay_msg->vrf) < 0) {
                             return;
                         }
                     }
-                    if ((*vlans)[relay_msg->vlan].source_interface != relay_msg->source_interface) {
-                        (*vlans)[relay_msg->vlan].source_interface = relay_msg->source_interface;
-                        prepare_relay_interface_config((*vlans)[relay_msg->vlan]);
+                    if ((*interfaces)[relay_msg->interface].source_interface != relay_msg->source_interface) {
+                        (*interfaces)[relay_msg->interface].source_interface = relay_msg->source_interface;
+                        prepare_relay_interface_config((*interfaces)[relay_msg->interface]);
                     }
 
-                    (*vlans)[relay_msg->vlan].link_selection_opt = relay_msg->link_selection_opt;
-                    (*vlans)[relay_msg->vlan].server_id_override_opt = relay_msg->server_id_override_opt;
-                    (*vlans)[relay_msg->vlan].vrf_selection_opt = relay_msg->vrf_selection_opt;
-                    (*vlans)[relay_msg->vlan].agent_relay_mode = relay_msg->agent_relay_mode;
+                    (*interfaces)[relay_msg->interface].link_selection_opt = relay_msg->link_selection_opt;
+                    (*interfaces)[relay_msg->interface].server_id_override_opt = relay_msg->server_id_override_opt;
+                    (*interfaces)[relay_msg->interface].vrf_selection_opt = relay_msg->vrf_selection_opt;
+                    (*interfaces)[relay_msg->interface].agent_relay_mode = relay_msg->agent_relay_mode;
+                    (*interfaces)[relay_msg->interface].max_hop_count = relay_msg->max_hop_count;
+                    (*interfaces)[relay_msg->interface].circuit_id_format = relay_msg->circuit_id_format;
+                    (*interfaces)[relay_msg->interface].circuit_id = relay_msg->circuit_id;
                 } else {
-                    if (vlans->find(relay_msg->vlan) != vlans->end()) {
-                        /* In case of vlan deletion, close all the sockets.*/
-                        if ((*vlans)[relay_msg->vlan].client_sock > 0) {
-                            close((*vlans)[relay_msg->vlan].client_sock);
+                    if (interfaces->find(relay_msg->interface) != interfaces->end()) {
+                        /* In case of interface deletion, close all the sockets.*/
+                        if ((*interfaces)[relay_msg->interface].client_sock > 0) {
+                            close((*interfaces)[relay_msg->interface].client_sock);
                         }
-                        if ((*vlans)[relay_msg->vlan].vrf_sock > 0) {
-                            vrf_sock_map[(*vlans)[relay_msg->vlan].vrf].ref_count--;
-                            if (vrf_sock_map[(*vlans)[relay_msg->vlan].vrf].ref_count == 0) {
-                                close((*vlans)[relay_msg->vlan].vrf_sock);
-                                vrf_sock_map.erase((*vlans)[relay_msg->vlan].vrf);
+                        if ((*interfaces)[relay_msg->interface].vrf_sock > 0) {
+                            vrf_sock_map[(*interfaces)[relay_msg->interface].vrf].ref_count--;
+                            if (vrf_sock_map[(*interfaces)[relay_msg->interface].vrf].ref_count == 0) {
+                                close((*interfaces)[relay_msg->interface].vrf_sock);
+                                vrf_sock_map.erase((*interfaces)[relay_msg->interface].vrf);
                             }
                         }
-                        vlans->erase(relay_msg->vlan);
-                        syslog(LOG_INFO, "[DHCPV4_RELAY] Deleted VLAN %s from configuration", relay_msg->vlan.c_str());
-                        update_vlan_mapping(relay_msg->vlan, false);
+                        interfaces->erase(relay_msg->interface);
+                        syslog(LOG_INFO, "[DHCPV4_RELAY] Deleted interface %s from configuration", relay_msg->interface.c_str());
+                        update_interface_mapping(relay_msg->interface, false);
                     } else {
-                        syslog(LOG_WARNING, "[DHCPV4_RELAY] Attempted to delete non-existent VLAN %s", relay_msg->vlan.c_str());
+                        syslog(LOG_WARNING, "[DHCPV4_RELAY] Attempted to delete non-existent interface %s", relay_msg->interface.c_str());
                     }
                 }
                 delete relay_msg;
@@ -1281,11 +1359,11 @@ void config_event_callback(evutil_socket_t fd, short event, void *arg) {
         } else if (received_event.type == DHCPv4_RELAY_INTERFACE_UPDATE) {
             relay_config *relay_msg = static_cast<relay_config *>(received_event.msg);
             if (relay_msg) {
-                syslog(LOG_INFO, "[DHCPV4_RELAY] Updating source interface for VLAN %s", relay_msg->vlan.c_str());
+                syslog(LOG_INFO, "[DHCPV4_RELAY] Updating source interface for interface %s", relay_msg->interface.c_str());
                 if (relay_msg->is_add) {
-                    (*vlans)[relay_msg->vlan].src_intf_sel_addr = relay_msg->src_intf_sel_addr;
+                    (*interfaces)[relay_msg->interface].src_intf_sel_addr = relay_msg->src_intf_sel_addr;
                 } else {
-                    memset(&(*vlans)[relay_msg->vlan].src_intf_sel_addr, 0, sizeof(sockaddr_in));
+                    memset(&(*interfaces)[relay_msg->interface].src_intf_sel_addr, 0, sizeof(sockaddr_in));
                 }
                 delete relay_msg;
             }
@@ -1293,18 +1371,18 @@ void config_event_callback(evutil_socket_t fd, short event, void *arg) {
                vlan_member_config *msg = static_cast<vlan_member_config *>(received_event.msg);
                if (msg) {
                    syslog(LOG_INFO, "[DHCPV4_RELAY] Updating vlan member for VLAN %s", msg->vlan.c_str());
-                   if (vlans->find(msg->vlan) == vlans->end()) {
+                   if (interfaces->find(msg->vlan) == interfaces->end()) {
                        delete msg;
                        return;
                    }
 
-                   if ((*vlans)[msg->vlan].client_sock > 0) {
-                       close((*vlans)[msg->vlan].client_sock);
+                   if ((*interfaces)[msg->vlan].client_sock > 0) {
+                       close((*interfaces)[msg->vlan].client_sock);
                    }
 
-                   update_interface_vlan_mapping(msg->interface, msg->vlan, msg->is_add);
-                   if (prepare_vlan_sockets((*vlans)[msg->vlan]) == -1) {
-                       syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to create Vlan listen socket");
+                   update_port_interface_mapping(msg->interface, msg->vlan, msg->is_add);
+                   if (prepare_interface_sockets((*interfaces)[msg->vlan]) == -1) {
+                       syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to create interface listen socket");
                        return;
                    }
                    delete msg;
@@ -1313,22 +1391,22 @@ void config_event_callback(evutil_socket_t fd, short event, void *arg) {
                vlan_interface_config *msg = static_cast<vlan_interface_config *>(received_event.msg);
                if (msg) {
                    syslog(LOG_INFO, "[DHCPV4_RELAY] Updating vlan interface event for VLAN %s", msg->vlan.c_str());
-                   if (vlans->find(msg->vlan) == vlans->end()) {
+                   if (interfaces->find(msg->vlan) == interfaces->end()) {
                        delete msg;
                        return;
                    }
 
                    if (!msg->vrf.empty()) {
-                       vlan_vrf_map[msg->vlan] = msg->vrf;
+                       interface_vrf_map[msg->vlan] = msg->vrf;
                    } else {
-                      if ((*vlans)[msg->vlan].client_sock > 0) {
-                          close((*vlans)[msg->vlan].client_sock);
+                      if ((*interfaces)[msg->vlan].client_sock > 0) {
+                          close((*interfaces)[msg->vlan].client_sock);
                       }
-                      if (prepare_vlan_sockets((*vlans)[msg->vlan]) == -1) {
-                          syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to create Vlan listen socket");
+                      if (prepare_interface_sockets((*interfaces)[msg->vlan]) == -1) {
+                          syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to create interface listen socket");
                           return;
                       }
-		      prepare_relay_interface_config((*vlans)[msg->vlan]);
+                      prepare_relay_interface_config((*interfaces)[msg->vlan]);
                    }
 
                    std::string value;
@@ -1339,8 +1417,8 @@ void config_event_callback(evutil_socket_t fd, short event, void *arg) {
                        return;
                    }
 
-                   if ((*vlans)[msg->vlan].vrf != msg->vrf) {
-                        if (handle_server_sock((*vlans)[msg->vlan], msg->vrf) < 0) {
+                   if ((*interfaces)[msg->vlan].vrf != msg->vrf) {
+                        if (handle_server_sock((*interfaces)[msg->vlan], msg->vrf) < 0) {
                             return;
                         }
                    }
@@ -1349,10 +1427,10 @@ void config_event_callback(evutil_socket_t fd, short event, void *arg) {
         } else if ((received_event.type == DHCPv4_SERVER_FEATURE_UPDATE) ||
                    (received_event.type == DHCPv4_SERVER_IP_DELETE)) {
                    syslog(LOG_INFO, "[DHCPV4_RELAY]  dhcp_server feature table update or server ip delete event received");
-                   delete_all_relay_configs(vlans);
+                   delete_all_relay_configs(interfaces);
         } else if (received_event.type == DHCPv4_SERVER_IP_UPDATE) {
                 syslog(LOG_INFO, "[DHCPV4_RELAY]  dhcp_server IP update in state DB event received");
-                for (auto it = vlans->begin(); it != vlans->end(); ++it) {
+                for (auto it = interfaces->begin(); it != interfaces->end(); ++it) {
                      relay_config &config = it->second;
                      config.servers.clear();
                      config.servers_sock.clear();
@@ -1364,40 +1442,40 @@ void config_event_callback(evutil_socket_t fd, short event, void *arg) {
             if (relay_msg) {
                 if (relay_msg->is_add) {
                     syslog(LOG_INFO,
-                       "[DHCPV4_RELAY][DualTor] Adding link-selection and source-interface as Loopback0 for existing vlans");
+                       "[DHCPV4_RELAY][DualTor] Adding link-selection and source-interface as Loopback0 for existing interfaces");
                 } else {
                     syslog(LOG_INFO,
-                       "[DHCPV4_RELAY][DualTor] Deleting/Restoring link-selection and source-interface configs for existing vlans");
+                       "[DHCPV4_RELAY][DualTor] Deleting/Restoring link-selection and source-interface configs for existing interfaces");
                 }
 
-                for (auto& vlan : *vlans) {
+                for (auto& intf : *interfaces) {
                     if (relay_msg->is_add) {
-                            prepare_relay_interface_config(vlan.second);
+                            prepare_relay_interface_config(intf.second);
                     } else {
                         std::shared_ptr<swss::Table> v4_relay_intf_tbl = std::make_shared<swss::Table>(config_db.get(), "DHCPV4_RELAY");
                         std::string value;
 
                         // Check for the presence of specific keys
-                        v4_relay_intf_tbl->hget(vlan.second.vlan, "link_selection", value);
+                        v4_relay_intf_tbl->hget(intf.second.interface, "link_selection", value);
                         // Check if "link_selection" is present
                         if (value.length() > 0) {
                             // Fetch the value of "link_selection" from the database
-                            vlan.second.link_selection_opt = value;
+                            intf.second.link_selection_opt = value;
                         } else {
                             // link_selection key not found in DB, clear the value
-                            vlan.second.link_selection_opt.clear();
+                            intf.second.link_selection_opt.clear();
                         }
 
-                        v4_relay_intf_tbl->hget(vlan.second.vlan, "source_interface", value);
+                        v4_relay_intf_tbl->hget(intf.second.interface, "source_interface", value);
                         // Check if "source_interface" is present
                         if (value.length() > 0) {
                             // Fetch the value of "source_interface" from the database
-                            vlan.second.source_interface = value;
+                            intf.second.source_interface = value;
                         } else {
                             // source_interface key not found in DB, clear the value
-                            vlan.second.source_interface.clear();
+                            intf.second.source_interface.clear();
                         }
-                        prepare_relay_interface_config(vlan.second);
+                        prepare_relay_interface_config(intf.second);
                     }
                 }
                 delete relay_msg;
@@ -1427,11 +1505,11 @@ void config_event_callback(evutil_socket_t fd, short event, void *arg) {
 }
 
 /**
- * @code                loop_relay(std::unordered_map<relay_config> &vlans);
+ * @code                loop_relay(std::unordered_map<relay_config> &interfaces);
  *
  * @brief               main loop: configure sockets, create libevent base, start server listener thread
  *
- * @param vlans         list of vlans retrieved from config_db
+ * @param interfaces    list of interfaces retrieved from config_db
  */
 
 /**
@@ -1440,12 +1518,12 @@ void config_event_callback(evutil_socket_t fd, short event, void *arg) {
  * This function sets up the necessary event base and socket listeners for
  * handling DHCP relay operations. It initializes connections to the state
  * and configuration databases, sets up event listeners for client and server
- * sockets, and prepares VLAN-specific configurations.
+ * sockets, and prepares interface-specific configurations.
  *
- * @param vlans A reference to an unordered map containing VLAN configurations.
+ * @param interfaces A reference to an unordered map containing interface configurations.
  *
  */
-void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
+void loop_relay(std::unordered_map<std::string, relay_config> &interfaces) {
     base = event_base_new();
     if (base == NULL) {
         syslog(LOG_ERR, "[DHCPV4_RELAY] libevent: Failed to create event base\n");
@@ -1473,7 +1551,7 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
 
     // Add the pipe to libevent for async config updates
     struct event *config_event = event_new(base, config_pipe[0], EV_READ | EV_PERSIST,
-                                           config_event_callback, reinterpret_cast<void *>(&vlans));
+                                           config_event_callback, reinterpret_cast<void *>(&interfaces));
     if (!config_event) {
         syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to create event for config pipe");
         exit(EXIT_FAILURE);
@@ -1487,7 +1565,7 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
     if (filter != -1) {
         /* Register to the callbck func when there is new packet to the socket from client */
         auto event = event_new(base, filter, EV_READ | EV_PERSIST, pkt_in_callback,
-                               reinterpret_cast<void *>(&vlans));
+                               reinterpret_cast<void *>(&interfaces));
         if (event == NULL) {
             syslog(LOG_ERR, "[DHCPV4_RELAY] libevent: Failed to create client listen event\n");
             exit(EXIT_FAILURE);

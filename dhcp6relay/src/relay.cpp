@@ -67,11 +67,11 @@ std::map<int, std::string> counterMap = {
     {DHCPv6_MESSAGE_TYPE_MALFORMED, "Malformed"}
 };
 
-/* interface to vlan mapping */
-std::unordered_map<std::string, std::string> vlan_map;
+/* interface to interface mapping */
+std::unordered_map<std::string, std::string> interface_map;
 
-/* ipv6 address to vlan name mapping */
-std::unordered_map<std::string, std::string> addr_vlan_map;
+/* ipv6 address to interface name mapping */
+std::unordered_map<std::string, std::string> addr_interface_map;
 
 /**
  * @code                bool inline isIPv6Zero(const in6_addr &addr)
@@ -515,7 +515,7 @@ void prepare_relay_config(relay_config &interface_config, int gua_sock, int filt
     }
     char ipv6_str[INET6_ADDRSTRLEN] = {};
     inet_ntop(AF_INET6, &interface_config.link_address.sin6_addr, ipv6_str, INET6_ADDRSTRLEN);
-    addr_vlan_map[std::string(ipv6_str)] = interface_config.interface;
+    addr_interface_map[std::string(ipv6_str)] = interface_config.interface;
 }
 
 /**
@@ -572,16 +572,16 @@ int prepare_lo_socket(const char *lo) {
 }
 
 /**
- * @code                prepare_vlan_sockets(int &gua_sock, int &lla_sock, relay_config &config);
+ * @code                prepare_interface_sockets(int &gua_sock, int &lla_sock, relay_config &config);
  * 
- * @brief               prepare vlan L3 socket for sending
+ * @brief               prepare interface L3 socket for sending
  *
  * @param gua_sock      socket binded to global address for relaying client message to server and listening for server message
  * @param lla_sock      socket binded to link_local address for relaying server message to client
  *
  * @return              int
  */
-int prepare_vlan_sockets(int &gua_sock, int &lla_sock, relay_config &config) {
+int prepare_interface_sockets(int &gua_sock, int &lla_sock, relay_config &config) {
     struct ifaddrs *ifa, *ifa_tmp;
     sockaddr_in6 gua = {0}, lla = {0};
 
@@ -843,23 +843,68 @@ void relay_relay_forw(const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, re
 }
 
 /**
- * @code                update_vlan_mapping(std::string vlan, std::shared_ptr<swss::DBConnector> cfgdb);
+ * @code                update_interface_mapping(std::string interface_name, std::shared_ptr<swss::DBConnector> cfgdb);
  *
- * @brief               build vlan member interface to vlan mapping table 
+ * @brief               build interface mapping table for both VLANs and physical ports
  *
- * @param vlan          vlan name string
+ * @param interface_name interface name string (VLAN or physical port)
  * @param cfgdb         config db connection
  *
  * @return              none
  */
-void update_vlan_mapping(std::string vlan, std::shared_ptr<swss::DBConnector> cfgdb) {
-    auto match_pattern = std::string("VLAN_MEMBER|") + vlan + std::string("|*");
+void update_interface_mapping(std::string interface_name, std::shared_ptr<swss::DBConnector> cfgdb) {
+    // Check if this is a VLAN interface (has VLAN members)
+    auto match_pattern = std::string("VLAN_MEMBER|") + interface_name + std::string("|*");
     auto keys = cfgdb->keys(match_pattern);
-    for (auto &itr : keys) {
-        auto found = itr.find_last_of('|');
-        auto interface = itr.substr(found + 1);
-        vlan_map[interface] = vlan;
-        syslog(LOG_INFO, "Add <%s, %s> into interface vlan map\n", interface.c_str(), vlan.c_str());
+
+    if (!keys.empty()) {
+        // This is a VLAN interface, map member ports to the VLAN
+        for (auto &itr : keys) {
+            auto found = itr.find_last_of('|');
+            auto interface = itr.substr(found + 1);
+            interface_map[interface] = interface_name;
+            syslog(LOG_INFO, "Add <%s, %s> into interface vlan map\n", interface.c_str(), interface_name.c_str());
+        }
+    } else {
+        // This is a physical port, map it to itself
+        interface_map[interface_name] = interface_name;
+        syslog(LOG_INFO, "Add <%s, %s> into interface map (physical port)\n", interface_name.c_str(), interface_name.c_str());
+    }
+}
+
+/**
+ * @code                remove_interface_mapping(std::string interface_name, std::shared_ptr<swss::DBConnector> cfgdb);
+ *
+ * @brief               remove interface mapping from interface_map
+ *
+ * @param interface_name interface name string (VLAN or physical port)
+ * @param cfgdb         config db connection
+ *
+ * @return              none
+ */
+void remove_interface_mapping(std::string interface_name, std::shared_ptr<swss::DBConnector> cfgdb) {
+    // Check if this is a VLAN interface (has VLAN members)
+    auto match_pattern = std::string("VLAN_MEMBER|") + interface_name + std::string("|*");
+    auto keys = cfgdb->keys(match_pattern);
+
+    if (!keys.empty()) {
+        // This is a VLAN interface, remove member port mappings
+        for (auto &itr : keys) {
+            auto found = itr.find_last_of('|');
+            auto interface = itr.substr(found + 1);
+            auto it = interface_map.find(interface);
+            if (it != interface_map.end()) {
+                interface_map.erase(it);
+                syslog(LOG_INFO, "Remove <%s, %s> from interface map (vlan)\n", interface.c_str(), interface_name.c_str());
+            }
+        }
+    } else {
+        // This is a physical port, remove self-mapping
+        auto it = interface_map.find(interface_name);
+        if (it != interface_map.end()) {
+            interface_map.erase(it);
+            syslog(LOG_INFO, "Remove <%s, %s> from interface map (physical port)\n", interface_name.c_str(), interface_name.c_str());
+        }
     }
 }
 
@@ -875,7 +920,7 @@ void update_vlan_mapping(std::string vlan, std::shared_ptr<swss::DBConnector> cf
  * @return              none
  */
 void client_callback(evutil_socket_t fd, short event, void *arg) {
-    auto vlans = reinterpret_cast<std::unordered_map<std::string, struct relay_config> *>(arg);
+    auto interfaces = reinterpret_cast<std::unordered_map<std::string, struct relay_config> *>(arg);
     struct sockaddr_ll sll;
     socklen_t slen = sizeof(sll);
     int pkts_num = 0;
@@ -895,20 +940,23 @@ void client_callback(evutil_socket_t fd, short event, void *arg) {
         }
 
         std::string intf(interfaceName);
-        // For Vlans that lla is not ready, they wouldn't be added into vlan_map, hence it would be blocked here, no need to 
-        // add is_lla_ready flag check in this callback func
-        auto vlan = vlan_map.find(intf);
-        if (vlan == vlan_map.end()) {
+
+        // For interfaces (VLANs or physical ports) that lla is not ready, they wouldn't be added into interface_map,
+        // hence it would be blocked here, no need to add is_lla_ready flag check in this callback func
+        auto interface_mapping = interface_map.find(intf);
+        if (interface_mapping == interface_map.end()) {
             if (intf.find(CLIENT_IF_PREFIX) != std::string::npos) {
-                syslog(LOG_WARNING, "Invalid input interface %s\n", interfaceName);
+                syslog(LOG_WARNING, "Interface %s not found in interface_map (no relay config or LLA not ready)\n", interfaceName);
             }
             continue;
         }
-        auto config_itr = vlans->find(vlan->second);
-        if (config_itr == vlans->end()) {
-            syslog(LOG_WARNING, "Config not found for vlan %s\n", vlan->second.c_str());
+        auto config_itr = interfaces->find(interface_mapping->second);
+        if (config_itr == interfaces->end()) {
+            syslog(LOG_WARNING, "Config not found for interface %s (mapped from %s)\n",
+                   interface_mapping->second.c_str(), intf.c_str());
             continue;
         }
+
         auto config = config_itr->second;
         if (dual_tor_sock) {
             std::string state;
@@ -929,8 +977,8 @@ void client_callback(evutil_socket_t fd, short event, void *arg) {
  *
  * @param buffer        packet buffer
  * @param length        packet length
- * @param config        vlan related relay config
- * @param ifname        vlan member interface name
+ * @param config        interface related relay config
+ * @param ifname        interface name
  *
  * @return              none
  */
@@ -1001,7 +1049,7 @@ void client_packet_handler(uint8_t *buffer, ssize_t length, struct relay_config 
 /**
  * @code                struct relay_config *
  *                      get_relay_int_from_relay_msg(const uint8_t *msg, int32_t len,
- *                                                   std::unordered_map<std::string, relay_config> *vlans)
+ *                                                   std::unordered_map<std::string, relay_config> *interfaces)
  * 
  * @brief               get relay interface info from relay message
  *
@@ -1010,7 +1058,7 @@ void client_packet_handler(uint8_t *buffer, ssize_t length, struct relay_config 
  * @return              bool
  */
 struct relay_config *
-get_relay_int_from_relay_msg(const uint8_t *msg, int32_t len, std::unordered_map<std::string, relay_config> *vlans) {
+get_relay_int_from_relay_msg(const uint8_t *msg, int32_t len, std::unordered_map<std::string, relay_config> *interfaces) {
     class RelayMsg relay;
     auto result = relay.UnmarshalBinary(msg, len);
     if (!result) {
@@ -1035,18 +1083,18 @@ get_relay_int_from_relay_msg(const uint8_t *msg, int32_t len, std::unordered_map
     char ipv6_str[INET6_ADDRSTRLEN] = {};
     inet_ntop(AF_INET6, &address, ipv6_str, INET6_ADDRSTRLEN);
     auto v6_string = std::string(ipv6_str);
-    if (addr_vlan_map.find(v6_string) == addr_vlan_map.end()) {
+    if (addr_interface_map.find(v6_string) == addr_interface_map.end()) {
         syslog(LOG_WARNING, "DHCPv6 type %d can't find vlan info from link address %s\n",
                relay.m_msg_hdr.msg_type, ipv6_str);
         return NULL;
     }
 
-    auto vlan_name = addr_vlan_map[v6_string];
-    if (vlans->find(vlan_name) == vlans->end()) {
-        syslog(LOG_WARNING, "DHCPv6 can't find vlan %s config\n", vlan_name.c_str());
+    auto interface_name = addr_interface_map[v6_string];
+    if (interfaces->find(interface_name) == interfaces->end()) {
+        syslog(LOG_WARNING, "DHCPv6 can't find interface %s config\n", interface_name.c_str());
         return NULL;
     }
-    return &vlans->find(vlan_name)->second;
+    return &interfaces->find(interface_name)->second;
 }
 
 /**
@@ -1061,7 +1109,7 @@ get_relay_int_from_relay_msg(const uint8_t *msg, int32_t len, std::unordered_map
  * @return              none
  */
 void server_callback_dualtor(evutil_socket_t fd, short event, void *arg) {
-    auto vlans = reinterpret_cast<std::unordered_map<std::string, struct relay_config> *>(arg);
+    auto interfaces = reinterpret_cast<std::unordered_map<std::string, struct relay_config> *>(arg);
     sockaddr_in6 from;
     socklen_t len = sizeof(from);
     int32_t pkts_num = 0;
@@ -1085,7 +1133,7 @@ void server_callback_dualtor(evutil_socket_t fd, short event, void *arg) {
             syslog(LOG_WARNING, "Invalid DHCPv6 message type %d received on loopback interface\n", msg_type);
             continue;
         }
-        auto config = get_relay_int_from_relay_msg(server_recv_buffer, buffer_sz, vlans);
+        auto config = get_relay_int_from_relay_msg(server_recv_buffer, buffer_sz, interfaces);
         if (!config) {
             syslog(LOG_WARNING, "Invalid DHCPv6 header content on loopback socket, packet will be dropped\n");
             continue;
@@ -1230,13 +1278,13 @@ void dhcp6relay_stop()
 }
 
 /**
- * @code                loop_relay(std::unordered_map<relay_config> &vlans);
+ * @code                loop_relay(std::unordered_map<relay_config> &interfaces);
  * 
  * @brief               main loop: configure sockets, create libevent base, start server listener thread
  *  
- * @param vlans         list of vlans retrieved from config_db
+ * @param interfaces    list of interfaces retrieved from config_db
  */
-void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
+void loop_relay(std::unordered_map<std::string, relay_config> &interfaces) {
     std::vector<int> sockets;
     base = event_base_new();
     if(base == NULL) {
@@ -1254,7 +1302,7 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
     if (filter != -1) {
         sockets.push_back(filter);
         auto event = event_new(base, filter, EV_READ|EV_PERSIST, client_callback,
-                               reinterpret_cast<void *>(&vlans));
+                               reinterpret_cast<void *>(&interfaces));
         if (event == NULL) {
             syslog(LOG_ERR, "libevent: Failed to create client listen event\n");
             exit(EXIT_FAILURE);
@@ -1272,7 +1320,7 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
         if (lo_sock != -1) {
             sockets.push_back(lo_sock);
             auto event = event_new(base, lo_sock, EV_READ|EV_PERSIST, server_callback_dualtor,
-                                   reinterpret_cast<void *>(&vlans));
+                                   reinterpret_cast<void *>(&interfaces));
             if (event == NULL) {
                 syslog(LOG_ERR, "libevent: Failed to create dualtor loopback listen event\n");
                 exit(EXIT_FAILURE);
@@ -1285,7 +1333,7 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
         }
     }
 
-    // Add timer to periodly check lla un-ready vlan
+    // Add timer to periodly check lla un-ready interfaces
     struct event *timer_event;
     struct timeval tv;
     auto timer_args = new std::tuple<
@@ -1297,7 +1345,7 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
         int,
         int,
         struct event *
-    >(vlans, config_db, state_db, mStateDbMuxTablePtr, sockets, lo_sock, lo_sock, nullptr);
+    >(interfaces, config_db, state_db, mStateDbMuxTablePtr, sockets, lo_sock, lo_sock, nullptr);
     timer_event = event_new(base, -1, EV_PERSIST, lla_check_callback, timer_args);
     std::get<7>(*timer_args) = timer_event;
     evutil_timerclear(&tv);
@@ -1349,11 +1397,11 @@ void clear_counter(std::shared_ptr<swss::DBConnector> state_db) {
 
 /**
  * @code                void lla_check_callback(evutil_socket_t fd, short event, void *arg);
- * 
- * @brief               callback for libevent timer to check whether lla is ready for vlan
+ *
+ * @brief               callback for libevent timer to check whether lla is ready for interface (VLAN or physical port)
  *
  * @param fd            libevent socket
- * @param event         libevent triggered event  
+ * @param event         libevent triggered event
  * @param arg           callback argument provided by user
  *
  * @return              none
@@ -1369,7 +1417,7 @@ void lla_check_callback(evutil_socket_t fd, short event, void *arg) {
         int,
         struct event *
     > *>(arg);
-    auto vlans = std::get<0>(*args);
+    auto interfaces = std::get<0>(*args);
     auto config_db = std::get<1>(*args);
     auto state_db = std::get<2>(*args);
     auto mStateDbMuxTablePtr = std::get<3>(*args);
@@ -1379,43 +1427,43 @@ void lla_check_callback(evutil_socket_t fd, short event, void *arg) {
     auto timer_event = std::get<7>(*args);
 
     bool all_llas_are_ready = true;
-    for(auto &vlan : *vlans) {
-        if (vlan.second.is_lla_ready) {
+    for(auto &interface_entry : *interfaces) {
+        if (interface_entry.second.is_lla_ready) {
             continue;
         }
-        if (!check_is_lla_ready(vlan.first)) {
-            syslog(LOG_WARNING, "Link local address for %s is not ready\n", vlan.first.c_str());
+        if (!check_is_lla_ready(interface_entry.first)) {
+            syslog(LOG_WARNING, "Link local address for %s is not ready\n", interface_entry.first.c_str());
             all_llas_are_ready = false;
             continue;
         }
-        vlan.second.is_lla_ready = true;
+        interface_entry.second.is_lla_ready = true;
         int gua_sock = 0;
         int lla_sock = 0;
-        vlan.second.config_db = config_db;
-        vlan.second.mux_table = mStateDbMuxTablePtr;
-        vlan.second.state_db = state_db;
-        vlan.second.mux_key = vlan_member + vlan.second.interface + "|";
+        interface_entry.second.config_db = config_db;
+        interface_entry.second.mux_table = mStateDbMuxTablePtr;
+        interface_entry.second.state_db = state_db;
+        interface_entry.second.mux_key = vlan_member + interface_entry.second.interface + "|";
 
-        update_vlan_mapping(vlan.first, config_db);
+        update_interface_mapping(interface_entry.first, config_db);
 
-        initialize_counter(vlan.second.state_db, vlan.second.interface);
-        
-        if (prepare_vlan_sockets(gua_sock, lla_sock, vlan.second) != -1) {
-            vlan.second.gua_sock = gua_sock;
-            vlan.second.lla_sock = lla_sock;
-            vlan.second.lo_sock = lo_sock;
+        initialize_counter(interface_entry.second.state_db, interface_entry.second.interface);
+
+        if (prepare_interface_sockets(gua_sock, lla_sock, interface_entry.second) != -1) {
+            interface_entry.second.gua_sock = gua_sock;
+            interface_entry.second.lla_sock = lla_sock;
+            interface_entry.second.lo_sock = lo_sock;
 
             sockets.push_back(gua_sock);
             sockets.push_back(lla_sock);
-            prepare_relay_config(vlan.second, gua_sock, filter);
+            prepare_relay_config(interface_entry.second, gua_sock, filter);
             if (!dual_tor_sock) {
 	            auto server_callback_event = event_new(base, gua_sock, EV_READ|EV_PERSIST,
-                                       server_callback, &(vlan.second));
+                                       server_callback, &(interface_entry.second));
                 if (server_callback_event == NULL) {
                     syslog(LOG_ERR, "libevent: Failed to create server listen libevent\n");
                 }
                 event_add(server_callback_event, NULL);
-                syslog(LOG_INFO, "libevent: add server listen socket for %s\n", vlan.first.c_str());
+                syslog(LOG_INFO, "libevent: add server listen socket for %s\n", interface_entry.first.c_str());
             }
         } else {
             syslog(LOG_ERR, "Failed to create dualtor loopback listen socket");
@@ -1423,7 +1471,7 @@ void lla_check_callback(evutil_socket_t fd, short event, void *arg) {
         }
     }
     if (all_llas_are_ready) {
-        syslog(LOG_INFO, "All Vlans' lla are ready, terminate check timer");
+        syslog(LOG_INFO, "All interfaces' lla are ready, terminate check timer");
         event_del(timer_event);
     }
 }
