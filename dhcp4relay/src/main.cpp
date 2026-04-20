@@ -10,8 +10,8 @@ char loopback[IF_NAMESIZE] = "Loopback0";
 
 int main(int argc, char *argv[]) {
     try {
-        std::unordered_map<std::string, relay_config> vlans;
-        loop_relay(vlans);
+        std::unordered_map<std::string, relay_config> interfaces;
+        loop_relay(interfaces);
     } catch (std::exception &e) {
         syslog(LOG_ERR, "An exception occurred.\n");
         return 1;

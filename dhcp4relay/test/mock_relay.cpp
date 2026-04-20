@@ -31,6 +31,7 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config);
 void to_client(pcpp::DhcpLayer* dhcp_pkt, std::unordered_map<std::string, relay_config > *vlans,
                 std::string src_ip);
 void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config);
+void update_interface_mapping(std::string interface_name, bool is_add);
 
 ssize_t RealWrite(int fd, const void *buf, size_t count) {
     return syscall(SYS_write, fd, buf, count);
@@ -139,8 +140,8 @@ TEST(prepareConfig, prepare_relay_server_config) {
 TEST(prepareConfig, prepare_relay_interface_config) {
     struct ifaddrs *mock_ifaddrs = CreateMockIfaddrs("192.168.1.1", "255.255.255.0", "Vlan100", "192.168.1.2", "Ethernet4");
     struct relay_config interface_config{};
-    interface_config.vlan = "Vlan100";
-    interface_config.source_interface = "Ethernet4"; 
+    interface_config.interface = "Vlan100";
+    interface_config.source_interface = "Ethernet4";
 
     EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_)).WillOnce(DoAll(testing::SetArgPointee<0>(mock_ifaddrs), Return(0)));
     EXPECT_GLOBAL_CALL(freeifaddrs, freeifaddrs(_)).Times(1);
@@ -188,7 +189,7 @@ TEST(addrIsPrimary, unknown_ip_returns_true) {
     testing_db::reset();
 }
 
-TEST(prepareConfig, prepare_vlan_sockets) {
+TEST(prepareConfig, prepare_interface_sockets) {
   struct relay_config config{};
   config.link_address.sin_addr.s_addr = htonl(0x01010101);
   struct iphdr ip_hdr;
@@ -198,8 +199,8 @@ TEST(prepareConfig, prepare_vlan_sockets) {
   config.servers.push_back("3.3.3.3");
   config.servers.push_back("4.4.4.4");
 
-  config.vlan = "Vlan200";
-  EXPECT_EQ(prepare_vlan_sockets(config), 0);
+  config.interface = "Vlan200";
+  EXPECT_EQ(prepare_interface_sockets(config), 0);
   EXPECT_GE(config.client_sock, 0);
 }
 
@@ -232,16 +233,16 @@ TEST(prepareConfig, update_vlan_mapping) {
     vlan_interface_table.set(vlan_key, vlan_values);
     
     // add case 
-    update_vlan_mapping(vlan_key, true);
+    update_interface_mapping(vlan_key, true);
     
-    EXPECT_EQ(vlan_map["Ethernet8"], vlan_key);
-    EXPECT_EQ(vlan_vrf_map[vlan_key], "VrfRed");
+    EXPECT_EQ(interface_map["Ethernet8"], vlan_key);
+    EXPECT_EQ(interface_vrf_map[vlan_key], "VrfRed");
     
     //delete case
-    update_vlan_mapping(vlan_key, false);
+    update_interface_mapping(vlan_key, false);
     
-    EXPECT_EQ(vlan_map.find("Ethernet8"), vlan_map.end());
-    EXPECT_EQ(vlan_vrf_map.find(vlan_key), vlan_vrf_map.end());
+    EXPECT_EQ(interface_map.find("Ethernet8"), interface_map.end());
+    EXPECT_EQ(interface_vrf_map.find(vlan_key), interface_vrf_map.end());
 }
 
 TEST(relayConfig, handle_vlan_events) {
@@ -272,14 +273,13 @@ TEST(relayConfig, handle_vlan_events) {
     EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_)).WillOnce(DoAll(testing::SetArgPointee<0>(mock_ifaddrs), Return(0)));
     EXPECT_GLOBAL_CALL(freeifaddrs, freeifaddrs(_)).Times(1);
     relay_config *config = new relay_config();
-    config->vlan = "Vlan200";
+    config->interface = "Vlan200";
     config->is_add = true;
     config->source_interface = "Ethernet8";
     config->servers = {"192.168.1.1","10.0.0.1"};
     config->vrf = "default";
     event.type = DHCPv4_RELAY_CONFIG_UPDATE;
     event.msg = static_cast<void *>(config);
-    
     int pipe_fds[2];
     ASSERT_NE(pipe(pipe_fds), -1);
 
@@ -302,7 +302,6 @@ TEST(relayConfig, handle_vlan_events) {
     EXPECT_EQ(vlans["Vlan200"].link_address.sin_addr.s_addr, inet_addr("1.1.1.1"));
     EXPECT_EQ(vlans["Vlan200"].link_address_netmask.sin_addr.s_addr, inet_addr("255.255.255.0"));
     EXPECT_EQ(vlans["Vlan200"].src_intf_sel_addr.sin_addr.s_addr, inet_addr("2.2.2.2"));
-    
     EXPECT_GE(vlans["Vlan200"].vrf_sock, 0);
     EXPECT_GE(vrf_sock_map["default"].sock, 0);
     EXPECT_EQ(vrf_sock_map["default"].ref_count, 1);
@@ -311,7 +310,7 @@ TEST(relayConfig, handle_vlan_events) {
 
     /*Vlan deletion.*/
     relay_config *config_del = new relay_config();
-    config_del->vlan = "Vlan200";
+    config_del->interface = "Vlan200";
     config_del->is_add = false;
    
     vlans["Vlan200"].client_sock = -1; 
@@ -335,7 +334,7 @@ TEST(relayConfig, handle_interface_events) {
     ASSERT_NE(pipe(pipe_fds), -1);
     relay_config *config = new relay_config();
     std::unordered_map<std::string, relay_config> vlans;
-    config->vlan = "Vlan100";
+    config->interface = "Vlan100";
     config->is_add = true;
     config->src_intf_sel_addr.sin_family = AF_INET;
     config->src_intf_sel_addr.sin_addr.s_addr = inet_addr("192.168.1.1");
@@ -378,7 +377,7 @@ TEST(relayConfig, handle_vlan_member_events) {
     ASSERT_NE(pipe(pipe_fds), -1);
 
     std::unordered_map<std::string, relay_config> vlans;
-    vlans["Vlan100"].vlan = "Vlan100";
+    vlans["Vlan100"].interface = "Vlan100";
     vlans["Vlan100"].client_sock = -1;
     vlans["Vlan100"].is_add = true;
 
@@ -396,7 +395,7 @@ TEST(relayConfig, handle_vlan_member_events) {
 
     config_event_callback(pipe_fds[0], 0, &vlans);
 
-    EXPECT_EQ(vlan_map["Ethernet12"], "Vlan100");
+    EXPECT_EQ(interface_map["Ethernet12"], "Vlan100");
     EXPECT_GE(vlans["Vlan100"].client_sock, 0);
 
     vlan_member_config *vlan_config_del = new vlan_member_config();
@@ -412,7 +411,7 @@ TEST(relayConfig, handle_vlan_member_events) {
 
     config_event_callback(pipe_fds[0], 0, &vlans);
 
-    EXPECT_NE(vlan_map["Ethernet12"], "Vlan100");
+    EXPECT_NE(interface_map["Ethernet12"], "Vlan100");
     EXPECT_GE(vlans["Vlan100"].client_sock, 0);
 
     close(pipe_fds[0]);
@@ -430,7 +429,7 @@ TEST(relayConfig, handle_vlan_interface_events) {
     ASSERT_NE(pipe(pipe_fds), -1);
 
     std::unordered_map<std::string, relay_config> vlans;
-    vlans["Vlan100"].vlan = "Vlan100";
+    vlans["Vlan100"].interface = "Vlan100";
     vlans["Vlan100"].is_add = true;
 
     vlan_interface_config *vlan_config = new vlan_interface_config();
@@ -446,7 +445,7 @@ TEST(relayConfig, handle_vlan_interface_events) {
 
     config_event_callback(pipe_fds[0], 0, &vlans);
 
-    EXPECT_EQ(vlan_vrf_map["Vlan100"], "VrfRed");
+    EXPECT_EQ(interface_vrf_map["Vlan100"], "VrfRed");
 
     vlan_interface_config *vlan_intf_config = new vlan_interface_config();
 
@@ -595,7 +594,7 @@ TEST(DHCPMgrTest, initialize_config_listener) {
     std::this_thread::sleep_for(std::chrono::seconds(1));
     dhcpMgr.stop_db_updates();
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    EXPECT_EQ(vlans_copy[vlan].max_hop_count, 16);
+    EXPECT_EQ(interfaces_copy[vlan].max_hop_count, 16);
 }
 
 TEST(DHCPMgrTest, process_vlan_events) {
@@ -603,11 +602,11 @@ TEST(DHCPMgrTest, process_vlan_events) {
     EXPECT_GLOBAL_CALL(write, write(_, _, _))
                      .Times(AtLeast(1))
                      .WillRepeatedly(Return(-1));
-    vlans_copy.clear();
+    interfaces_copy.clear();
     relay_config *config = new relay_config();
-    config->vlan = "Vlan100";
+    config->interface = "Vlan100";
     config->is_add = true;
-    vlans_copy["Vlan100"] = *config;
+    interfaces_copy["Vlan100"] = *config;
     std::deque<swss::KeyOpFieldsValuesTuple> entries;
     entries.emplace_back("Vlan100", "SET", std::vector<swss::FieldValueTuple>{}); 
     dhcpMgr.process_vlan_notification(entries);
@@ -701,7 +700,7 @@ TEST(DHCPMgrTest, dhcp_server_ip_deletion) {
 
     dhcpMgr.process_dhcp_server_ipv4_ip_notification(entries, select,config_db);
     EXPECT_TRUE(global_dhcp_server_ip.empty());
-    EXPECT_TRUE(vlans_copy.empty());
+    EXPECT_TRUE(interfaces_copy.empty());
 }
 
 TEST(DHCPRelayTest, encode_relay_option) {
@@ -725,13 +724,13 @@ TEST(DHCPRelayTest, encode_relay_option) {
 
     relay_config config = {};
     config.phy_interface = "Ethernet12";
-    config.vlan = "Vlan10";
+    config.interface = "Vlan10";
     config.link_selection_opt = "enable";
     config.server_id_override_opt = "enable";
     config.link_address.sin_addr.s_addr = inet_addr("192.168.10.10");
     config.link_address_netmask.sin_addr.s_addr = inet_addr("255.255.255.0");
     config.vrf_selection_opt = "enable";
-    vlan_vrf_map["Vlan10"] = "Vrf01";
+    interface_vrf_map["Vlan10"] = "Vrf01";
 
     m_config.hostname = "cisco";
     m_config.host_mac_addr = "12:32:54:24:95:36";
@@ -773,7 +772,7 @@ TEST(DHCPRelayTest, encode_relay_option) {
     uint8_t vss_buf[32] = {0};
     uint8_t zero_encode = 0;
     memcpy(vss_buf, &zero_encode, sizeof(uint8_t));
-    memcpy((vss_buf + 1), (uint8_t*)vlan_vrf_map["Vlan10"].c_str(), (uint8_t)vlan_vrf_map["Vlan10"].length());
+    memcpy((vss_buf + 1), (uint8_t*)interface_vrf_map["Vlan10"].c_str(), (uint8_t)interface_vrf_map["Vlan10"].length());
 
     EXPECT_EQ(memcmp(vss_buf, vrf_ptr, 6), 0);
 }
@@ -799,14 +798,14 @@ TEST(DHCPRelayTest, encode_relay_option_server_client_same_vrf) {
 
     relay_config config = {};
     config.phy_interface = "Ethernet12";
-    config.vlan = "Vlan10";
+    config.interface = "Vlan10";
     config.vrf = "Vrf01";
     config.link_selection_opt = "enable";
     config.server_id_override_opt = "enable";
     config.link_address.sin_addr.s_addr = inet_addr("192.168.10.10");
     config.link_address_netmask.sin_addr.s_addr = inet_addr("255.255.255.0");
     config.vrf_selection_opt = "enable";
-    vlan_vrf_map["Vlan10"] = "Vrf01";
+    interface_vrf_map["Vlan10"] = "Vrf01";
 
     m_config.hostname = "cisco";
     m_config.host_mac_addr = "12:32:54:24:95:36";
@@ -872,13 +871,13 @@ TEST(DHCPRelayTest, to_client) {
 
     relay_config config = {};
     config.phy_interface = "Ethernet12";
-    config.vlan = "Vlan10";
+    config.interface = "Vlan10";
     config.link_selection_opt = "enable";
     config.server_id_override_opt = "enable";
     config.link_address.sin_addr.s_addr = inet_addr("192.168.10.10");
     config.link_address_netmask.sin_addr.s_addr = inet_addr("255.255.255.0");
     config.vrf_selection_opt = "enable";
-    vlan_vrf_map["Vlan10"] = "Vrf01";
+    interface_vrf_map["Vlan10"] = "Vrf01";
 
     m_config.host_mac_addr = "12:32:54:24:95:36";
     vlans["Vlan10"] = config;
@@ -911,9 +910,10 @@ TEST(DHCPRelayTest, from_client) {
 
     relay_config config = {};
     config.phy_interface = "Ethernet12";
-    config.vlan = "Vlan10";
+    config.interface = "Vlan10";
     config.link_selection_opt = "enable";
     config.server_id_override_opt = "enable";
+    config.agent_relay_mode = "append";
     struct sockaddr_in addr = {0};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = inet_addr("192.168.20.100");
@@ -922,7 +922,7 @@ TEST(DHCPRelayTest, from_client) {
     config.link_address.sin_addr.s_addr = inet_addr("192.168.10.10");
     config.link_address_netmask.sin_addr.s_addr = inet_addr("255.255.255.0");
     config.vrf_selection_opt = "enable";
-    vlan_vrf_map["Vlan10"] = "Vrf01";
+    interface_vrf_map["Vlan10"] = "Vrf01";
 
     m_config.host_mac_addr = "12:32:54:24:95:36";
     encode_relay_option(&dhcpLayer, &config);
@@ -936,4 +936,154 @@ TEST(DHCPRelayTest, from_client) {
         return true;
     });
     from_client(&dhcpLayer, config);
+}
+
+TEST(DHCPRelayTest, circuit_id_format_interface_ip) {
+    std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+    pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
+    pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_DISCOVER, clientMac);
+    dhcpLayer.getDhcpHeader()->hops = 1;
+
+    interface_list.push_back("Ethernet12");
+    phy_interface_alias_map["Ethernet12"] = "eth12";
+
+    relay_config config = {};
+    config.phy_interface = "Ethernet12";
+    config.interface = "Vlan10";
+    config.link_address.sin_addr.s_addr = inet_addr("192.168.10.10");
+    config.link_address_netmask.sin_addr.s_addr = inet_addr("255.255.255.0");
+    config.circuit_id_format = "interface_ip";
+
+    m_config.hostname = "cisco";
+    m_config.host_mac_addr = "12:32:54:24:95:36";
+
+    encode_relay_option(&dhcpLayer, &config);
+
+    auto agent_option = dhcpLayer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
+    auto options_ptr = agent_option.getValue();
+    auto agent_option_size = agent_option.getDataSize();
+    EXPECT_NE((uintptr_t)options_ptr, NULL);
+
+    uint8_t circuit_id_len = 0;
+    auto circuit_id_ptr = decode_tlv((const uint8_t *)options_ptr, OPTION82_SUBOPT_CIRCUIT_ID,
+                                 circuit_id_len, agent_option_size);
+    std::string circuit_id((const char*)circuit_id_ptr, circuit_id_len);
+
+    EXPECT_EQ(circuit_id, "192.168.10.10");
+}
+
+TEST(DHCPRelayTest, circuit_id_format_vlan_name) {
+    std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+    pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
+    pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_DISCOVER, clientMac);
+    dhcpLayer.getDhcpHeader()->hops = 1;
+
+    interface_list.push_back("Ethernet12");
+    phy_interface_alias_map["Ethernet12"] = "eth12";
+
+    relay_config config = {};
+    config.phy_interface = "Ethernet12";
+    config.interface = "Vlan10";
+    config.link_address.sin_addr.s_addr = inet_addr("192.168.10.10");
+    config.link_address_netmask.sin_addr.s_addr = inet_addr("255.255.255.0");
+    config.circuit_id_format = "vlan_name";
+
+    m_config.hostname = "cisco";
+    m_config.host_mac_addr = "12:32:54:24:95:36";
+
+    encode_relay_option(&dhcpLayer, &config);
+
+    auto agent_option = dhcpLayer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
+    auto options_ptr = agent_option.getValue();
+    auto agent_option_size = agent_option.getDataSize();
+    EXPECT_NE((uintptr_t)options_ptr, NULL);
+
+    uint8_t circuit_id_len = 0;
+    auto circuit_id_ptr = decode_tlv((const uint8_t *)options_ptr, OPTION82_SUBOPT_CIRCUIT_ID,
+                                 circuit_id_len, agent_option_size);
+    std::string circuit_id((const char*)circuit_id_ptr, circuit_id_len);
+
+    EXPECT_EQ(circuit_id, "Vlan10");
+}
+
+TEST(DHCPRelayTest, circuit_id_format_custom) {
+    std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+    pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
+    pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_DISCOVER, clientMac);
+    dhcpLayer.getDhcpHeader()->hops = 1;
+
+    interface_list.push_back("Ethernet12");
+    phy_interface_alias_map["Ethernet12"] = "eth12";
+
+    relay_config config = {};
+    config.phy_interface = "Ethernet12";
+    config.interface = "Vlan10";
+    config.link_address.sin_addr.s_addr = inet_addr("192.168.10.10");
+    config.link_address_netmask.sin_addr.s_addr = inet_addr("255.255.255.0");
+    config.circuit_id_format = "custom";
+    config.circuit_id = "my-custom-circuit-id";
+
+    m_config.hostname = "cisco";
+    m_config.host_mac_addr = "12:32:54:24:95:36";
+
+    encode_relay_option(&dhcpLayer, &config);
+
+    auto agent_option = dhcpLayer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
+    auto options_ptr = agent_option.getValue();
+    auto agent_option_size = agent_option.getDataSize();
+    EXPECT_NE((uintptr_t)options_ptr, NULL);
+
+    uint8_t circuit_id_len = 0;
+    auto circuit_id_ptr = decode_tlv((const uint8_t *)options_ptr, OPTION82_SUBOPT_CIRCUIT_ID,
+                                 circuit_id_len, agent_option_size);
+    std::string circuit_id((const char*)circuit_id_ptr, circuit_id_len);
+
+    EXPECT_EQ(circuit_id, "my-custom-circuit-id");
+}
+
+TEST(DHCPRelayTest, to_client_with_custom_circuit_id) {
+    pcpp::EthLayer ethLayer(pcpp::MacAddress("00:13:72:25:fa:cd"), pcpp::MacAddress("00:e0:b1:49:39:02"));
+    std::unordered_map<std::string, relay_config> vlans;
+
+    pcpp::IPv4Address srcIp("172.22.178.234");
+    pcpp::IPv4Address dstIp("10.10.8.240");
+    pcpp::IPv4Layer ipLayer(srcIp, dstIp);
+    ipLayer.getIPv4Header()->ipId = htobe16(20370);
+    ipLayer.getIPv4Header()->timeToLive = 128;
+
+    pcpp::UdpLayer udpLayer((uint16_t)67, (uint16_t)67);
+
+    pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
+    pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_OFFER, clientMac);
+    dhcpLayer.getDhcpHeader()->hops = 1;
+    dhcpLayer.getDhcpHeader()->gatewayIpAddress = inet_addr("192.168.10.10");
+
+    /* Add custom circuit ID to the packet */
+    uint8_t buf[256] = {0};
+    std::string custom_circuit_id = "192.168.10.10";
+    auto offset = encode_tlv(buf, OPTION82_SUBOPT_CIRCUIT_ID, custom_circuit_id.length(),
+                             (uint8_t *)custom_circuit_id.c_str());
+    dhcpLayer.addOption(pcpp::DhcpOptionBuilder(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS, buf, offset));
+
+    relay_config config = {};
+    config.interface = "Vlan10";
+    config.link_address.sin_addr.s_addr = inet_addr("192.168.10.10");
+    vlans["Vlan10"] = config;
+
+    /* Populate the circuit_id_vlan_map to simulate the mapping created during from_client */
+    circuit_id_interface_map[custom_circuit_id] = "Vlan10";
+
+    struct ifaddrs *mock_ifaddrs = CreateMockIfaddrs("192.168.10.10", "255.255.255.0", "Vlan10", "192.168.1.2", "Ethernet4");
+    EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_)).WillOnce(DoAll(testing::SetArgPointee<0>(mock_ifaddrs), Return(0)));
+    EXPECT_GLOBAL_CALL(freeifaddrs, freeifaddrs(_)).Times(1);
+
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_,_,_,_,_,_,_)).Times(1).WillOnce([](int sock, uint8_t *buffer,
+                                                                                 struct sockaddr_in server,
+                                                                                 uint32_t n, in_addr giaddr,
+                                                                                 bool is_broadcast, 
+                                                                                 bool is_option82_exist) {
+        return true;
+    });
+    to_client(&dhcpLayer, &vlans, "172.22.178.234");
+    FreeMockIfaddrs(mock_ifaddrs);
 }

@@ -33,9 +33,9 @@ int main(int argc, char *argv[]) {
         }
     }
     try {
-        std::unordered_map<std::string, relay_config> vlans;
-        initialize_swss(vlans);
-        loop_relay(vlans);
+        std::unordered_map<std::string, relay_config> interfaces;
+        initialize_swss(interfaces);
+        loop_relay(interfaces);
     }
     catch (std::exception &e)
     {

@@ -105,7 +105,7 @@ struct relay_config {
     sockaddr_in src_intf_sel_addr;
     uint32_t link_ifindex;
     std::shared_ptr<swss::DBConnector> state_db;
-    std::string vlan;
+    std::string interface;  // Interface name (VLAN or physical port)
     std::string phy_interface;
     std::string vrf;  // This is server VRF.
     std::string source_interface;
@@ -113,6 +113,8 @@ struct relay_config {
     std::string server_id_override_opt;
     std::string vrf_selection_opt;
     std::string agent_relay_mode;
+    std::string circuit_id_format;  // Format for Circuit ID: "default", "interface_ip", "vlan_name", "custom"
+    std::string circuit_id;         // Custom Circuit ID value (used when circuit_id_format is "custom")
     uint8_t max_hop_count = MAX_HOP_COUNT;
     std::vector<std::string> servers;
     std::vector<sockaddr_in> servers_sock;
@@ -190,13 +192,13 @@ int sock_open(const struct sock_fprog *fprog);
 bool addr_is_primary(const std::string &ifname, const struct in_addr *addr);
 
 /**
- * @code                prepare_vlan_sockets(relay_config &config);
+ * @code                prepare_interface_sockets(relay_config &config);
  *
- * @brief               prepare vlan L3 socket for sending
+ * @brief               prepare interface L3 socket for sending (supports both VLANs and physical ports)
  *
  * @return              int
  */
-int prepare_vlan_sockets(relay_config &config);
+int prepare_interface_sockets(relay_config &config);
 
 /**
  * @code                prepare_vrf_sockets(relay_config &config);
@@ -230,14 +232,14 @@ void prepare_relay_interface_config(relay_config &interface_config);
 void prepare_relay_server_config(relay_config &interface_config);
 
 /**
- * @code                loop_relay(std::unordered_map<std::string, relay_config> &vlans);
+ * @code                loop_relay(std::unordered_map<std::string, relay_config> &interfaces);
  *
  * @brief               main loop: configure sockets, create libevent base, start server listener thread
  *
- * @param vlans         list of vlans retrieved from config_db
+ * @param interfaces    list of interfaces (VLANs and physical ports) retrieved from config_db
  * @param state_db      state_db connector
  */
-void loop_relay(std::unordered_map<std::string, relay_config> &vlans);
+void loop_relay(std::unordered_map<std::string, relay_config> &interfaces);
 
 /**
  * @code signal_init();

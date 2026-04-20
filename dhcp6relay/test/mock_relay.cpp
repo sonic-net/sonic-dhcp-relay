@@ -291,7 +291,7 @@ TEST(prepareConfig, prepare_lo_socket)
   EXPECT_EQ(sock, -1);
 }
 
-TEST(prepareConfig, prepare_vlan_sockets)
+TEST(prepareConfig, prepare_interface_sockets)
 {
   struct relay_config config{};
   config.is_option_79 = true;
@@ -309,7 +309,7 @@ TEST(prepareConfig, prepare_vlan_sockets)
   config.state_db = state_db;
 
   int gua_sock = -1, lla_sock = -1;
-  prepare_vlan_sockets(gua_sock, lla_sock, config);
+  prepare_interface_sockets(gua_sock, lla_sock, config);
 
   EXPECT_GE(gua_sock, 0);
   EXPECT_GE(lla_sock, 0);
@@ -661,12 +661,12 @@ TEST(relay, dhcp6relay_stop) {
   ASSERT_NO_THROW(dhcp6relay_stop());
 }
 
-TEST(relay, update_vlan_mapping) {
+TEST(relay, update_interface_mapping) {
   std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
   config_db->hset("VLAN_MEMBER|Vlan1000|Ethernet19", "tagging_mode", "untagged");
   config_db->hset("VLAN_MEMBER|Vlan1000|Ethernet20", "tagging_mode", "untagged");
   std::string vlan = "Vlan1000";
-  update_vlan_mapping(vlan, config_db);
+  update_interface_mapping(vlan, config_db);
 
   auto output = config_db->hget("VLAN_MEMBER|Vlan1000|Ethernet19", "tagging_mode");
   std::string *ptr = output.get();
@@ -811,8 +811,8 @@ TEST(relay, client_callback) {
 
   char ptr[20] = "vlan";
   vlans[vlan1000] = config;
-  vlan_map["Ethernet1"] = vlan1000;
-  vlan_map["Ethernet2"] = vlan2000;
+  interface_map["Ethernet1"] = vlan1000;
+  interface_map["Ethernet2"] = vlan2000;
 
   // negative case testing
   EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(11)
@@ -1097,7 +1097,7 @@ TEST(relay, get_relay_int_from_relay_msg) {
   EXPECT_EQ((uintptr_t)value, NULL);
 
   // valid option18 + valid name mapping + invalid vlan config mapping
-  addr_vlan_map[lla_str] = vlan_str;
+  addr_interface_map[lla_str] = vlan_str;
   value = get_relay_int_from_relay_msg(relay_reply_with_opt18, sizeof(relay_reply_with_opt18), &vlans);
   EXPECT_EQ((uintptr_t)value, NULL);
 
