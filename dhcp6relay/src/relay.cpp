@@ -947,7 +947,7 @@ void client_packet_handler(uint8_t *buffer, ssize_t length, struct relay_config 
         const struct ip6_ext *ext_header;
         do {
             ext_header = (const struct ip6_ext *)current_position;
-            current_position += ext_header->ip6e_len;
+            current_position += (ext_header->ip6e_len + 1) * 8;
             if((current_position == prev) ||
                (current_position + sizeof(*ext_header) >= buffer_end)) {
                 return;
