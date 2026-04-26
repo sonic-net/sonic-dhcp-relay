@@ -83,6 +83,39 @@ void DHCPMgr::handle_swss_notification() {
     swss_select.addSelectable(&config_db_dpu_table);
     swss_select.addSelectable(&state_db_interface_table);
 
+    /*
+     * Push the initial DHCPV4_RELAY snapshot down config_pipe, then
+     * a DHCPv4_RELAY_SYNC_BARRIER as the last event. pops() returns
+     * synchronously because SubscriberStateTable cached the existing
+     * keys at construction time. The main thread predrains the pipe
+     * up to the barrier before arming pkt_in_callback; without this,
+     * packets arriving during startup hit an empty vlans map and
+     * produce a per-packet 'Config not found for vlan' ERR.
+     */
+    {
+        std::deque<swss::KeyOpFieldsValuesTuple> initial_entries;
+        config_db_relaymgr_table_ptr->pops(initial_entries);
+        if (!initial_entries.empty()) {
+            syslog(LOG_INFO,
+                   "[DHCPV4_RELAY] Loading initial DHCPV4_RELAY snapshot: %zu entries",
+                   initial_entries.size());
+            process_relay_notification(initial_entries);
+        } else {
+            syslog(LOG_INFO,
+                   "[DHCPV4_RELAY] No DHCPV4_RELAY entries present at startup");
+        }
+
+        event_config barrier_event{};
+        barrier_event.type = DHCPv4_RELAY_SYNC_BARRIER;
+        barrier_event.msg = nullptr;
+        if (write(config_pipe[1], &barrier_event, sizeof(barrier_event))
+                != static_cast<ssize_t>(sizeof(barrier_event))) {
+            syslog(LOG_ERR,
+                   "[DHCPV4_RELAY] Failed to write sync barrier to config pipe: %s",
+                   strerror(errno));
+        }
+    }
+
     while (!stop_thread) {
         swss::Selectable *selectable;
         int ret = swss_select.select(&selectable, DEFAULT_TIMEOUT_MSEC);
