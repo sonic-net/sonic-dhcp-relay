@@ -937,3 +937,100 @@ TEST(DHCPRelayTest, from_client) {
     });
     from_client(&dhcpLayer, config);
 }
+
+/* Helper: build a relay-of-relay packet (giaddr already set) with a pre-existing Option 82. */
+static relay_config make_relay_of_relay_config(const std::string &agent_relay_mode) {
+    interface_list.push_back("Ethernet12");
+    phy_interface_alias_map["Ethernet12"] = "eth12";
+
+    relay_config config = {};
+    config.phy_interface = "Ethernet12";
+    config.vlan = "Vlan10";
+    config.agent_relay_mode = agent_relay_mode;
+    config.max_hop_count = 16;
+    struct sockaddr_in addr = {0};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = inet_addr("192.168.20.100");
+    config.servers_sock = {addr};
+    config.servers = {"192.168.20.100"};
+    config.link_address.sin_addr.s_addr = inet_addr("192.168.10.10");
+    config.link_address_netmask.sin_addr.s_addr = inet_addr("255.255.255.0");
+    vlan_vrf_map["Vlan10"] = "Vrf01";
+    m_config.host_mac_addr = "12:32:54:24:95:36";
+    return config;
+}
+
+/* agent_relay_mode=append: packet already has Option 82; we should append ours and forward. */
+TEST(DHCPRelayTest, from_client_relay_of_relay_append) {
+    relay_config config = make_relay_of_relay_config("append");
+
+    pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
+    pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_DISCOVER, clientMac);
+    dhcpLayer.getDhcpHeader()->hops = 0;
+    /* Non-zero giaddr signals relay-of-relay path */
+    dhcpLayer.getDhcpHeader()->gatewayIpAddress = inet_addr("192.168.1.1");
+    encode_relay_option(&dhcpLayer, &config);
+
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).WillOnce([]
+            (int, uint8_t* hdr, struct sockaddr_in, uint32_t, in_addr, bool, bool) {
+        pcpp::dhcp_header* dhcp_hdr = (pcpp::dhcp_header*)hdr;
+        EXPECT_EQ(dhcp_hdr->hops, 1);
+        EXPECT_EQ(dhcp_hdr->gatewayIpAddress, inet_addr("192.168.1.1"));
+        return true;
+    });
+    from_client(&dhcpLayer, config);
+}
+
+/* agent_relay_mode=replace: existing Option 82 stripped, ours added, packet forwarded. */
+TEST(DHCPRelayTest, from_client_relay_of_relay_replace) {
+    relay_config config = make_relay_of_relay_config("replace");
+
+    pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
+    pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_DISCOVER, clientMac);
+    dhcpLayer.getDhcpHeader()->hops = 0;
+    dhcpLayer.getDhcpHeader()->gatewayIpAddress = inet_addr("192.168.1.1");
+    encode_relay_option(&dhcpLayer, &config);
+
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).WillOnce([]
+            (int, uint8_t* hdr, struct sockaddr_in, uint32_t, in_addr, bool, bool) {
+        pcpp::dhcp_header* dhcp_hdr = (pcpp::dhcp_header*)hdr;
+        EXPECT_EQ(dhcp_hdr->hops, 1);
+        EXPECT_EQ(dhcp_hdr->gatewayIpAddress, inet_addr("192.168.1.1"));
+        return true;
+    });
+    from_client(&dhcpLayer, config);
+}
+
+/* agent_relay_mode=forward: packet forwarded unchanged, Option 82 not modified. */
+TEST(DHCPRelayTest, from_client_relay_of_relay_forward) {
+    relay_config config = make_relay_of_relay_config("forward");
+
+    pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
+    pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_DISCOVER, clientMac);
+    dhcpLayer.getDhcpHeader()->hops = 0;
+    dhcpLayer.getDhcpHeader()->gatewayIpAddress = inet_addr("192.168.1.1");
+    encode_relay_option(&dhcpLayer, &config);
+
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).WillOnce([]
+            (int, uint8_t* hdr, struct sockaddr_in, uint32_t, in_addr, bool, bool) {
+        pcpp::dhcp_header* dhcp_hdr = (pcpp::dhcp_header*)hdr;
+        EXPECT_EQ(dhcp_hdr->hops, 1);
+        EXPECT_EQ(dhcp_hdr->gatewayIpAddress, inet_addr("192.168.1.1"));
+        return true;
+    });
+    from_client(&dhcpLayer, config);
+}
+
+/* agent_relay_mode=discard: packet must be dropped, send_udp must NOT be called. */
+TEST(DHCPRelayTest, from_client_relay_of_relay_discard) {
+    relay_config config = make_relay_of_relay_config("discard");
+
+    pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
+    pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_DISCOVER, clientMac);
+    dhcpLayer.getDhcpHeader()->hops = 0;
+    dhcpLayer.getDhcpHeader()->gatewayIpAddress = inet_addr("192.168.1.1");
+    encode_relay_option(&dhcpLayer, &config);
+
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).Times(0);
+    from_client(&dhcpLayer, config);
+}
