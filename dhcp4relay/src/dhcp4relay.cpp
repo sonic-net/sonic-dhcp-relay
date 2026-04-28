@@ -591,17 +591,20 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
     } else {
         /* If the relay packet is from another relay, we should act based on
            configuration of agent_relay_mode.
-           append - Forward the packet with appending relay agent.
-           replace - Delete existing option 82 and add my relay option.
-           discard - Discard the incoming packet.
+           append  - Forward the packet with appending our own relay option.
+           replace - Delete existing option 82 and add our relay option.
+           forward - Forward the packet unchanged (no Option 82 modification).
+           discard - Discard the incoming packet (default).
          */
         if (config.agent_relay_mode == "append") {
             encode_relay_option(dhcp_pkt, &config);
         } else if (config.agent_relay_mode == "replace") {
             dhcp_pkt->removeOption(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
             encode_relay_option(dhcp_pkt, &config);
+        } else if (config.agent_relay_mode == "forward") {
+            /* forward_untouched: pass through without modifying Option 82 */
         } else {
-            /* By default it will discard packet from relay agent */
+            /* discard: explicit "discard" value or any unrecognized value */
             dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
             syslog(LOG_INFO, "[DHCPV4_RELAY] agent relay mode is discard, dropping the packet %s",
                    config.vlan.c_str());
