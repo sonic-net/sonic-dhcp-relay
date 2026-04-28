@@ -864,7 +864,7 @@ void update_vlan_mapping(std::string vlan, bool is_add) {
     if (is_add) {
         std::string value;
         std::shared_ptr<swss::Table> vlan_intf_tbl = std::make_shared<swss::Table>(config_db.get(), CFG_VLAN_INTF_TABLE_NAME);
-        vlan_intf_tbl->hget(vlan, "vrf_name", value);
+        vlan_intf_tbl->hget(vlan, VRF_NAME_FIELD, value);
         if (value.size() <= 0) {
             /* use default instance as vrf */
             vlan_vrf_map[vlan] = "default";
@@ -1337,7 +1337,7 @@ void config_event_callback(evutil_socket_t fd, short event, void *arg) {
                    std::string value;
                    std::shared_ptr<swss::Table> dhcp_relay_tbl = std::make_shared<swss::Table>(config_db.get(),
                                                                     "DHCPV4_RELAY");
-                   dhcp_relay_tbl->hget((msg->vlan), "server_vrf", value);
+                   dhcp_relay_tbl->hget((msg->vlan), SERVER_VRF_FIELD, value);
                    if ((msg->vrf.empty()) || (value.length() != 0)) {
                        return;
                    }
@@ -1381,7 +1381,7 @@ void config_event_callback(evutil_socket_t fd, short event, void *arg) {
                         std::string value;
 
                         // Check for the presence of specific keys
-                        v4_relay_intf_tbl->hget(vlan.second.vlan, "link_selection", value);
+                        v4_relay_intf_tbl->hget(vlan.second.vlan, LINK_SELECTION_FIELD, value);
                         // Check if "link_selection" is present
                         if (value.length() > 0) {
                             // Fetch the value of "link_selection" from the database
@@ -1391,7 +1391,7 @@ void config_event_callback(evutil_socket_t fd, short event, void *arg) {
                             vlan.second.link_selection_opt.clear();
                         }
 
-                        v4_relay_intf_tbl->hget(vlan.second.vlan, "source_interface", value);
+                        v4_relay_intf_tbl->hget(vlan.second.vlan, SOURCE_INTERFACE_FIELD, value);
                         // Check if "source_interface" is present
                         if (value.length() > 0) {
                             // Fetch the value of "source_interface" from the database

@@ -27,6 +27,11 @@
 #define DHCPv4_OPTION_LIMIT 255
 #define RAWSOCKET_RECV_SIZE 1048576
 #define CLIENT_IF_PREFIX "Ethernet"
+#define VRF_NAME_FIELD "vrf_name"  // typo "vrf" caused VRF-update miss; field is "vrf_name"
+#define SERVER_VRF_FIELD "server_vrf"
+#define SOURCE_INTERFACE_FIELD "source_interface"
+#define LINK_SELECTION_FIELD "link_selection"
+#define STATE_FIELD "state"
 #define BUFFER_SIZE 9200        // TODO: change to dynamic size based on MTU
 #define MAX_DHCP_PKT_SIZE 1472  // 1500 - (IP + UDP)headers
 #define MAC_ADDR_STR_LEN 17
