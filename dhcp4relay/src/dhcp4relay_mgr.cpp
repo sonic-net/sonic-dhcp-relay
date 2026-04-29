@@ -1,6 +1,7 @@
 #include "dhcp4relay_mgr.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <sstream>
 constexpr auto DEFAULT_TIMEOUT_MSEC = 1000;
 
@@ -111,8 +112,9 @@ void DHCPMgr::handle_swss_notification() {
         if (write(config_pipe[1], &barrier_event, sizeof(barrier_event))
                 != static_cast<ssize_t>(sizeof(barrier_event))) {
             syslog(LOG_ERR,
-                   "[DHCPV4_RELAY] Failed to write sync barrier to config pipe: %s",
+                   "[DHCPV4_RELAY] Failed to write sync barrier to config pipe: %s; exiting to avoid startup hang",
                    strerror(errno));
+            exit(EXIT_FAILURE);
         }
     }
 
