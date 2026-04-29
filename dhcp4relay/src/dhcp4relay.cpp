@@ -3,6 +3,7 @@
 #include <event2/bufferevent.h>
 #include <event2/event.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <pcapplusplus/DhcpLayer.h>
 #include <pcapplusplus/EthLayer.h>
 #include <pcapplusplus/IPv4Layer.h>
@@ -1210,12 +1211,14 @@ void delete_all_relay_configs(std::unordered_map<std::string, relay_config> *vla
    }
 }
 
-void config_event_callback(evutil_socket_t fd, short event, void *arg) {
-    std::unordered_map<std::string, relay_config> *vlans = static_cast<std::unordered_map<std::string, relay_config> *>(arg);
-    event_config received_event;
-    ssize_t bytes_read = read(fd, &received_event, sizeof(received_event));
-
-    if (bytes_read == sizeof(received_event)) {
+/*
+ * Apply one CONFIG_DB-derived event to the vlans map. Used both from
+ * config_event_callback during normal operation and from loop_relay's
+ * predrain that consumes the initial DHCPV4_RELAY snapshot before
+ * pkt_in_callback is armed.
+ */
+static void apply_config_event(const event_config &received_event,
+                               std::unordered_map<std::string, relay_config> *vlans) {
 	    //Do not update the relay configs if dhcp_server is enabled
         if (((received_event.type == DHCPv4_RELAY_CONFIG_UPDATE) && !feature_dhcp_server_enabled) ||
 	   (received_event.type == DHCPv4_SERVER_RELAY_CONFIG_UPDATE))	{
@@ -1424,6 +1427,20 @@ void config_event_callback(evutil_socket_t fd, short event, void *arg) {
                    delete port_msg;
                }
         }
+    }
+
+void config_event_callback(evutil_socket_t fd, short event, void *arg) {
+    std::unordered_map<std::string, relay_config> *vlans = static_cast<std::unordered_map<std::string, relay_config> *>(arg);
+    event_config received_event;
+    ssize_t bytes_read = read(fd, &received_event, sizeof(received_event));
+
+    if (bytes_read == sizeof(received_event)) {
+        /* Barriers are consumed synchronously by predrain/handshake call sites
+         * before libevent runs them; if one ever reaches us here, drop it. */
+        if (received_event.type == DHCPv4_RELAY_SYNC_BARRIER) {
+            return;
+        }
+        apply_config_event(received_event, vlans);
     } else {
         syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to read config update: expected %lu bytes, got %zd bytes", sizeof(received_event), bytes_read);
     }
@@ -1474,7 +1491,8 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
     // Set the read-end of the pipe to non-blocking mode
     fcntl(config_pipe[0], F_SETFL, O_NONBLOCK);
 
-    // Add the pipe to libevent for async config updates
+    // Create (but do not yet arm) the libevent for async config updates.
+    // It is event_add()'d after the predrain.
     struct event *config_event = event_new(base, config_pipe[0], EV_READ | EV_PERSIST,
                                            config_event_callback, reinterpret_cast<void *>(&vlans));
     if (!config_event) {
@@ -1482,21 +1500,21 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
         exit(EXIT_FAILURE);
     }
 
-    event_add(config_event, NULL);
-    syslog(LOG_INFO, "[DHCPV4_RELAY] Added event listener for config updates");
-
-    /* Open a socket with dhcp port, protocol filter */
+    /* Open the raw DHCP packet socket and create the libevent for it,
+     * but do NOT event_add() yet. The packet socket is open at the
+     * kernel level immediately, so any DHCP packets that arrive during
+     * the predrain queue in the kernel socket buffer and are dispatched
+     * later, against an already-populated vlans map. */
     auto filter = sock_open(&ether_relay_fprog);
+    struct event *pkt_event = nullptr;
     if (filter != -1) {
-        /* Register to the callbck func when there is new packet to the socket from client */
-        auto event = event_new(base, filter, EV_READ | EV_PERSIST, pkt_in_callback,
-                               reinterpret_cast<void *>(&vlans));
-        if (event == NULL) {
+        pkt_event = event_new(base, filter, EV_READ | EV_PERSIST, pkt_in_callback,
+                              reinterpret_cast<void *>(&vlans));
+        if (pkt_event == NULL) {
             syslog(LOG_ERR, "[DHCPV4_RELAY] libevent: Failed to create client listen event\n");
             exit(EXIT_FAILURE);
         }
-        event_add(event, NULL);
-        syslog(LOG_INFO, "[DHCPV4_RELAY] libevent: Add client listen socket event\n");
+        syslog(LOG_INFO, "[DHCPV4_RELAY] libevent: Created client listen socket event (deferred)\n");
     } else {
         syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to create client listen socket");
         exit(EXIT_FAILURE);
@@ -1507,6 +1525,32 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
 
     // Start thread for listening of config DB updates
     dhcp_mgr.initialize_config_listener();
+
+    /*
+     * Predrain config_pipe up to the SYNC_BARRIER before arming
+     * pkt_event, so packets aren't dispatched against an empty vlans
+     * map. libevent's select()/epoll() doesn't order across fds, so
+     * this has to happen on the main thread before the libevent loop
+     * starts -- doing it from inside config_event_callback can't
+     * guarantee config-before-packets.
+     */
+    {
+        event_config ev;
+        struct pollfd pfd{config_pipe[0], POLLIN, 0};
+        while (poll(&pfd, 1, -1) > 0 &&
+               read(config_pipe[0], &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
+            if (ev.type == DHCPv4_RELAY_SYNC_BARRIER) break;
+            apply_config_event(ev, &vlans);
+        }
+    }
+
+    // Arm the pipe and packet libevents now. Order is not strictly
+    // important post-drain, but pipe-first matches the natural
+    // 'config-before-packets' intent.
+    event_add(config_event, NULL);
+    syslog(LOG_INFO, "[DHCPV4_RELAY] Added event listener for config updates");
+    event_add(pkt_event, NULL);
+    syslog(LOG_INFO, "[DHCPV4_RELAY] libevent: Add client listen socket event\n");
 
     if (signal_init() == 0 && signal_start() == 0) {
         shutdown_relay();
