@@ -38,4 +38,5 @@ class DHCPMgr {
     void process_dhcp_server_ipv4_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
     void process_vlan_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
     void process_port_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
+    void process_vxlan_tunnel_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
 };
