@@ -109,7 +109,6 @@ struct relay_config {
     sockaddr_in link_address_netmask;
     sockaddr_in src_intf_sel_addr;
     uint32_t link_ifindex;
-    std::shared_ptr<swss::DBConnector> state_db;
     std::string vlan;
     std::string phy_interface;
     std::string vrf;  // This is server VRF.
@@ -123,7 +122,6 @@ struct relay_config {
     std::vector<sockaddr_in> servers_sock;
     bool is_interface_id;
     bool is_add;
-    std::shared_ptr<swss::DBConnector> config_db;
 };
 
 typedef enum {
