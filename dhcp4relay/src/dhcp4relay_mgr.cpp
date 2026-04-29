@@ -389,11 +389,11 @@ void DHCPMgr::process_relay_notification(std::deque<swss::KeyOpFieldsValuesTuple
                         getline(ss, substr, ',');
                         relay_msg->servers.push_back(substr);
                     }
-                } else if (f == "server_vrf") {
+                } else if (f == SERVER_VRF_FIELD) {
                     relay_msg->vrf = v;
-                } else if (f == "source_interface") {
+                } else if (f == SOURCE_INTERFACE_FIELD) {
                     relay_msg->source_interface = v;
-                } else if (f == "link_selection") {
+                } else if (f == LINK_SELECTION_FIELD) {
                     relay_msg->link_selection_opt = v;
                 } else if (f == "server_id_override") {
                     relay_msg->server_id_override_opt = v;
@@ -412,7 +412,7 @@ void DHCPMgr::process_relay_notification(std::deque<swss::KeyOpFieldsValuesTuple
                 std::string value;
                 std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector>("CONFIG_DB", 0);
                 std::shared_ptr<swss::Table> vlan_intf_tbl = std::make_shared<swss::Table>(config_db.get(), CFG_VLAN_INTF_TABLE_NAME);
-                vlan_intf_tbl->hget(vlan, "vrf_name", value);
+                vlan_intf_tbl->hget(vlan, VRF_NAME_FIELD, value);
                 if (value.size() <= 0) {
                     relay_msg->vrf = "default";
                 } else {
@@ -474,7 +474,7 @@ void DHCPMgr::process_feature_notification(std::deque<swss::KeyOpFieldsValuesTup
 
         std::string state;
         for (auto &field : kfvFieldsValues(entry)) {
-            if (fvField(field) == "state") {
+            if (fvField(field) == STATE_FIELD) {
                 state = fvValue(field);
                 break;
             }
@@ -666,7 +666,7 @@ void DHCPMgr::process_vlan_interface_notification(std::deque<swss::KeyOpFieldsVa
              vlan = key;
              vrf = "default";
              for (auto &fv : kfvFieldsValues(entry)) {
-                 if (fvField(fv) == "vrf") {
+                 if (fvField(fv) == VRF_NAME_FIELD) {
                      vrf = fvValue(fv);
                      break;
                  }
@@ -739,7 +739,7 @@ void DHCPMgr::process_dhcp_server_ipv4_notification(std::deque<swss::KeyOpFields
         if (operation == "SET") {
             std::string state;
             for (auto &fv : kfvFieldsValues(entry)) {
-                 if (fvField(fv) == "state") {
+                 if (fvField(fv) == STATE_FIELD) {
                      state = fvValue(fv);
                      break;
                  }

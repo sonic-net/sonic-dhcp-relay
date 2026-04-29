@@ -592,17 +592,20 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
     } else {
         /* If the relay packet is from another relay, we should act based on
            configuration of agent_relay_mode.
-           append - Forward the packet with appending relay agent.
-           replace - Delete existing option 82 and add my relay option.
-           discard - Discard the incoming packet.
+           append  - Forward the packet with appending our own relay option.
+           replace - Delete existing option 82 and add our relay option.
+           forward - Forward the packet unchanged (no Option 82 modification).
+           discard - Discard the incoming packet (default).
          */
         if (config.agent_relay_mode == "append") {
             encode_relay_option(dhcp_pkt, &config);
         } else if (config.agent_relay_mode == "replace") {
             dhcp_pkt->removeOption(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
             encode_relay_option(dhcp_pkt, &config);
+        } else if (config.agent_relay_mode == "forward") {
+            /* forward_untouched: pass through without modifying Option 82 */
         } else {
-            /* By default it will discard packet from relay agent */
+            /* discard: explicit "discard" value or any unrecognized value */
             dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
             syslog(LOG_INFO, "[DHCPV4_RELAY] agent relay mode is discard, dropping the packet %s",
                    config.vlan.c_str());
@@ -862,7 +865,7 @@ void update_vlan_mapping(std::string vlan, bool is_add) {
     if (is_add) {
         std::string value;
         std::shared_ptr<swss::Table> vlan_intf_tbl = std::make_shared<swss::Table>(config_db.get(), CFG_VLAN_INTF_TABLE_NAME);
-        vlan_intf_tbl->hget(vlan, "vrf_name", value);
+        vlan_intf_tbl->hget(vlan, VRF_NAME_FIELD, value);
         if (value.size() <= 0) {
             /* use default instance as vrf */
             vlan_vrf_map[vlan] = "default";
@@ -1337,7 +1340,7 @@ static void apply_config_event(const event_config &received_event,
                    std::string value;
                    std::shared_ptr<swss::Table> dhcp_relay_tbl = std::make_shared<swss::Table>(config_db.get(),
                                                                     "DHCPV4_RELAY");
-                   dhcp_relay_tbl->hget((msg->vlan), "server_vrf", value);
+                   dhcp_relay_tbl->hget((msg->vlan), SERVER_VRF_FIELD, value);
                    if ((msg->vrf.empty()) || (value.length() != 0)) {
                        return;
                    }
@@ -1381,7 +1384,7 @@ static void apply_config_event(const event_config &received_event,
                         std::string value;
 
                         // Check for the presence of specific keys
-                        v4_relay_intf_tbl->hget(vlan.second.vlan, "link_selection", value);
+                        v4_relay_intf_tbl->hget(vlan.second.vlan, LINK_SELECTION_FIELD, value);
                         // Check if "link_selection" is present
                         if (value.length() > 0) {
                             // Fetch the value of "link_selection" from the database
@@ -1391,7 +1394,7 @@ static void apply_config_event(const event_config &received_event,
                             vlan.second.link_selection_opt.clear();
                         }
 
-                        v4_relay_intf_tbl->hget(vlan.second.vlan, "source_interface", value);
+                        v4_relay_intf_tbl->hget(vlan.second.vlan, SOURCE_INTERFACE_FIELD, value);
                         // Check if "source_interface" is present
                         if (value.length() > 0) {
                             // Fetch the value of "source_interface" from the database
