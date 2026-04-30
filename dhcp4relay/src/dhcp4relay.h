@@ -135,7 +135,16 @@ typedef enum {
     DHCPv4_SERVER_IP_UPDATE,
     DHCPv4_SERVER_IP_DELETE,
     DHCPv4_RELAY_DUAL_TOR_UPDATE,
-    DHCPv4_RELAY_PORT_UPDATE
+    DHCPv4_RELAY_PORT_UPDATE,
+    /*
+     * General-purpose main<->mgr synchronisation barrier on
+     * config_pipe. The mgr thread emits one to mark a coherent
+     * point in the event stream; the main thread blocks until it
+     * consumes one. Currently used to gate pkt_in_callback on the
+     * initial DHCPV4_RELAY snapshot. Reusable for Redis-reconnect
+     * resync, atomic config replace, etc.
+     */
+    DHCPv4_RELAY_SYNC_BARRIER
 } event_type;
 
 struct event_config {
