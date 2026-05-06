@@ -333,8 +333,11 @@ TEST(relayConfig, handle_interface_events) {
                      .Times(AtLeast(1))
                      .WillRepeatedly(Invoke(RealWrite));
     ASSERT_NE(pipe(pipe_fds), -1);
-    relay_config *config = new relay_config();
+
     std::unordered_map<std::string, relay_config> vlans;
+    vlans["Vlan100"].vlan = "Vlan100";
+
+    relay_config *config = new relay_config();
     config->vlan = "Vlan100";
     config->is_add = true;
     config->src_intf_sel_addr.sin_family = AF_INET;
@@ -370,8 +373,41 @@ TEST(relayConfig, handle_interface_events) {
     close(pipe_fds[1]);
 }
 
-TEST(relayConfig, handle_vlan_member_events) {
+TEST(relayConfig, handle_interface_events_unknown_vlan) {
     int pipe_fds[2];
+    EXPECT_GLOBAL_CALL(write, write(_, _, _))
+                     .Times(AtLeast(1))
+                     .WillRepeatedly(Invoke(RealWrite));
+    ASSERT_NE(pipe(pipe_fds), -1);
+
+    std::unordered_map<std::string, relay_config> vlans;
+
+    relay_config *config = new relay_config();
+    config->vlan = "Vlan999";
+    config->is_add = true;
+    config->src_intf_sel_addr.sin_family = AF_INET;
+    config->src_intf_sel_addr.sin_addr.s_addr = inet_addr("10.0.0.1");
+
+    event_config event;
+    event.type = DHCPv4_RELAY_INTERFACE_UPDATE;
+    event.msg = static_cast<void *>(config);
+
+    ASSERT_NE(write(pipe_fds[1], &event, sizeof(event)), -1);
+
+    config_event_callback(pipe_fds[0], 0, &vlans);
+
+    EXPECT_TRUE(vlans.find("Vlan999") == vlans.end());
+
+    close(pipe_fds[0]);
+    close(pipe_fds[1]);
+}
+
+TEST(relayConfig, handle_vlan_member_events) {
+    struct ifaddrs *mock_ifaddrs = CreateMockIfaddrs("192.168.1.1", "255.255.255.0", "Vlan100", "192.168.1.2", "Ethernet4");
+    int pipe_fds[2];
+    EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_))
+        .WillRepeatedly(DoAll(testing::SetArgPointee<0>(mock_ifaddrs), Return(0)));
+    EXPECT_GLOBAL_CALL(freeifaddrs, freeifaddrs(_)).Times(AtLeast(2));
     EXPECT_GLOBAL_CALL(write, write(_, _, _))
                      .Times(AtLeast(1))
                      .WillRepeatedly(Invoke(RealWrite));
@@ -417,6 +453,7 @@ TEST(relayConfig, handle_vlan_member_events) {
 
     close(pipe_fds[0]);
     close(pipe_fds[1]);
+    FreeMockIfaddrs(mock_ifaddrs);
 }
 
 TEST(relayConfig, handle_vlan_interface_events) {

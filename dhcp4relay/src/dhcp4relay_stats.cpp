@@ -73,7 +73,12 @@ void update_interface_counters_in_db(
 
     // Populate existing counters
     for (const auto& field : existing_fields) {
-        counter_map[fvField(field)] = std::stoi(fvValue(field));
+        try {
+            counter_map[fvField(field)] = std::stoi(fvValue(field));
+        } catch (const std::exception &e) {
+            syslog(LOG_WARNING, "[DHCPV4_RELAY] update_interface_counters_in_db: invalid counter value '%s' for field '%s': %s\n",
+                   fvValue(field).c_str(), fvField(field).c_str(), e.what());
+        }
     }
 
     // Update with new values
@@ -198,12 +203,26 @@ void DHCPCounter_table::initialize_interface(const std::string& interface) {
 void DHCPCounter_table::increment_counter(const std::string& interface,
                                         const std::string& direction,
                                         int msg_type) {
-    std::string type = counter_map.find(msg_type)->second;
-    // Initialize counters if not present
-    if (interfaces_cntr_table.find(interface) == interfaces_cntr_table.end())
-        DHCPCounter_table::initialize_interface(interface);
+    auto type_itr = counter_map.find(msg_type);
+    if (type_itr == counter_map.end()) {
+        syslog(LOG_WARNING, "[DHCPV4_RELAY] increment_counter: unknown msg_type %d, counting as Unknown\n", msg_type);
+        type_itr = counter_map.find(DHCPv4_MESSAGE_TYPE_UNKNOWN);
+        if (type_itr == counter_map.end()) {
+            return;
+        }
+    }
+    const std::string &type = type_itr->second;
 
     std::lock_guard<std::mutex> lock(interfaces_mutex);
+
+    if (interfaces_cntr_table.find(interface) == interfaces_cntr_table.end()) {
+        DHCPCounters counter;
+        for (const auto& t : counter_map) {
+            counter.RX[t.second] = 0;
+            counter.TX[t.second] = 0;
+        }
+        interfaces_cntr_table[interface] = counter;
+    }
 
     if (direction == "RX") {
         interfaces_cntr_table[interface].RX[type]++;

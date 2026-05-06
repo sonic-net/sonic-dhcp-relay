@@ -217,7 +217,11 @@ void DHCPMgr::process_device_metadata_notification(std::deque<swss::KeyOpFieldsV
                 std::transform(v.begin(), v.end(), v.begin(), ::tolower);
 		m_config.host_mac_addr = v;
             } else if (f == "deployment_id") {
-		m_config.deployment_id = static_cast<uint32_t>(std::stoul(v));
+                try {
+                    m_config.deployment_id = static_cast<uint32_t>(std::stoul(v));
+                } catch (const std::exception &e) {
+                    syslog(LOG_WARNING, "[DHCPV4_RELAY] Invalid deployment_id value '%s': %s\n", v.c_str(), e.what());
+                }
             } else if (f == "subtype") {
                 subtype_found = true;
                 subtype_value = v;
@@ -404,7 +408,12 @@ void DHCPMgr::process_relay_notification(std::deque<swss::KeyOpFieldsValuesTuple
                 } else if (f == "agent_relay_mode") {
                     relay_msg->agent_relay_mode = v;
                 } else if (f == "max_hop_count") {
-                    relay_msg->max_hop_count = static_cast<uint8_t>(std::stoi(v));
+                    try {
+                        relay_msg->max_hop_count = static_cast<uint8_t>(std::stoi(v));
+                    } catch (const std::exception &e) {
+                        syslog(LOG_WARNING, "[DHCPV4_RELAY] Invalid max_hop_count value '%s' for VLAN %s: %s\n",
+                               v.c_str(), vlan.c_str(), e.what());
+                    }
                 }
                 syslog(LOG_DEBUG, "[DHCPV4_RELAY] key: %s, Operation: %s, f: %s, v: %s", vlan.c_str(), operation.c_str(), f.c_str(), v.c_str());
             }
@@ -433,6 +442,7 @@ void DHCPMgr::process_relay_notification(std::deque<swss::KeyOpFieldsValuesTuple
 
         if (relay_msg->servers.empty() && operation != "DEL") {
             syslog(LOG_WARNING, "[DHCPV4_RELAY] No servers found for VLAN %s, skipping configuration.", vlan.c_str());
+            delete relay_msg;
             continue;
         }
         syslog(LOG_INFO, "[DHCPV4_RELAY] %s %s relay config\n", operation.c_str(), vlan.c_str());
@@ -759,6 +769,7 @@ void DHCPMgr::process_dhcp_server_ipv4_notification(std::deque<swss::KeyOpFields
                      syslog(LOG_INFO, "[DHCPV4_RELAY] Fetched DHCPv4 server IP from STATE_DB: %s", ip.c_str());
                   } else {
                      syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to get DHCPv4 server IP from STATE_DB");
+                     delete relay_msg;
                      continue;
                   }
               }
