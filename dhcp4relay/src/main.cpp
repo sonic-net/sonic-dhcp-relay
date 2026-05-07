@@ -1,5 +1,5 @@
 #include <stdlib.h>
-#include <syslog.h>
+#include "logger.h"
 
 #include <unordered_map>
 
@@ -9,11 +9,12 @@ bool dual_tor_sock = false;
 char loopback[IF_NAMESIZE] = "Loopback0";
 
 int main(int argc, char *argv[]) {
+    swss::Logger::linkToDbNative("dhcp4relay");
     try {
         std::unordered_map<std::string, relay_config> vlans;
         loop_relay(vlans);
     } catch (std::exception &e) {
-        syslog(LOG_ERR, "An exception occurred.\n");
+        SWSS_LOG_ERROR("An exception occurred.");
         return 1;
     }
     return 0;

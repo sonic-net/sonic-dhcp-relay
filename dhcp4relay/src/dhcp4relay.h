@@ -9,7 +9,7 @@
 #include <netinet/if_ether.h>
 #include <netinet/ip.h>
 #include <netinet/udp.h>
-#include <syslog.h>
+#include "logger.h"
 
 #include <map>
 #include <string>

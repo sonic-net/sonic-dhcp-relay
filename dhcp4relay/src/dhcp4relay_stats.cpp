@@ -76,7 +76,7 @@ void update_interface_counters_in_db(
         try {
             counter_map[fvField(field)] = std::stoi(fvValue(field));
         } catch (const std::exception &e) {
-            syslog(LOG_WARNING, "[DHCPV4_RELAY] update_interface_counters_in_db: invalid counter value '%s' for field '%s': %s\n",
+            SWSS_LOG_WARN("[DHCPV4_RELAY] update_interface_counters_in_db: invalid counter value '%s' for field '%s': %s",
                    fvValue(field).c_str(), fvField(field).c_str(), e.what());
         }
     }
@@ -140,7 +140,7 @@ void DHCPCounter_table::db_update_loop() {
                 }
             }
         }
-        syslog(LOG_INFO, "DHCPV4_RELAY: DHCPCounter_table::db_update_loop() : Data Updated to DB \n");
+        SWSS_LOG_INFO("DHCPV4_RELAY: DHCPCounter_table::db_update_loop() : Data Updated to DB ");
     }
 }
 
@@ -205,7 +205,7 @@ void DHCPCounter_table::increment_counter(const std::string& interface,
                                         int msg_type) {
     auto type_itr = counter_map.find(msg_type);
     if (type_itr == counter_map.end()) {
-        syslog(LOG_WARNING, "[DHCPV4_RELAY] increment_counter: unknown msg_type %d, counting as Unknown\n", msg_type);
+        SWSS_LOG_WARN("[DHCPV4_RELAY] increment_counter: unknown msg_type %d, counting as Unknown", msg_type);
         type_itr = counter_map.find(DHCPv4_MESSAGE_TYPE_UNKNOWN);
         if (type_itr == counter_map.end()) {
             return;

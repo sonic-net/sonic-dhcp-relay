@@ -97,13 +97,11 @@ void DHCPMgr::handle_swss_notification() {
         std::deque<swss::KeyOpFieldsValuesTuple> initial_entries;
         config_db_relaymgr_table_ptr->pops(initial_entries);
         if (!initial_entries.empty()) {
-            syslog(LOG_INFO,
-                   "[DHCPV4_RELAY] Loading initial DHCPV4_RELAY snapshot: %zu entries",
+            SWSS_LOG_INFO("[DHCPV4_RELAY] Loading initial DHCPV4_RELAY snapshot: %zu entries",
                    initial_entries.size());
             process_relay_notification(initial_entries);
         } else {
-            syslog(LOG_INFO,
-                   "[DHCPV4_RELAY] No DHCPV4_RELAY entries present at startup");
+            SWSS_LOG_INFO("[DHCPV4_RELAY] No DHCPV4_RELAY entries present at startup");
         }
 
         event_config barrier_event{};
@@ -111,8 +109,7 @@ void DHCPMgr::handle_swss_notification() {
         barrier_event.msg = nullptr;
         if (write(config_pipe[1], &barrier_event, sizeof(barrier_event))
                 != static_cast<ssize_t>(sizeof(barrier_event))) {
-            syslog(LOG_ERR,
-                   "[DHCPV4_RELAY] Failed to write sync barrier to config pipe: %s; exiting to avoid startup hang",
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to write sync barrier to config pipe: %s; exiting to avoid startup hang",
                    strerror(errno));
             exit(EXIT_FAILURE);
         }
@@ -123,12 +120,12 @@ void DHCPMgr::handle_swss_notification() {
         int ret = swss_select.select(&selectable, DEFAULT_TIMEOUT_MSEC);
 
         if (ret == swss::Select::ERROR) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Error had been returned in select");
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Error had been returned in select");
             continue;
         } else if (ret == swss::Select::TIMEOUT) {
             continue;
         } else if (ret != swss::Select::OBJECT) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Unknown return value from Select: %d", ret);
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Unknown return value from Select: %d", ret);
             continue;
         }
 
@@ -220,7 +217,7 @@ void DHCPMgr::process_device_metadata_notification(std::deque<swss::KeyOpFieldsV
                 try {
                     m_config.deployment_id = static_cast<uint32_t>(std::stoul(v));
                 } catch (const std::exception &e) {
-                    syslog(LOG_WARNING, "[DHCPV4_RELAY] Invalid deployment_id value '%s': %s\n", v.c_str(), e.what());
+                    SWSS_LOG_WARN("[DHCPV4_RELAY] Invalid deployment_id value '%s': %s", v.c_str(), e.what());
                 }
             } else if (f == "subtype") {
                 subtype_found = true;
@@ -245,7 +242,7 @@ void DHCPMgr::process_device_metadata_notification(std::deque<swss::KeyOpFieldsV
                 if (ok) {
                     m_config.midplane_bridge = bridge_name;
                 } else {
-                    syslog(LOG_ERR, "Failed to read midplane bridge name\n");
+                    SWSS_LOG_ERROR("Failed to read midplane bridge name");
                 }
             } else if (m_config.is_SmartSwitch) {
                 m_config.is_SmartSwitch = false;
@@ -256,7 +253,7 @@ void DHCPMgr::process_device_metadata_notification(std::deque<swss::KeyOpFieldsV
                 try {
                     relay_msg = new relay_config();
                 } catch (const std::bad_alloc &e) {
-                    syslog(LOG_ERR, "[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
+                    SWSS_LOG_ERROR("[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
                     return;
                 }
 
@@ -271,7 +268,7 @@ void DHCPMgr::process_device_metadata_notification(std::deque<swss::KeyOpFieldsV
                 event.msg = static_cast<void *>(relay_msg);
                 // Write the pointer address to the pipe
                 if (write(config_pipe[1], &event, sizeof(event)) == -1) {
-                    syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to write to config update pipe: %s", strerror(errno));
+                    SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to write to config update pipe: %s", strerror(errno));
                     delete relay_msg;
                 }
 	    }
@@ -322,7 +319,7 @@ void DHCPMgr::process_interface_notification(std::deque<swss::KeyOpFieldsValuesT
                 try {
                     relay_msg = new relay_config();
                 } catch (const std::bad_alloc &e) {
-                    syslog(LOG_ERR, "[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
+                    SWSS_LOG_ERROR("[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
                     return;
                 }
 
@@ -330,7 +327,7 @@ void DHCPMgr::process_interface_notification(std::deque<swss::KeyOpFieldsValuesT
                 if (operation == "SET") {
                     relay_msg->is_add = true;
                     if (inet_pton(AF_INET, ip.c_str(), &relay_msg->src_intf_sel_addr.sin_addr) != 1) {
-                        syslog(LOG_ERR, "[DHCPV4_RELAY] Invalid IP address");
+                        SWSS_LOG_ERROR("[DHCPV4_RELAY] Invalid IP address");
                         delete relay_msg;
                         return;
                     }
@@ -345,7 +342,7 @@ void DHCPMgr::process_interface_notification(std::deque<swss::KeyOpFieldsValuesT
                 event.msg = static_cast<void *>(relay_msg);
                 // Write the pointer address to the pipe
                 if (write(config_pipe[1], &event, sizeof(event)) == -1) {
-                    syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to write to config update pipe: %s", strerror(errno));
+                    SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to write to config update pipe: %s", strerror(errno));
                     delete relay_msg;
                 }
             }
@@ -377,7 +374,7 @@ void DHCPMgr::process_relay_notification(std::deque<swss::KeyOpFieldsValuesTuple
         try {
             relay_msg = new relay_config();
         } catch (const std::bad_alloc &e) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
             return;
         }
 
@@ -411,11 +408,11 @@ void DHCPMgr::process_relay_notification(std::deque<swss::KeyOpFieldsValuesTuple
                     try {
                         relay_msg->max_hop_count = static_cast<uint8_t>(std::stoi(v));
                     } catch (const std::exception &e) {
-                        syslog(LOG_WARNING, "[DHCPV4_RELAY] Invalid max_hop_count value '%s' for VLAN %s: %s\n",
+                        SWSS_LOG_WARN("[DHCPV4_RELAY] Invalid max_hop_count value '%s' for VLAN %s: %s",
                                v.c_str(), vlan.c_str(), e.what());
                     }
                 }
-                syslog(LOG_DEBUG, "[DHCPV4_RELAY] key: %s, Operation: %s, f: %s, v: %s", vlan.c_str(), operation.c_str(), f.c_str(), v.c_str());
+                SWSS_LOG_DEBUG("[DHCPV4_RELAY] key: %s, Operation: %s, f: %s, v: %s", vlan.c_str(), operation.c_str(), f.c_str(), v.c_str());
             }
 
             // Updating vrf value with client VRF if server vrf is not configured.
@@ -434,18 +431,18 @@ void DHCPMgr::process_relay_notification(std::deque<swss::KeyOpFieldsValuesTuple
             // Update the vlan cache entry
             vlans_copy[relay_msg->vlan] = *relay_msg;
         } else if (operation == "DEL") {
-            syslog(LOG_INFO, "[DHCPV4_RELAY] Received DELETE operation for VLAN %s", vlan.c_str());
+            SWSS_LOG_INFO("[DHCPV4_RELAY] Received DELETE operation for VLAN %s", vlan.c_str());
             relay_msg->is_add = false;
             // Remove the vlan cache entry
             vlans_copy.erase(relay_msg->vlan);
         }
 
         if (relay_msg->servers.empty() && operation != "DEL") {
-            syslog(LOG_WARNING, "[DHCPV4_RELAY] No servers found for VLAN %s, skipping configuration.", vlan.c_str());
+            SWSS_LOG_WARN("[DHCPV4_RELAY] No servers found for VLAN %s, skipping configuration.", vlan.c_str());
             delete relay_msg;
             continue;
         }
-        syslog(LOG_INFO, "[DHCPV4_RELAY] %s %s relay config\n", operation.c_str(), vlan.c_str());
+        SWSS_LOG_INFO("[DHCPV4_RELAY] %s %s relay config", operation.c_str(), vlan.c_str());
 
         event_config event;
         event.type = DHCPv4_RELAY_CONFIG_UPDATE;
@@ -453,7 +450,7 @@ void DHCPMgr::process_relay_notification(std::deque<swss::KeyOpFieldsValuesTuple
 
         // Write the pointer address to the pipe
         if (write(config_pipe[1], &event, sizeof(event)) == -1) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to write to config update pipe: %s", strerror(errno));
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to write to config update pipe: %s", strerror(errno));
             delete relay_msg;
         }
     }
@@ -498,7 +495,7 @@ void DHCPMgr::process_feature_notification(std::deque<swss::KeyOpFieldsValuesTup
             event.type = DHCPv4_SERVER_FEATURE_UPDATE;
 
             if (write(config_pipe[1], &event, sizeof(event)) == -1) {
-                syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to send delete event for dhcp_server feature update");
+                SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to send delete event for dhcp_server feature update");
 		return;
             }
             vlans_copy.clear();
@@ -517,7 +514,7 @@ void DHCPMgr::process_feature_notification(std::deque<swss::KeyOpFieldsValuesTup
             select.addSelectable(config_db_dhcp_server_ipv4_ptr.get());
             select.addSelectable(state_db_dhcp_server_ipv4_ip_ptr.get());
         } else if (state == "disabled" && feature_dhcp_server_enabled) {
-            syslog(LOG_INFO, "[DHCPV4_RELAY] Disabling DHCP server auto-config mode and cleaning up.");
+            SWSS_LOG_INFO("[DHCPV4_RELAY] Disabling DHCP server auto-config mode and cleaning up.");
             feature_dhcp_server_enabled = false;
             global_dhcp_server_ip.clear();
 	    vlans_copy.clear();
@@ -526,7 +523,7 @@ void DHCPMgr::process_feature_notification(std::deque<swss::KeyOpFieldsValuesTup
             event.type = DHCPv4_SERVER_FEATURE_UPDATE;
 
             if (write(config_pipe[1], &event, sizeof(event)) == -1) {
-                syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to send delete event for dhcp_server feature update");
+                SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to send delete event for dhcp_server feature update");
 		return;
             }
 
@@ -577,7 +574,7 @@ void DHCPMgr::process_dhcp_server_ipv4_ip_notification(std::deque<swss::KeyOpFie
                   }
             }
 	    if (server_ip.empty()) {
-		  syslog(LOG_ERR, "[DHCPV4_RELAY] dhcp_server IP is not present in state DB");
+		  SWSS_LOG_ERROR("[DHCPV4_RELAY] dhcp_server IP is not present in state DB");
 		  return;
             }
 	    //modification case
@@ -586,7 +583,7 @@ void DHCPMgr::process_dhcp_server_ipv4_ip_notification(std::deque<swss::KeyOpFie
                 event.type = DHCPv4_SERVER_IP_UPDATE;
 
 		if (write(config_pipe[1], &event, sizeof(event)) == -1) {
-                    syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to send delete event for dhcp_server IP update");
+                    SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to send delete event for dhcp_server IP update");
 		    return;
                 }
 		is_modify = true;
@@ -594,7 +591,7 @@ void DHCPMgr::process_dhcp_server_ipv4_ip_notification(std::deque<swss::KeyOpFie
 	    global_dhcp_server_ip = server_ip;
 	    //Since the server IP see newly added, restart the listener for the dhcp_server config.
 	    if (!is_modify) {
-	       syslog(LOG_INFO, "[DHCPV4_RELAY] Restarting the dhcp_server listener");
+	       SWSS_LOG_INFO("[DHCPV4_RELAY] Restarting the dhcp_server listener");
                if (config_db_dhcp_server_ipv4_ptr) {
                    select.removeSelectable(config_db_dhcp_server_ipv4_ptr.get());
                }
@@ -607,7 +604,7 @@ void DHCPMgr::process_dhcp_server_ipv4_ip_notification(std::deque<swss::KeyOpFie
             event.type = DHCPv4_SERVER_IP_DELETE;
 
             if (write(config_pipe[1], &event, sizeof(event)) == -1) {
-                syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to send delete event for dhcp_server IP delete");
+                SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to send delete event for dhcp_server IP delete");
 		return;
             }
 	    global_dhcp_server_ip.clear();
@@ -623,7 +620,7 @@ void DHCPMgr::process_vlan_member_notification(std::deque<swss::KeyOpFieldsValue
 
          size_t pos = key.find('|');
          if (pos == std::string::npos) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Invalid string format");
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Invalid string format");
             return;
          }
 
@@ -639,7 +636,7 @@ void DHCPMgr::process_vlan_member_notification(std::deque<swss::KeyOpFieldsValue
         try {
             msg = new vlan_member_config();
         } catch (const std::bad_alloc &e) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
             return;
         }
 
@@ -657,7 +654,7 @@ void DHCPMgr::process_vlan_member_notification(std::deque<swss::KeyOpFieldsValue
         event.msg = static_cast<void *>(msg);
 
         if (write(config_pipe[1], &event, sizeof(event)) == -1) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to send vlan member update for vlan %s", vlan.c_str());
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to send vlan member update for vlan %s", vlan.c_str());
             delete msg;
         }
      }
@@ -696,7 +693,7 @@ void DHCPMgr::process_vlan_interface_notification(std::deque<swss::KeyOpFieldsVa
         try {
             msg = new vlan_interface_config();
         } catch (const std::bad_alloc &e) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
             return;
         }
         msg->vlan = vlan;
@@ -707,7 +704,7 @@ void DHCPMgr::process_vlan_interface_notification(std::deque<swss::KeyOpFieldsVa
         event.msg = static_cast<void *>(msg);
 
         if (write(config_pipe[1], &event, sizeof(event)) == -1) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to send vlan interface update for vlan %s", vlan.c_str());
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to send vlan interface update for vlan %s", vlan.c_str());
             delete msg;
         }
 
@@ -742,7 +739,7 @@ void DHCPMgr::process_dhcp_server_ipv4_notification(std::deque<swss::KeyOpFields
         try {
             relay_msg = new relay_config();
         } catch (const std::bad_alloc &e) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
             return;
         }
 
@@ -766,9 +763,9 @@ void DHCPMgr::process_dhcp_server_ipv4_notification(std::deque<swss::KeyOpFields
                   ip_tbl.hget("eth0", "ip", ip);
                   if (!ip.empty()) {
                      global_dhcp_server_ip = ip;
-                     syslog(LOG_INFO, "[DHCPV4_RELAY] Fetched DHCPv4 server IP from STATE_DB: %s", ip.c_str());
+                     SWSS_LOG_INFO("[DHCPV4_RELAY] Fetched DHCPv4 server IP from STATE_DB: %s", ip.c_str());
                   } else {
-                     syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to get DHCPv4 server IP from STATE_DB");
+                     SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to get DHCPv4 server IP from STATE_DB");
                      delete relay_msg;
                      continue;
                   }
@@ -804,7 +801,7 @@ void DHCPMgr::process_dhcp_server_ipv4_notification(std::deque<swss::KeyOpFields
         event.msg = static_cast<void *>(relay_msg);
 
         if (write(config_pipe[1], &event, sizeof(event)) == -1) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to send vlan table update for VLAN %s", vlan.c_str());
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to send vlan table update for VLAN %s", vlan.c_str());
             delete relay_msg;
         }
     }
@@ -833,7 +830,7 @@ void DHCPMgr::process_vlan_notification(std::deque<swss::KeyOpFieldsValuesTuple>
         try {
             relay_msg = new relay_config();
         } catch (const std::bad_alloc &e) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
             return;
         }
 
@@ -855,7 +852,7 @@ void DHCPMgr::process_vlan_notification(std::deque<swss::KeyOpFieldsValuesTuple>
         event.msg = static_cast<void *>(relay_msg);
 
         if (write(config_pipe[1], &event, sizeof(event)) == -1) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to send vlan update event for vlan %s", vlan.c_str());
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to send vlan update event for vlan %s", vlan.c_str());
             delete relay_msg;
         }
     }
@@ -870,7 +867,7 @@ void DHCPMgr::process_port_notification(std::deque<swss::KeyOpFieldsValuesTuple>
         try {
             port_msg = new port_config();
         } catch (const std::bad_alloc &e) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
             return;
         }
 
@@ -895,7 +892,7 @@ void DHCPMgr::process_port_notification(std::deque<swss::KeyOpFieldsValuesTuple>
         event.msg = static_cast<void *>(port_msg);
 
         if (write(config_pipe[1], &event, sizeof(event)) == -1) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to send port table update for interface %s", interface.c_str());
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to send port table update for interface %s", interface.c_str());
             delete port_msg;
         }
      }
