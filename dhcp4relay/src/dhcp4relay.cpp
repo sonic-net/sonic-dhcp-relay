@@ -111,7 +111,7 @@ std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector
 int sock_open(const struct sock_fprog *fprog) {
     int s = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
     if (s == -1) {
-        syslog(LOG_ERR, "[DHCPV4_RELAY] socket: Failed to create socket with error %s\n", strerror(errno));
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] socket: Failed to create socket with error %s", strerror(errno));
         return -1;
     }
 
@@ -125,12 +125,12 @@ int sock_open(const struct sock_fprog *fprog) {
     };
 
     if (bind(s, (struct sockaddr *)&sll, sizeof sll) == -1) {
-        syslog(LOG_ERR, "[DHCPV4_RELAY] bind: Failed to bind to specified interface, error: %s\n", strerror(errno));
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] bind: Failed to bind to specified interface, error: %s", strerror(errno));
         (void)close(s);
         return -1;
     }
     if (fprog && setsockopt(s, SOL_SOCKET, SO_ATTACH_FILTER, fprog, sizeof *fprog) == -1) {
-        syslog(LOG_ERR, "[DHCPV4_RELAY] setsockopt: Failed to attach filter, error: %s\n", strerror(errno));
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] setsockopt: Failed to attach filter, error: %s", strerror(errno));
         (void)close(s);
         return -1;
     }
@@ -138,30 +138,30 @@ int sock_open(const struct sock_fprog *fprog) {
     int optval = 0;
     socklen_t optlen = sizeof(optval);
     if (getsockopt(s, SOL_SOCKET, SO_RCVBUF, &optval, &optlen) == -1) {
-        syslog(LOG_ERR, "[DHCPV4_RELAY] getsockopt: Failed to get recv buffer size, error:  %s\n", strerror(errno));
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] getsockopt: Failed to get recv buffer size, error:  %s", strerror(errno));
         (void)close(s);
         return -1;
     }
 
     int optval_new = RAWSOCKET_RECV_SIZE;
     if (setsockopt(s, SOL_SOCKET, SO_RCVBUF, &optval_new, sizeof(optval_new)) == -1) {
-        syslog(LOG_WARNING, "[DHCPV4_RELAY] setsockopt: Failed to set recv buffer size to %d, use default value\n", optval_new);
+        SWSS_LOG_WARN("[DHCPV4_RELAY] setsockopt: Failed to set recv buffer size to %d, use default value", optval_new);
     } else {
-        syslog(LOG_INFO, "[DHCPV4_RELAY] setsockopt: change raw socket recv buffer size from %d to %d\n", optval, optval_new);
+        SWSS_LOG_INFO("[DHCPV4_RELAY] setsockopt: change raw socket recv buffer size from %d to %d", optval, optval_new);
     }
 
     optval = 1;
     if (setsockopt(s, SOL_PACKET, PACKET_AUXDATA, &optval, sizeof(optval)) == -1) {
-        syslog(LOG_WARNING, "[DHCPV4_RELAY] setsockopt: Failed to set packet AUXDATA \n");
+        SWSS_LOG_WARN("[DHCPV4_RELAY] setsockopt: Failed to set packet AUXDATA ");
         (void)close(s);
         return -1;
     }
 
     int ignore_outgoing = 1;
     if (setsockopt(s, SOL_PACKET, PACKET_IGNORE_OUTGOING, &ignore_outgoing, sizeof(ignore_outgoing)) == -1) {
-        syslog(LOG_WARNING, "[DHCPV4_RELAY] setsockopt: Failed to ignore outgoing \n");
+        SWSS_LOG_WARN("[DHCPV4_RELAY] setsockopt: Failed to ignore outgoing ");
     } else {
-        syslog(LOG_INFO, "[DHCPV4_RELAY] setsockopt: outgoing packet is ignored\n");
+        SWSS_LOG_INFO("[DHCPV4_RELAY] setsockopt: outgoing packet is ignored");
     }
 
     return s;
@@ -171,7 +171,7 @@ void prepare_relay_server_config(relay_config &interface_config) {
     for (auto server : interface_config.servers) {
         sockaddr_in tmp;
         if (inet_pton(AF_INET, server.c_str(), &tmp.sin_addr) != 1) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] inet_pton: Failed to convert IPv4 address\n");
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] inet_pton: Failed to convert IPv4 address");
             return;
         }
         tmp.sin_family = AF_INET;
@@ -256,7 +256,7 @@ void prepare_relay_interface_config(relay_config &interface_config) {
     bool source_intf_sel_opt = false;
 
     if (getifaddrs(&ifa) == -1) {
-        syslog(LOG_ERR, "[DHCPV4_RELAY] getifaddrs: Unable to get network interfaces, error: %s\n", strerror(errno));
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] getifaddrs: Unable to get network interfaces, error: %s", strerror(errno));
         return;
     }
 
@@ -264,13 +264,12 @@ void prepare_relay_interface_config(relay_config &interface_config) {
         /* If DualTor is enabled, we set source interface to "Loopback0"
            and link_selection option will be enabled during encoding if is_dualTor is enabled */
         interface_config.source_interface = "Loopback0";
-        syslog(LOG_INFO,
-               "[DHCPV4_INFO][DualTor] %s: link_selection_opt is enabled and source interface is set to %s\n",
+        SWSS_LOG_INFO("[DHCPV4_INFO][DualTor] %s: link_selection_opt is enabled and source interface is set to %s",
                interface_config.vlan.c_str(), interface_config.source_interface.c_str());
     }
 
     if (interface_config.source_interface.length() > 0) {
-        syslog(LOG_INFO, "[DHCPV4_INFO] source interface addr is set to %s\n",
+        SWSS_LOG_INFO("[DHCPV4_INFO] source interface addr is set to %s",
                interface_config.source_interface.c_str());
     } else {
         /* This flag is used to make sure source interface address is copied to config cache
@@ -318,7 +317,7 @@ int prepare_vrf_sockets(relay_config &config) {
         /* Vrf sock is not available in map need to create */
         vrf_sock = socket(AF_INET, SOCK_DGRAM, 0);
         if (vrf_sock == -1) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] socket: Failed to create client_addr socket vrf %s err = %s\n",
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] socket: Failed to create client_addr socket vrf %s err = %s",
                    config.vrf.c_str(), strerror(errno));
             return -1;
         }
@@ -329,7 +328,7 @@ int prepare_vrf_sockets(relay_config &config) {
         if (config.vrf != "default") {
             if (setsockopt(vrf_sock, SOL_SOCKET, SO_BINDTODEVICE,
                            config.vrf.c_str(), strlen(config.vrf.c_str())) < 0) {
-                syslog(LOG_ERR, "[DHCPV4_RELAY] setsockopt: Failed to bind socket to %s VRF err = %s\n",
+                SWSS_LOG_ERROR("[DHCPV4_RELAY] setsockopt: Failed to bind socket to %s VRF err = %s",
                        config.vrf.c_str(), strerror(errno));
                 close(vrf_sock);
                 return -1;
@@ -342,7 +341,7 @@ int prepare_vrf_sockets(relay_config &config) {
         addr.sin_addr.s_addr = htonl(INADDR_ANY);
         addr.sin_port = htons(RELAY_PORT);
         if (bind(vrf_sock, (struct sockaddr*)&addr, sizeof(addr)) == -1) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] bind: Failed to bind vrf socket for %s, error: %s\n",
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] bind: Failed to bind vrf socket for %s, error: %s",
                    config.vrf.c_str(), strerror(errno));
             close(vrf_sock);
             return -1;
@@ -378,7 +377,7 @@ int prepare_vlan_sockets(relay_config &config) {
     bool bind_client_addr = false;
 
     if (getifaddrs(&ifa) == -1) {
-        syslog(LOG_WARNING, "[DHCPV4_RELAY] getifaddrs: Unable to get network interfaces with %s\n", strerror(errno));
+        SWSS_LOG_WARN("[DHCPV4_RELAY] getifaddrs: Unable to get network interfaces with %s", strerror(errno));
         return -1;
     }
 
@@ -401,13 +400,13 @@ int prepare_vlan_sockets(relay_config &config) {
     freeifaddrs(ifa);
 
     if (!bind_client_addr) {
-        syslog(LOG_NOTICE, "[DHCPV4_RELAY] No IPv4 address on interface %s, deferring socket creation\n", config.vlan.c_str());
+        SWSS_LOG_NOTICE("[DHCPV4_RELAY] No IPv4 address on interface %s, deferring socket creation", config.vlan.c_str());
         return -1;
     }
 
     int client_sock = 0;
     if ((client_sock = socket(AF_INET, SOCK_DGRAM, 0)) == -1) {
-        syslog(LOG_ERR, "[DHCPV4_RELAY] socket: Failed to create client_addr socket on interface %s, error: %s\n",
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] socket: Failed to create client_addr socket on interface %s, error: %s",
                config.vlan.c_str(), strerror(errno));
         return -1;
     }
@@ -418,14 +417,14 @@ int prepare_vlan_sockets(relay_config &config) {
     /* Bind client socket to vlan interface */
     if (setsockopt(client_sock, SOL_SOCKET, SO_BINDTODEVICE, config.vlan.c_str(),
                    strlen(config.vlan.c_str())) < 0) {
-        syslog(LOG_ERR, "[DHCPV4_RELAY] failed to bind client_sock to vlan %s, error: %s\n",
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] failed to bind client_sock to vlan %s, error: %s",
                config.vlan.c_str(), strerror(errno));
         close(client_sock);
         return -1;
     }
 
     if (bind(client_sock, (sockaddr *)&client_addr, sizeof(client_addr)) == -1) {
-        syslog(LOG_ERR, "[DHCPV4_RELAY] bind: Failed to bind socket to IPv4 address on interface %s: %s\n",
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] bind: Failed to bind socket to IPv4 address on interface %s: %s",
                config.vlan.c_str(), strerror(errno));
         close(client_sock);
         return -1;
@@ -433,7 +432,7 @@ int prepare_vlan_sockets(relay_config &config) {
 
     int broadcast_enable = 1;
     if (setsockopt(client_sock, SOL_SOCKET, SO_BROADCAST, &broadcast_enable, sizeof(broadcast_enable)) < 0) {
-        syslog(LOG_ERR, "[DHCPV4_RELAY] setsockopt: Failed to set socket to receive broadcast address, error: %s\n",
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] setsockopt: Failed to set socket to receive broadcast address, error: %s",
                strerror(errno));
         close(client_sock);
         return -1;
@@ -441,9 +440,8 @@ int prepare_vlan_sockets(relay_config &config) {
 
     int optval = 1;
     if (setsockopt(client_sock, IPPROTO_IP, IP_PKTINFO, &optval, sizeof(optval)) < 0) {
-        syslog(LOG_ERR,
-               "[DHCPV4_RELAY] setsockopt: Failed to set socket option to "
-               "get IP PKT information, error: %s\n",
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] setsockopt: Failed to set socket option to "
+               "get IP PKT information, error: %s",
                strerror(errno));
         close(client_sock);
         return -1;
@@ -466,7 +464,7 @@ std::string get_mac_address(const std::string &ifname) {
     std::string path = "/sys/class/net/" + ifname + "/address";
     std::ifstream file(path);
     if (!file.is_open()) {
-        syslog(LOG_ERR, "Fetching mac address for interface %s", ifname.c_str());
+        SWSS_LOG_ERROR("Fetching mac address for interface %s", ifname.c_str());
         return "";
     }
     std::string mac;
@@ -550,8 +548,7 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
 
     /* We shouldn't append relay information if packet size is exceeding MTU size */
     if ((dhcp_pkt->getHeaderLen() + buf_offset) > MAX_DHCP_PKT_SIZE) {
-        syslog(LOG_ERR,
-               "[DHCPV4_RELAY] %ld packet size is exceeding allowed size %d"
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] %ld packet size is exceeding allowed size %d"
                " from interface %s",
                (dhcp_pkt->getHeaderLen() + buf_offset),
                MAX_DHCP_PKT_SIZE, config->vlan.c_str());
@@ -585,7 +582,7 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
                 config.link_address.sin_addr.s_addr;
         }
         if (!(dhcp_pkt->getDhcpHeader()->gatewayIpAddress)) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] No IPv4 address configured on %s,\n"
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] No IPv4 address configured on %s,"
                    " dropping DHCP packet. Configure an IPv4 address on the VLAN"
                    " interface for relay to function", config.vlan.c_str());
             dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
@@ -593,7 +590,7 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
         }
         if ((dhcp_pkt->getDhcpHeader()->magicNumber) &&
             (dhcp_pkt->getDhcpHeader()->magicNumber) == DHCP_MAGIC_NUMBER) {
-            syslog(LOG_WARNING, "[DHCPV4_RELAY] encode DHCP relay option");
+            SWSS_LOG_WARN("[DHCPV4_RELAY] encode DHCP relay option");
             encode_relay_option(dhcp_pkt, &config);
         }
     } else {
@@ -614,7 +611,7 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
         } else {
             /* discard: explicit "discard" value or any unrecognized value */
             dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
-            syslog(LOG_INFO, "[DHCPV4_RELAY] agent relay mode is discard, dropping the packet %s",
+            SWSS_LOG_INFO("[DHCPV4_RELAY] agent relay mode is discard, dropping the packet %s",
                    config.vlan.c_str());
             return;
         }
@@ -622,7 +619,7 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
 
     /* Drop the packet if the hop count exceeds the configured maximum. */
     if (dhcp_pkt->getDhcpHeader()->hops >= config.max_hop_count) {
-        syslog(LOG_NOTICE, "[DHCPV4_RELAY] Dropping packet: hop count %d exceeds max allowed %d\n",
+        SWSS_LOG_NOTICE("[DHCPV4_RELAY] Dropping packet: hop count %d exceeds max allowed %d",
                dhcp_pkt->getDhcpHeader()->hops, config.max_hop_count);
         // increment drop counter
         dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
@@ -645,11 +642,11 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
     for (auto server : config.servers_sock) {
         const char *server_str = (index < config.servers.size()) ? config.servers[index].c_str() : "<unknown>";
         if (send_udp(sock, (uint8_t *)dhcp_pkt->getDhcpHeader(), server, dhcp_pkt->getHeaderLen(), src_ip, use_intf_ip_as_src_ip, true)) {
-            syslog(LOG_INFO, "[DHCPV4_RELAY] DHCP packet is sent to configured server: %s, interface: %s",
+            SWSS_LOG_INFO("[DHCPV4_RELAY] DHCP packet is sent to configured server: %s, interface: %s",
                    server_str, config.vlan.c_str());
             dhcp_cntr_table.increment_counter(config.vlan, "TX", (int)dhcp_pkt->getMessageType());
         } else {
-            syslog(LOG_NOTICE, "[DHCPV4_RELAY] DHCP packet sending FAILED for configured server: %s, interface: %s",
+            SWSS_LOG_NOTICE("[DHCPV4_RELAY] DHCP packet sending FAILED for configured server: %s, interface: %s",
                    server_str, config.vlan.c_str());
             // increment drop counter
             dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
@@ -667,14 +664,14 @@ uint8_t *decode_tlv(const uint8_t *buf, uint8_t t, uint8_t &l, uint32_t options_
         len = *(temp + DHCP_SUB_OPT_TLV_LENGTH_OFFSET);
         if ((offset + DHCP_SUB_OPT_TLV_LENGTH_OFFSET + len) > options_total_size) {
             /* Malformed packet */
-            syslog(LOG_ERR, "[DHCPV4_INFO] Failed to decode relay agent sub-option %d"
-                       " exceeded total option len %d offset %d sub-option len %d\n",
+            SWSS_LOG_ERROR("[DHCPV4_INFO] Failed to decode relay agent sub-option %d"
+                       " exceeded total option len %d offset %d sub-option len %d",
                        t, options_total_size, offset, len);
             l = 0;
             return NULL;
         }
         if (t == *temp) {
-            syslog(LOG_INFO, "[DHCPV4_INFO] Decoding relay agent sub-option %d of len %d\n", t, len);
+            SWSS_LOG_INFO("[DHCPV4_INFO] Decoding relay agent sub-option %d of len %d", t, len);
             l = len;
             return (temp + DHCP_SUB_OPT_TLV_HEADER_LEN);
         }
@@ -706,13 +703,13 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
     std::unordered_map<std::string, relay_config>::iterator config_itr = vlans->end();
 
     if (getifaddrs(&ifa) == -1) {
-        syslog(LOG_WARNING, "[DHCPV4_RELAY] getifaddrs: Unable to get network interfaces, error: %s\n", strerror(errno));
+        SWSS_LOG_WARN("[DHCPV4_RELAY] getifaddrs: Unable to get network interfaces, error: %s", strerror(errno));
         return;
     }
 
     /* Return if giaddr is empty */
     if (giaddr == 0) {
-        syslog(LOG_ERR, "[DHCPV4_RELAY] Message received with empty giaddr from server %s\n",
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] Message received with empty giaddr from server %s",
                src_ip.c_str());
         freeifaddrs(ifa);
         return;
@@ -728,9 +725,8 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
         auto circuit_id_ptr = decode_tlv((const uint8_t *)options_ptr, OPTION82_SUBOPT_CIRCUIT_ID,
                 circuit_id_len, agent_option_size);
         if (circuit_id_ptr == NULL) {
-            syslog(LOG_ERR,
-                    "[DHCPV4_RELAY] Circuit id sub-option is missing in relay"
-                    " agent option from server %s\n",
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Circuit id sub-option is missing in relay"
+                    " agent option from server %s",
                     src_ip.c_str());
             freeifaddrs(ifa);
             return;
@@ -747,9 +743,8 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
         if (vlan_interface.length() > 0) {
             config_itr = vlans->find(vlan_interface);
             if (config_itr == vlans->end()) {
-                syslog(LOG_INFO,
-                        "[DHCPV4_RELAY] Vlan config not found for the circuit"
-                        "id encoded interface  %s\n",
+                SWSS_LOG_INFO("[DHCPV4_RELAY] Vlan config not found for the circuit"
+                        "id encoded interface  %s",
                         vlan_interface.c_str());
             }
         }
@@ -773,7 +768,7 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
         freeifaddrs(ifa);
 
         if (intf_name.length() == 0) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to find interface attached to address %u\n", giaddr);
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to find interface attached to address %u", giaddr);
             return;
         }
 
@@ -783,7 +778,7 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
         /* Expecting interface is SVI interface of vlan */
         config_itr = vlans->find(intf_name);
         if (config_itr == vlans->end()) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Config not found for vlan %s\n", intf_name.c_str());
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Config not found for vlan %s", intf_name.c_str());
             dhcp_cntr_table.increment_counter(intf_name, "RX", DHCPv4_MESSAGE_TYPE_DROP);
             return;
         }
@@ -803,7 +798,7 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
     /* TODO: Send unicast message to client if BOOTP flag from client is set to unicast */
 
     if (config.client_sock <= 0) {
-        syslog(LOG_WARNING, "[DHCPV4_RELAY] Dropping server reply for %s: VLAN socket not ready (no IPv4 address)\n",
+        SWSS_LOG_WARN("[DHCPV4_RELAY] Dropping server reply for %s: VLAN socket not ready (no IPv4 address)",
                config.vlan.c_str());
         dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
         return;
@@ -811,16 +806,16 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
 
     /* Perform padding only when DHCP relay (Option 82) information has been stripped from the packet */
     if(dhcp_pkt->removeOption(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS)) {
-        syslog(LOG_NOTICE, "Packet is stripped");
+        SWSS_LOG_NOTICE("Packet is stripped");
         pad = true;
     }
 
     if (send_udp(config.client_sock, (uint8_t *)dhcp_pkt->getDhcpHeader(), target_addr, dhcp_pkt->getHeaderLen(), ip_zero, false, pad)) {
-        syslog(LOG_INFO, "[DHCPV4_RELAY] dhcp relay message is broadcast to client %s from server %s",
+        SWSS_LOG_INFO("[DHCPV4_RELAY] dhcp relay message is broadcast to client %s from server %s",
                config.vlan.c_str(), src_ip.c_str());
         dhcp_cntr_table.increment_counter(config.vlan, "TX", (int)dhcp_pkt->getMessageType());
     } else {
-        syslog(LOG_WARNING, "[DHCPV4_RELAY] Failed to send server reply to client on %s\n", config.vlan.c_str());
+        SWSS_LOG_WARN("[DHCPV4_RELAY] Failed to send server reply to client on %s", config.vlan.c_str());
         dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
     }
 }
@@ -840,11 +835,11 @@ void update_interface_vlan_mapping(std::string interface, std::string vlan, bool
     if (is_add) {
         vlan_map[interface] = vlan;
         dhcp_cntr_table.initialize_interface(vlan);
-        syslog(LOG_INFO, "[DHCPV4_RELAY] Add <%s, %s> into interface vlan map\n", interface.c_str(), vlan.c_str());
+        SWSS_LOG_INFO("[DHCPV4_RELAY] Add <%s, %s> into interface vlan map", interface.c_str(), vlan.c_str());
     } else {
         vlan_map.erase(interface);
         dhcp_cntr_table.remove_interface(vlan);
-        syslog(LOG_INFO, "[DHCPV4_RELAY] Remove <%s, %s> from interface vlan map\n", interface.c_str(), vlan.c_str());
+        SWSS_LOG_INFO("[DHCPV4_RELAY] Remove <%s, %s> from interface vlan map", interface.c_str(), vlan.c_str());
     }
 }
 
@@ -961,7 +956,7 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
         auto buffer_sz = recvmsg(fd, &msg, 0);
         if (buffer_sz <= 0) {
             if (errno != EAGAIN) {
-                syslog(LOG_ERR, "[DHCPV4_RELAY] recv: Failed to receive data at filter socket: %s\n", strerror(errno));
+                SWSS_LOG_ERROR("[DHCPV4_RELAY] recv: Failed to receive data at filter socket: %s", strerror(errno));
             }
             return;
         }
@@ -980,7 +975,7 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
         }
 
         if (if_indextoname(sll->sll_ifindex, interface_name) == NULL) {
-            syslog(LOG_WARNING, "[DHCPV4_RELAY] Invalid input interface index %d\n", sll->sll_ifindex);
+            SWSS_LOG_WARN("[DHCPV4_RELAY] Invalid input interface index %d", sll->sll_ifindex);
             continue;
         }
         std::string intf(interface_name);
@@ -997,7 +992,7 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
             auto vlan = vlan_map.find(intf);
             if (vlan == vlan_map.end()) {
                 if (intf.find(CLIENT_IF_PREFIX) != std::string::npos) {
-                    syslog(LOG_WARNING, "[DHCPV4_RELAY] Invalid input interface %s\n", interface_name);
+                    SWSS_LOG_WARN("[DHCPV4_RELAY] Invalid input interface %s", interface_name);
                 } else if ((m_config.is_SmartSwitch) && (intf.rfind("dpu", 0) == 0) && !m_config.midplane_bridge.empty()) {
                     // if its SmartSwitch, we need to check for bridge_midplane interface
                     vlan_str = m_config.midplane_bridge;
@@ -1019,7 +1014,7 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
         /* Extract packets in each layers */
         pcpp::EthLayer *eth_layer = raw_pkt.getLayerOfType<pcpp::EthLayer>();
         if (eth_layer == nullptr) {
-            syslog(LOG_WARNING, "[DHCPV4_RELAY] Invalid Ethernet packet from interface  %s\n", intf.c_str());
+            SWSS_LOG_WARN("[DHCPV4_RELAY] Invalid Ethernet packet from interface  %s", intf.c_str());
             if (!vlan_str.empty()) {
                 dhcp_cntr_table.increment_counter(vlan_str, "RX", DHCPv4_MESSAGE_TYPE_MALFORMED);
             }
@@ -1028,7 +1023,7 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
 
         pcpp::IPv4Layer *ip_layer = raw_pkt.getLayerOfType<pcpp::IPv4Layer>();
         if (ip_layer == nullptr) {
-            syslog(LOG_WARNING, "[DHCPV4_RELAY] Invalid IP packet from interface  %s\n", intf.c_str());
+            SWSS_LOG_WARN("[DHCPV4_RELAY] Invalid IP packet from interface  %s", intf.c_str());
             if (!vlan_str.empty()) {
                 dhcp_cntr_table.increment_counter(vlan_str, "RX", DHCPv4_MESSAGE_TYPE_MALFORMED);
             }
@@ -1042,7 +1037,7 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
             if (!vlan_str.empty()) {
                 dhcp_cntr_table.increment_counter(vlan_str, "RX", DHCPv4_MESSAGE_TYPE_MALFORMED);
             }
-            syslog(LOG_WARNING, "[DHCPV4_RELAY] Checksum failed for IP packet from interface %s\n", intf.c_str());
+            SWSS_LOG_WARN("[DHCPV4_RELAY] Checksum failed for IP packet from interface %s", intf.c_str());
             continue;
         }
 
@@ -1050,7 +1045,7 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
 
         pcpp::UdpLayer *udp_layer = raw_pkt.getLayerOfType<pcpp::UdpLayer>();
         if (udp_layer == nullptr) {
-            syslog(LOG_WARNING, "[DHCPV4_RELAY] Invalid UDP packet from interface  %s\n", intf.c_str());
+            SWSS_LOG_WARN("[DHCPV4_RELAY] Invalid UDP packet from interface  %s", intf.c_str());
             if (!vlan_str.empty()) {
                 dhcp_cntr_table.increment_counter(vlan_str, "RX", DHCPv4_MESSAGE_TYPE_MALFORMED);
             }
@@ -1060,8 +1055,8 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
         /* Validate UDP checksum is correct */
         auto udp_checksum = udp_layer->calculateChecksum(false);
         if (htobe16(udp_checksum) != udp_layer->getUdpHeader()->headerChecksum) {
-            syslog(LOG_WARNING, "[DHCPV4_RELAY] UDP checksum validation is failing "
-                        " packet is from interface %s\n", intf.c_str());
+            SWSS_LOG_WARN("[DHCPV4_RELAY] UDP checksum validation is failing "
+                        " packet is from interface %s", intf.c_str());
             if (!vlan_str.empty()) {
                 dhcp_cntr_table.increment_counter(vlan_str, "RX", DHCPv4_MESSAGE_TYPE_MALFORMED);
             }
@@ -1070,7 +1065,7 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
 
         pcpp::DhcpLayer *dhcp_pkt = raw_pkt.getLayerOfType<pcpp::DhcpLayer>();
         if (dhcp_pkt == nullptr) {
-            syslog(LOG_WARNING, "[DHCPV4_RELAY] Invalid DHCP packet from interface  %s\n", intf.c_str());
+            SWSS_LOG_WARN("[DHCPV4_RELAY] Invalid DHCP packet from interface  %s", intf.c_str());
             if (!vlan_str.empty()) {
                 dhcp_cntr_table.increment_counter(vlan_str, "RX", DHCPv4_MESSAGE_TYPE_MALFORMED);
             }
@@ -1084,7 +1079,7 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
 
             auto config_itr = vlans->find(vlan_str);
             if (config_itr == vlans->end()) {
-                syslog(LOG_INFO, "[DHCPV4_RELAY] Relay config not found for %s (interface %s, vlan_id %d)\n",
+                SWSS_LOG_INFO("[DHCPV4_RELAY] Relay config not found for %s (interface %s, vlan_id %d)",
                        vlan_str.c_str(), intf.c_str(), vlan_id);
                 dhcp_cntr_table.increment_counter(vlan_str, "RX", DHCPv4_MESSAGE_TYPE_DROP);
                 continue;
@@ -1115,13 +1110,13 @@ int signal_init() {
     do {
         ev_sigint = evsignal_new(base, SIGINT, signal_callback, base);
         if (ev_sigint == NULL) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Could not create SIGINT libevent signal\n");
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Could not create SIGINT libevent signal");
             break;
         }
 
         ev_sigterm = evsignal_new(base, SIGTERM, signal_callback, base);
         if (ev_sigterm == NULL) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Could not create SIGTERM libevent signal\n");
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Could not create SIGTERM libevent signal");
             break;
         }
         rv = 0;
@@ -1138,17 +1133,17 @@ int signal_start() {
     int rv = -1;
     do {
         if (evsignal_add(ev_sigint, NULL) != 0) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Could not add SIGINT libevent signal\n");
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Could not add SIGINT libevent signal");
             break;
         }
 
         if (evsignal_add(ev_sigterm, NULL) != 0) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Could not add SIGTERM libevent signal\n");
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Could not add SIGTERM libevent signal");
             break;
         }
 
         if (event_base_dispatch(base) != 0) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Could not start libevent dispatching loop\n");
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Could not start libevent dispatching loop");
         }
 
         rv = 0;
@@ -1169,7 +1164,7 @@ int signal_start() {
  * @return none
  */
 void signal_callback(evutil_socket_t fd, short event, void *arg) {
-    syslog(LOG_ALERT, "[DHCPV4_RELAY] Received signal: '%s'\n", strsignal(fd));
+    SWSS_LOG_NOTICE("[DHCPV4_RELAY] Received signal: '%s'", strsignal(fd));
     if ((fd == SIGTERM) || (fd == SIGINT)) {
         dhcp4relay_stop();
     }
@@ -1205,7 +1200,7 @@ int handle_server_sock(relay_config &vlan_config, std::string new_vrf)
         vrf_sock_map[new_vrf].ref_count++;
     } else {
         if (prepare_vrf_sockets(vlan_config) == -1) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to create vrf listen socket");
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to create vrf listen socket");
             return -1;
         }
     }
@@ -1251,7 +1246,7 @@ static void apply_config_event(const event_config &received_event,
 	   (received_event.type == DHCPv4_SERVER_RELAY_CONFIG_UPDATE))	{
             relay_config *relay_msg = static_cast<relay_config *>(received_event.msg);
             if (relay_msg) {
-                syslog(LOG_INFO, "[DHCPV4_RELAY] Processing config update: VLAN %s", relay_msg->vlan.c_str());
+                SWSS_LOG_INFO("[DHCPV4_RELAY] Processing config update: VLAN %s", relay_msg->vlan.c_str());
 
                 if (relay_msg->is_add) {
                     if (vlans->find(relay_msg->vlan) == vlans->end()) {
@@ -1264,7 +1259,7 @@ static void apply_config_event(const event_config &received_event,
                            when VLAN_INTERFACE_UPDATE creates the socket.
                            relay_msg is freed at the end of this block */
                         if (prepare_vlan_sockets((*vlans)[relay_msg->vlan]) == -1) {
-                            syslog(LOG_NOTICE, "[DHCPV4_RELAY] VLAN socket not ready for %s, will create when IPv4 is assigned\n",
+                            SWSS_LOG_NOTICE("[DHCPV4_RELAY] VLAN socket not ready for %s, will create when IPv4 is assigned",
                                    relay_msg->vlan.c_str());
                         }
                         /* Intially filling the vlan interface IP address. */
@@ -1310,10 +1305,10 @@ static void apply_config_event(const event_config &received_event,
                             }
                         }
                         vlans->erase(relay_msg->vlan);
-                        syslog(LOG_INFO, "[DHCPV4_RELAY] Deleted VLAN %s from configuration", relay_msg->vlan.c_str());
+                        SWSS_LOG_INFO("[DHCPV4_RELAY] Deleted VLAN %s from configuration", relay_msg->vlan.c_str());
                         update_vlan_mapping(relay_msg->vlan, false);
                     } else {
-                        syslog(LOG_WARNING, "[DHCPV4_RELAY] Attempted to delete non-existent VLAN %s", relay_msg->vlan.c_str());
+                        SWSS_LOG_WARN("[DHCPV4_RELAY] Attempted to delete non-existent VLAN %s", relay_msg->vlan.c_str());
                     }
                 }
                 delete relay_msg;
@@ -1322,12 +1317,12 @@ static void apply_config_event(const event_config &received_event,
             relay_config *relay_msg = static_cast<relay_config *>(received_event.msg);
             if (relay_msg) {
                 if (vlans->find(relay_msg->vlan) == vlans->end()) {
-                    syslog(LOG_WARNING, "[DHCPV4_RELAY] Ignoring INTERFACE_UPDATE for unknown VLAN %s\n",
+                    SWSS_LOG_WARN("[DHCPV4_RELAY] Ignoring INTERFACE_UPDATE for unknown VLAN %s",
                                   relay_msg->vlan.c_str());
                     delete relay_msg;
                     return;
                 }
-                syslog(LOG_INFO, "[DHCPV4_RELAY] Updating source interface for VLAN %s", relay_msg->vlan.c_str());
+                SWSS_LOG_INFO("[DHCPV4_RELAY] Updating source interface for VLAN %s", relay_msg->vlan.c_str());
                 if (relay_msg->is_add) {
                     vlans->at(relay_msg->vlan).src_intf_sel_addr = relay_msg->src_intf_sel_addr;
                 } else {
@@ -1338,7 +1333,7 @@ static void apply_config_event(const event_config &received_event,
         } else if (received_event.type == DHCPv4_RELAY_VLAN_MEMBER_UPDATE) {
                vlan_member_config *msg = static_cast<vlan_member_config *>(received_event.msg);
                if (msg) {
-                   syslog(LOG_INFO, "[DHCPV4_RELAY] Updating vlan member for VLAN %s", msg->vlan.c_str());
+                   SWSS_LOG_INFO("[DHCPV4_RELAY] Updating vlan member for VLAN %s", msg->vlan.c_str());
                    if (vlans->find(msg->vlan) == vlans->end()) {
                        delete msg;
                        return;
@@ -1353,7 +1348,7 @@ static void apply_config_event(const event_config &received_event,
                    /* Do not early-return on socket failure: msg is freed
                       immediately below; no code follows between here and delete. */
                    if (prepare_vlan_sockets((*vlans)[msg->vlan]) == -1) {
-                       syslog(LOG_NOTICE, "[DHCPV4_RELAY] VLAN socket not ready for %s, will create when IPv4 is assigned\n",
+                       SWSS_LOG_NOTICE("[DHCPV4_RELAY] VLAN socket not ready for %s, will create when IPv4 is assigned",
                               msg->vlan.c_str());
                    }
                    prepare_relay_interface_config((*vlans)[msg->vlan]);
@@ -1362,7 +1357,7 @@ static void apply_config_event(const event_config &received_event,
 	} else if (received_event.type == DHCPv4_RELAY_VLAN_INTERFACE_UPDATE) {
                vlan_interface_config *msg = static_cast<vlan_interface_config *>(received_event.msg);
                if (msg) {
-                   syslog(LOG_INFO, "[DHCPV4_RELAY] Updating vlan interface event for VLAN %s", msg->vlan.c_str());
+                   SWSS_LOG_INFO("[DHCPV4_RELAY] Updating vlan interface event for VLAN %s", msg->vlan.c_str());
                    if (vlans->find(msg->vlan) == vlans->end()) {
                        delete msg;
                        return;
@@ -1376,7 +1371,7 @@ static void apply_config_event(const event_config &received_event,
                           (*vlans)[msg->vlan].client_sock = 0;
                       }
                       if (prepare_vlan_sockets((*vlans)[msg->vlan]) == -1) {
-                          syslog(LOG_NOTICE, "[DHCPV4_RELAY] VLAN socket not ready for %s, will retry on next event\n",
+                          SWSS_LOG_NOTICE("[DHCPV4_RELAY] VLAN socket not ready for %s, will retry on next event",
                                           msg->vlan.c_str());
                       }
                       prepare_relay_interface_config((*vlans)[msg->vlan]);
@@ -1401,10 +1396,10 @@ static void apply_config_event(const event_config &received_event,
                }
         } else if ((received_event.type == DHCPv4_SERVER_FEATURE_UPDATE) ||
                    (received_event.type == DHCPv4_SERVER_IP_DELETE)) {
-                   syslog(LOG_INFO, "[DHCPV4_RELAY]  dhcp_server feature table update or server ip delete event received");
+                   SWSS_LOG_INFO("[DHCPV4_RELAY]  dhcp_server feature table update or server ip delete event received");
                    delete_all_relay_configs(vlans);
         } else if (received_event.type == DHCPv4_SERVER_IP_UPDATE) {
-                syslog(LOG_INFO, "[DHCPV4_RELAY]  dhcp_server IP update in state DB event received");
+                SWSS_LOG_INFO("[DHCPV4_RELAY]  dhcp_server IP update in state DB event received");
                 for (auto it = vlans->begin(); it != vlans->end(); ++it) {
                      relay_config &config = it->second;
                      config.servers.clear();
@@ -1416,11 +1411,9 @@ static void apply_config_event(const event_config &received_event,
             relay_config *relay_msg = static_cast<relay_config *>(received_event.msg);
             if (relay_msg) {
                 if (relay_msg->is_add) {
-                    syslog(LOG_INFO,
-                       "[DHCPV4_RELAY][DualTor] Adding link-selection and source-interface as Loopback0 for existing vlans");
+                    SWSS_LOG_INFO("[DHCPV4_RELAY][DualTor] Adding link-selection and source-interface as Loopback0 for existing vlans");
                 } else {
-                    syslog(LOG_INFO,
-                       "[DHCPV4_RELAY][DualTor] Deleting/Restoring link-selection and source-interface configs for existing vlans");
+                    SWSS_LOG_INFO("[DHCPV4_RELAY][DualTor] Deleting/Restoring link-selection and source-interface configs for existing vlans");
                 }
 
                 for (auto& vlan : *vlans) {
@@ -1458,7 +1451,7 @@ static void apply_config_event(const event_config &received_event,
 	} else if (received_event.type == DHCPv4_RELAY_PORT_UPDATE) {
                port_config *port_msg = static_cast<port_config *>(received_event.msg);
                if (port_msg) {
-                   syslog(LOG_INFO, "[DHCPV4_RELAY] Updating interface %s event", port_msg->phy_interface.c_str());
+                   SWSS_LOG_INFO("[DHCPV4_RELAY] Updating interface %s event", port_msg->phy_interface.c_str());
                     if (port_msg->is_add) {
                        if (std::find(interface_list.begin(), interface_list.end(), port_msg->phy_interface) == interface_list.end()) {
                            interface_list.push_back(port_msg->phy_interface);
@@ -1489,7 +1482,7 @@ void config_event_callback(evutil_socket_t fd, short event, void *arg) {
         }
         apply_config_event(received_event, vlans);
     } else {
-        syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to read config update: expected %lu bytes, got %zd bytes", sizeof(received_event), bytes_read);
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to read config update: expected %lu bytes, got %zd bytes", sizeof(received_event), bytes_read);
     }
 }
 
@@ -1515,7 +1508,7 @@ void config_event_callback(evutil_socket_t fd, short event, void *arg) {
 void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
     base = event_base_new();
     if (base == NULL) {
-        syslog(LOG_ERR, "[DHCPV4_RELAY] libevent: Failed to create event base\n");
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] libevent: Failed to create event base");
         exit(EXIT_FAILURE);
     }
 
@@ -1531,7 +1524,7 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
 
     // Create the pipe for inter-thread communication
     if (pipe(config_pipe) == -1) {
-        syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to create config update pipe");
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to create config update pipe");
         exit(EXIT_FAILURE);
     }
 
@@ -1543,7 +1536,7 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
     struct event *config_event = event_new(base, config_pipe[0], EV_READ | EV_PERSIST,
                                            config_event_callback, reinterpret_cast<void *>(&vlans));
     if (!config_event) {
-        syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to create event for config pipe");
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to create event for config pipe");
         exit(EXIT_FAILURE);
     }
 
@@ -1558,12 +1551,12 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
         pkt_event = event_new(base, filter, EV_READ | EV_PERSIST, pkt_in_callback,
                               reinterpret_cast<void *>(&vlans));
         if (pkt_event == NULL) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] libevent: Failed to create client listen event\n");
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] libevent: Failed to create client listen event");
             exit(EXIT_FAILURE);
         }
-        syslog(LOG_INFO, "[DHCPV4_RELAY] libevent: Created client listen socket event (deferred)\n");
+        SWSS_LOG_INFO("[DHCPV4_RELAY] libevent: Created client listen socket event (deferred)");
     } else {
-        syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to create client listen socket");
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to create client listen socket");
         exit(EXIT_FAILURE);
     }
 
@@ -1595,9 +1588,9 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
     // important post-drain, but pipe-first matches the natural
     // 'config-before-packets' intent.
     event_add(config_event, NULL);
-    syslog(LOG_INFO, "[DHCPV4_RELAY] Added event listener for config updates");
+    SWSS_LOG_INFO("[DHCPV4_RELAY] Added event listener for config updates");
     event_add(pkt_event, NULL);
-    syslog(LOG_INFO, "[DHCPV4_RELAY] libevent: Add client listen socket event\n");
+    SWSS_LOG_INFO("[DHCPV4_RELAY] libevent: Add client listen socket event");
 
     if (signal_init() == 0 && signal_start() == 0) {
         shutdown_relay();
