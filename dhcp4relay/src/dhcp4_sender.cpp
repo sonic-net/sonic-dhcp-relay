@@ -2,7 +2,7 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
-#include <syslog.h>
+#include "logger.h"
 
 #include <cstring>
 
@@ -63,14 +63,14 @@ bool send_udp(int sock, uint8_t *buffer, struct sockaddr_in target, uint32_t len
         if (sendmsg(sock, &msg, 0) == -1) {
             char server_addr[INET_ADDRSTRLEN];
             inet_ntop(AF_INET, &(target.sin_addr), server_addr, INET_ADDRSTRLEN);
-            syslog(LOG_ERR, "sendmsg: Failed to send to target address: %s, error: %s\n", server_addr, strerror(errno));
+            SWSS_LOG_ERROR("sendmsg: Failed to send to target address: %s, error: %s", server_addr, strerror(errno));
             return false;
         }
     } else {
         if (sendto(sock, buffer, len, 0, (const struct sockaddr *)&target, sizeof(target)) == -1) {
             char server_addr[INET_ADDRSTRLEN];
             inet_ntop(AF_INET, &(target.sin_addr), server_addr, INET_ADDRSTRLEN);
-            syslog(LOG_ERR, "sendto: Failed to send to target address: %s, error: %s\n", server_addr, strerror(errno));
+            SWSS_LOG_ERROR("sendto: Failed to send to target address: %s, error: %s", server_addr, strerror(errno));
             return false;
         }
     }
