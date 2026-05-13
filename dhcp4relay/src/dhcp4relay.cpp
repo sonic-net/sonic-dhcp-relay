@@ -65,6 +65,9 @@ const struct sock_fprog ether_relay_fprog = {
 /* interface to vlan mapping */
 std::unordered_map<std::string, std::string> vlan_map;
 
+/* Vxlan kernel netdev names mirrored from CONFIG_DB VXLAN_TUNNEL_MAP. */
+std::unordered_set<std::string> vxlan_netdev_set;
+
 /* VRF sock map is created to avoid multiple sockets for same VRF
    We can expect multiple servers on same VRF, we no need to open VRF sockets
    for each VRF instead we can make use of existing VRF socket opened.
@@ -98,6 +101,15 @@ using namespace swss;
 std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector>("CONFIG_DB", 0);
 
 std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector>("STATE_DB", 0);
+
+/**
+ * @brief Return true iff @p interface_name is a known VxLAN tunnel kernel netdev.
+ *
+ * vxlan_netdev_set is populated by DHCPMgr from CONFIG_DB VXLAN_TUNNEL_MAP.
+ */
+bool is_vxlan_interface(const std::string &interface_name) {
+    return vxlan_netdev_set.count(interface_name) > 0;
+}
 
 /**
  * @code                sock_open(const struct sock_fprog *fprog);
@@ -982,7 +994,7 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
         auto itr = std::find(interface_list.begin(), interface_list.end(), intf);
         /* To avoid duplicate packets, we are only processing packets from
            interface in PORT_TABLE and packets from VXLAN interface and docker0 interfaces */
-        if ((itr == interface_list.end()) && (intf.rfind("VXLAN", 0) != 0) && (intf.rfind("docker0", 0) != 0)) {
+        if ((itr == interface_list.end()) && !is_vxlan_interface(intf) && (intf.rfind("docker0", 0) != 0)) {
             continue;
         }
 
@@ -1465,6 +1477,18 @@ static void apply_config_event(const event_config &received_event,
                        phy_interface_alias_map.erase(port_msg->phy_interface);
                    }
                    delete port_msg;
+               }
+        } else if (received_event.type == DHCPv4_RELAY_VXLAN_TUNNEL_UPDATE) {
+               vxlan_tunnel_config *msg = static_cast<vxlan_tunnel_config *>(received_event.msg);
+               if (msg) {
+                   if (msg->is_add) {
+                       vxlan_netdev_set.insert(msg->netdev_name);
+                       SWSS_LOG_INFO("[DHCPV4_RELAY] Added VXLAN netdev %s to cache", msg->netdev_name.c_str());
+                   } else {
+                       vxlan_netdev_set.erase(msg->netdev_name);
+                       SWSS_LOG_INFO("[DHCPV4_RELAY] Removed VXLAN netdev %s from cache", msg->netdev_name.c_str());
+                   }
+                   delete msg;
                }
         }
     }
