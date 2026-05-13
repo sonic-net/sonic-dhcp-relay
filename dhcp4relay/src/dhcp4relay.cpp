@@ -1496,10 +1496,10 @@ static void apply_config_event(const event_config &received_event,
                if (msg) {
                    if (msg->is_add) {
                        vxlan_tunnel_set.insert(msg->tunnel_name);
-                       syslog(LOG_INFO, "[DHCPV4_RELAY] Added VXLAN tunnel %s to cache\n", msg->tunnel_name.c_str());
+                       SWSS_LOG_INFO("[DHCPV4_RELAY] Added VXLAN tunnel %s to cache", msg->tunnel_name.c_str());
                    } else {
                        vxlan_tunnel_set.erase(msg->tunnel_name);
-                       syslog(LOG_INFO, "[DHCPV4_RELAY] Removed VXLAN tunnel %s from cache\n", msg->tunnel_name.c_str());
+                       SWSS_LOG_INFO("[DHCPV4_RELAY] Removed VXLAN tunnel %s from cache", msg->tunnel_name.c_str());
                    }
                    delete msg;
                }

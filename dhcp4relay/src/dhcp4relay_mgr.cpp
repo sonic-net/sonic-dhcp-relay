@@ -99,7 +99,7 @@ void DHCPMgr::handle_swss_notification() {
             try {
                 msg = new vxlan_tunnel_config();
             } catch (const std::bad_alloc &e) {
-                syslog(LOG_ERR, "[DHCPV4_RELAY] Memory allocation failed: %s\n", e.what());
+                SWSS_LOG_ERROR("[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
                 continue;
             }
             msg->tunnel_name = key;
@@ -110,12 +110,12 @@ void DHCPMgr::handle_swss_notification() {
             event.msg = static_cast<void *>(msg);
 
             if (write(config_pipe[1], &event, sizeof(event)) == -1) {
-                syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to send initial VXLAN tunnel for %s\n", key.c_str());
+                SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to send initial VXLAN tunnel for %s", key.c_str());
                 delete msg;
             }
         }
         if (!keys.empty()) {
-            syslog(LOG_NOTICE, "[DHCPV4_RELAY] Primed VXLAN tunnel cache with %zu entries\n", keys.size());
+            SWSS_LOG_NOTICE("[DHCPV4_RELAY] Primed VXLAN tunnel cache with %zu entries", keys.size());
         }
     }
 
@@ -945,7 +945,7 @@ void DHCPMgr::process_vxlan_tunnel_notification(std::deque<swss::KeyOpFieldsValu
         try {
             msg = new vxlan_tunnel_config();
         } catch (const std::bad_alloc &e) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
             return;
         }
 
@@ -957,7 +957,7 @@ void DHCPMgr::process_vxlan_tunnel_notification(std::deque<swss::KeyOpFieldsValu
         event.msg = static_cast<void *>(msg);
 
         if (write(config_pipe[1], &event, sizeof(event)) == -1) {
-            syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to send VXLAN tunnel update for %s\n", tunnel_name.c_str());
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to send VXLAN tunnel update for %s", tunnel_name.c_str());
             delete msg;
         }
     }
