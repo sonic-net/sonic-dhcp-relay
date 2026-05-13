@@ -171,8 +171,9 @@ struct port_config {
     bool is_add;
 };
 
+/* Add/remove a VxLAN kernel netdev in vxlan_netdev_set. */
 struct vxlan_tunnel_config {
-    std::string tunnel_name;
+    std::string netdev_name;
     bool is_add;
 };
 struct metadata_config {

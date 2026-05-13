@@ -18,6 +18,10 @@ class DHCPMgr {
    private:
     std::atomic<bool> stop_thread;
 
+    /* CONFIG_DB key -> kernel netdev name. Populated on SET, consulted on
+     * DEL because SubscriberStateTable hands DEL events with no fields. */
+    std::unordered_map<std::string, std::string> vxlan_tunnel_map_netdev_cache_;
+
    public:
     DHCPMgr() : stop_thread(false) {}
     ~DHCPMgr();
@@ -38,5 +42,5 @@ class DHCPMgr {
     void process_dhcp_server_ipv4_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
     void process_vlan_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
     void process_port_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
-    void process_vxlan_tunnel_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
+    void process_vxlan_tunnel_map_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
 };

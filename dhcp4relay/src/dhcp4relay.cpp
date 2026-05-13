@@ -65,8 +65,8 @@ const struct sock_fprog ether_relay_fprog = {
 /* interface to vlan mapping */
 std::unordered_map<std::string, std::string> vlan_map;
 
-/* VXLAN tunnel names cached from CONFIG_DB VXLAN_TUNNEL table */
-std::unordered_set<std::string> vxlan_tunnel_set;
+/* Vxlan kernel netdev names mirrored from CONFIG_DB VXLAN_TUNNEL_MAP. */
+std::unordered_set<std::string> vxlan_netdev_set;
 
 /* VRF sock map is created to avoid multiple sockets for same VRF
    We can expect multiple servers on same VRF, we no need to open VRF sockets
@@ -103,25 +103,12 @@ std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnecto
 std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector>("STATE_DB", 0);
 
 /**
- * @code                is_vxlan_interface(const std::string &interface_name);
+ * @brief Return true iff @p interface_name is a known VxLAN tunnel kernel netdev.
  *
- * @brief               Check if an interface is a VxLAN tunnel by querying CONFIG_DB
- *                      Handles interface names with VLAN suffix (e.g., "VXLAN-101" -> "VXLAN")
- *
- * @param interface_name    Name of the interface to check (may include VLAN suffix like "VXLAN-101")
- *
- * @return              true if interface is a VxLAN tunnel, false otherwise
+ * vxlan_netdev_set is populated by DHCPMgr from CONFIG_DB VXLAN_TUNNEL_MAP.
  */
 bool is_vxlan_interface(const std::string &interface_name) {
-    // Extract base interface name (before "-" if present)
-    // e.g., "VXLAN-101" -> "VXLAN", "Vtep-200" -> "Vtep", "vtep1" -> "vtep1"
-    std::string base_intf_name = interface_name;
-    auto dash_pos = interface_name.find('-');
-    if (dash_pos != std::string::npos) {
-        base_intf_name = interface_name.substr(0, dash_pos);
-    }
-
-    return vxlan_tunnel_set.count(base_intf_name) > 0;
+    return vxlan_netdev_set.count(interface_name) > 0;
 }
 
 /**
@@ -1495,11 +1482,11 @@ static void apply_config_event(const event_config &received_event,
                vxlan_tunnel_config *msg = static_cast<vxlan_tunnel_config *>(received_event.msg);
                if (msg) {
                    if (msg->is_add) {
-                       vxlan_tunnel_set.insert(msg->tunnel_name);
-                       SWSS_LOG_INFO("[DHCPV4_RELAY] Added VXLAN tunnel %s to cache", msg->tunnel_name.c_str());
+                       vxlan_netdev_set.insert(msg->netdev_name);
+                       SWSS_LOG_INFO("[DHCPV4_RELAY] Added VXLAN netdev %s to cache", msg->netdev_name.c_str());
                    } else {
-                       vxlan_tunnel_set.erase(msg->tunnel_name);
-                       SWSS_LOG_INFO("[DHCPV4_RELAY] Removed VXLAN tunnel %s from cache", msg->tunnel_name.c_str());
+                       vxlan_netdev_set.erase(msg->netdev_name);
+                       SWSS_LOG_INFO("[DHCPV4_RELAY] Removed VXLAN netdev %s from cache", msg->netdev_name.c_str());
                    }
                    delete msg;
                }

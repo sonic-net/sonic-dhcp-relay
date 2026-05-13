@@ -22,3 +22,5 @@ extern bool feature_dhcp_server_enabled;
 extern std::unordered_map<std::string, relay_config> vlans_copy;
 extern std::string global_dhcp_server_ip;
 extern std::shared_ptr<swss::DBConnector> config_db;
+extern std::unordered_set<std::string> vxlan_netdev_set;
+bool is_vxlan_interface(const std::string &interface_name);

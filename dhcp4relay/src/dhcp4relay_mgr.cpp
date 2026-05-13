@@ -1,6 +1,7 @@
 #include "dhcp4relay_mgr.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <sstream>
 constexpr auto DEFAULT_TIMEOUT_MSEC = 1000;
@@ -67,7 +68,7 @@ void DHCPMgr::handle_swss_notification() {
     swss::SubscriberStateTable config_db_port_table(config_db_ptr.get(), "PORT");
     swss::SubscriberStateTable config_db_dpu_table(config_db_ptr.get(), "DPUS");
     swss::SubscriberStateTable state_db_interface_table(state_db_ptr.get(), "INTERFACE_TABLE");
-    swss::SubscriberStateTable config_db_vxlan_tunnel_table(config_db_ptr.get(), "VXLAN_TUNNEL");
+    swss::SubscriberStateTable config_db_vxlan_tunnel_map_table(config_db_ptr.get(), "VXLAN_TUNNEL_MAP");
 
     std::deque<swss::KeyOpFieldsValuesTuple> entries;
     swss::Select swss_select;
@@ -84,38 +85,13 @@ void DHCPMgr::handle_swss_notification() {
     swss_select.addSelectable(&config_db_port_table);
     swss_select.addSelectable(&config_db_dpu_table);
     swss_select.addSelectable(&state_db_interface_table);
-    swss_select.addSelectable(&config_db_vxlan_tunnel_table);
+    swss_select.addSelectable(&config_db_vxlan_tunnel_map_table);
 
-    /* Prime VXLAN tunnel cache from existing CONFIG_DB entries so that
-       tunnels configured before dhcp4relay starts are recognized
-       immediately — SubscriberStateTable delivers existing keys on its
-       first pops(), but packets may arrive before that event is processed. */
     {
-        swss::Table vxlan_tunnel_table(config_db_ptr.get(), "VXLAN_TUNNEL");
-        std::vector<std::string> keys;
-        vxlan_tunnel_table.getKeys(keys);
-        for (const auto &key : keys) {
-            vxlan_tunnel_config *msg = nullptr;
-            try {
-                msg = new vxlan_tunnel_config();
-            } catch (const std::bad_alloc &e) {
-                SWSS_LOG_ERROR("[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
-                continue;
-            }
-            msg->tunnel_name = key;
-            msg->is_add = true;
-
-            event_config event;
-            event.type = DHCPv4_RELAY_VXLAN_TUNNEL_UPDATE;
-            event.msg = static_cast<void *>(msg);
-
-            if (write(config_pipe[1], &event, sizeof(event)) == -1) {
-                SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to send initial VXLAN tunnel for %s", key.c_str());
-                delete msg;
-            }
-        }
-        if (!keys.empty()) {
-            SWSS_LOG_NOTICE("[DHCPV4_RELAY] Primed VXLAN tunnel cache with %zu entries", keys.size());
+        std::deque<swss::KeyOpFieldsValuesTuple> initial_entries;
+        config_db_vxlan_tunnel_map_table.pops(initial_entries);
+        if (!initial_entries.empty()) {
+            process_vxlan_tunnel_map_notification(initial_entries);
         }
     }
 
@@ -209,9 +185,9 @@ void DHCPMgr::handle_swss_notification() {
 	} else if (selectable == static_cast<swss::Selectable *>(&config_db_dpu_table)) {
             config_db_dpu_table.pops(entries);
             process_port_notification(entries);
-	} else if (selectable == static_cast<swss::Selectable *>(&config_db_vxlan_tunnel_table)) {
-            config_db_vxlan_tunnel_table.pops(entries);
-            process_vxlan_tunnel_notification(entries);
+	} else if (selectable == static_cast<swss::Selectable *>(&config_db_vxlan_tunnel_map_table)) {
+            config_db_vxlan_tunnel_map_table.pops(entries);
+            process_vxlan_tunnel_map_notification(entries);
 	}
     }
 }
@@ -936,10 +912,64 @@ void DHCPMgr::process_port_notification(std::deque<swss::KeyOpFieldsValuesTuple>
      }
 }
 
-void DHCPMgr::process_vxlan_tunnel_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries) {
+/**
+ * @brief Translate VXLAN_TUNNEL_MAP CONFIG_DB events into VXLAN_NETDEV_UPDATE
+ *        events on config_pipe.
+ *
+ * The kernel netdev name is "<tunnel_name>-<vlan_numeric_id>", derived from
+ * the row key ("<tunnel>|<mapname>") and the row's "vlan" field ("Vlan<id>").
+ *
+ * On DEL, SubscriberStateTable delivers no field values (the row is already
+ * gone from CONFIG_DB), so vxlan_tunnel_map_netdev_cache_ holds the netdev
+ * name from the prior SET to allow eviction.
+ */
+void DHCPMgr::process_vxlan_tunnel_map_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries) {
+    static const std::string kVlanPrefix = "Vlan";
+
     for (auto &entry : entries) {
-        std::string tunnel_name = kfvKey(entry);
-        std::string operation = kfvOp(entry);
+        const std::string &key = kfvKey(entry);
+        const std::string &operation = kfvOp(entry);
+        bool is_add = (operation == "SET");
+
+        std::string netdev_name;
+        if (is_add) {
+            auto bar = key.find('|');
+            if (bar == std::string::npos || bar == 0 || bar == key.size() - 1) {
+                SWSS_LOG_INFO("[DHCPV4_RELAY] Skipping malformed VXLAN_TUNNEL_MAP key '%s'",
+                              key.c_str());
+                continue;
+            }
+            std::string tunnel_name = key.substr(0, bar);
+
+            std::string vlan_field;
+            for (const auto &fv : kfvFieldsValues(entry)) {
+                if (fvField(fv) == "vlan") {
+                    vlan_field = fvValue(fv);
+                    break;
+                }
+            }
+            if (vlan_field.size() <= kVlanPrefix.size() ||
+                vlan_field.compare(0, kVlanPrefix.size(), kVlanPrefix) != 0) {
+                SWSS_LOG_INFO("[DHCPV4_RELAY] VXLAN_TUNNEL_MAP '%s' has unexpected vlan '%s'",
+                              key.c_str(), vlan_field.c_str());
+                continue;
+            }
+            std::string vlan_id = vlan_field.substr(kVlanPrefix.size());
+            if (!std::all_of(vlan_id.begin(), vlan_id.end(), ::isdigit)) {
+                SWSS_LOG_INFO("[DHCPV4_RELAY] VXLAN_TUNNEL_MAP '%s' non-numeric vlan id '%s'",
+                              key.c_str(), vlan_id.c_str());
+                continue;
+            }
+            netdev_name = tunnel_name + "-" + vlan_id;
+            vxlan_tunnel_map_netdev_cache_[key] = netdev_name;
+        } else {
+            auto it = vxlan_tunnel_map_netdev_cache_.find(key);
+            if (it == vxlan_tunnel_map_netdev_cache_.end()) {
+                continue;
+            }
+            netdev_name = it->second;
+            vxlan_tunnel_map_netdev_cache_.erase(it);
+        }
 
         vxlan_tunnel_config *msg = nullptr;
         try {
@@ -948,16 +978,16 @@ void DHCPMgr::process_vxlan_tunnel_notification(std::deque<swss::KeyOpFieldsValu
             SWSS_LOG_ERROR("[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
             return;
         }
-
-        msg->tunnel_name = tunnel_name;
-        msg->is_add = (operation == "SET");
+        msg->netdev_name = netdev_name;
+        msg->is_add = is_add;
 
         event_config event;
         event.type = DHCPv4_RELAY_VXLAN_TUNNEL_UPDATE;
         event.msg = static_cast<void *>(msg);
 
         if (write(config_pipe[1], &event, sizeof(event)) == -1) {
-            SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to send VXLAN tunnel update for %s", tunnel_name.c_str());
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to send VXLAN netdev update for %s",
+                           netdev_name.c_str());
             delete msg;
         }
     }

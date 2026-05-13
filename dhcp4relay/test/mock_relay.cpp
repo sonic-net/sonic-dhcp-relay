@@ -1071,3 +1071,188 @@ TEST(DHCPRelayTest, from_client_relay_of_relay_discard) {
     EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).Times(0);
     from_client(&dhcpLayer, config);
 }
+
+/* is_vxlan_interface() does an exact-match lookup against vxlan_netdev_set.
+ * The set is populated by DHCPMgr from CONFIG_DB VXLAN_TUNNEL_MAP. */
+class IsVxlanInterfaceTest : public ::testing::Test {
+   protected:
+    void SetUp() override { vxlan_netdev_set.clear(); }
+    void TearDown() override { vxlan_netdev_set.clear(); }
+};
+
+TEST_F(IsVxlanInterfaceTest, exact_netdev_match_returns_true) {
+    vxlan_netdev_set.insert("VXLAN-101");
+    EXPECT_TRUE(is_vxlan_interface("VXLAN-101"));
+}
+
+TEST_F(IsVxlanInterfaceTest, ethernet_returns_false) {
+    vxlan_netdev_set.insert("VXLAN-101");
+    EXPECT_FALSE(is_vxlan_interface("Ethernet0"));
+    EXPECT_FALSE(is_vxlan_interface("Ethernet8"));
+    EXPECT_FALSE(is_vxlan_interface("docker0"));
+}
+
+TEST_F(IsVxlanInterfaceTest, hyphenated_tunnel_exact_match) {
+    vxlan_netdev_set.insert("Vtep-1-100-100");
+    EXPECT_TRUE(is_vxlan_interface("Vtep-1-100-100"));
+    EXPECT_FALSE(is_vxlan_interface("Vtep-1-100"));
+}
+
+TEST_F(IsVxlanInterfaceTest, prefix_sharing_no_false_positive) {
+    vxlan_netdev_set.insert("VXLAN-100");
+    vxlan_netdev_set.insert("Vtep-1-100-100");
+    EXPECT_FALSE(is_vxlan_interface("VXLAN-Mgmt"));
+    EXPECT_FALSE(is_vxlan_interface("VXLAN-100-eth0"));
+    EXPECT_FALSE(is_vxlan_interface("Vtep-1-100-eth0"));
+}
+
+TEST_F(IsVxlanInterfaceTest, empty_set_returns_false) {
+    EXPECT_FALSE(is_vxlan_interface("Vtep-1-100-100"));
+    EXPECT_FALSE(is_vxlan_interface("VXLAN"));
+    EXPECT_FALSE(is_vxlan_interface(""));
+}
+
+TEST_F(IsVxlanInterfaceTest, handle_vxlan_netdev_events_set_and_del) {
+    int pipe_fds[2];
+    EXPECT_GLOBAL_CALL(write, write(_, _, _))
+                     .Times(AtLeast(1))
+                     .WillRepeatedly(Invoke(RealWrite));
+    ASSERT_NE(pipe(pipe_fds), -1);
+    std::unordered_map<std::string, relay_config> vlans;
+
+    vxlan_tunnel_config *add_msg = new vxlan_tunnel_config();
+    add_msg->netdev_name = "Vtep-1-100-100";
+    add_msg->is_add = true;
+
+    event_config event;
+    event.type = DHCPv4_RELAY_VXLAN_TUNNEL_UPDATE;
+    event.msg = static_cast<void *>(add_msg);
+    ASSERT_NE(write(pipe_fds[1], &event, sizeof(event)), -1);
+    config_event_callback(pipe_fds[0], 0, &vlans);
+
+    EXPECT_TRUE(is_vxlan_interface("Vtep-1-100-100"));
+    EXPECT_FALSE(is_vxlan_interface("Vtep-1-100-eth0"));
+    EXPECT_FALSE(is_vxlan_interface("Vtep-1-100"));
+
+    vxlan_tunnel_config *del_msg = new vxlan_tunnel_config();
+    del_msg->netdev_name = "Vtep-1-100-100";
+    del_msg->is_add = false;
+
+    event.msg = static_cast<void *>(del_msg);
+    ASSERT_NE(write(pipe_fds[1], &event, sizeof(event)), -1);
+    config_event_callback(pipe_fds[0], 0, &vlans);
+
+    EXPECT_FALSE(is_vxlan_interface("Vtep-1-100-100"));
+
+    close(pipe_fds[0]);
+    close(pipe_fds[1]);
+}
+
+TEST_F(IsVxlanInterfaceTest, process_vxlan_tunnel_map_notification_set_and_del) {
+    DHCPMgr mgr;
+    EXPECT_GLOBAL_CALL(write, write(_, _, _))
+                     .Times(AtLeast(1))
+                     .WillRepeatedly(Invoke(RealWrite));
+
+    int pipe_fds[2];
+    ASSERT_NE(pipe(pipe_fds), -1);
+    int saved_pipe = config_pipe[1];
+    config_pipe[1] = pipe_fds[1];
+
+    std::deque<swss::KeyOpFieldsValuesTuple> entries;
+    entries.emplace_back("Vtep-1-100|map_2727_Vlan100", "SET",
+                         std::vector<swss::FieldValueTuple>{
+                             {"vlan", "Vlan100"}, {"vni", "2727"}});
+    mgr.process_vxlan_tunnel_map_notification(entries);
+
+    std::unordered_map<std::string, relay_config> vlans;
+    config_event_callback(pipe_fds[0], 0, &vlans);
+
+    EXPECT_TRUE(is_vxlan_interface("Vtep-1-100-100"));
+    EXPECT_FALSE(is_vxlan_interface("Vtep-1-100-eth0"));
+
+    std::deque<swss::KeyOpFieldsValuesTuple> del_entries;
+    del_entries.emplace_back("Vtep-1-100|map_2727_Vlan100", "DEL",
+                             std::vector<swss::FieldValueTuple>{});
+    mgr.process_vxlan_tunnel_map_notification(del_entries);
+    config_event_callback(pipe_fds[0], 0, &vlans);
+
+    EXPECT_FALSE(is_vxlan_interface("Vtep-1-100-100"));
+
+    config_pipe[1] = saved_pipe;
+    close(pipe_fds[0]);
+    close(pipe_fds[1]);
+}
+
+TEST_F(IsVxlanInterfaceTest, process_vxlan_tunnel_map_notification_unknown_del_dropped) {
+    DHCPMgr mgr;
+    EXPECT_GLOBAL_CALL(write, write(_, _, _)).Times(0);
+
+    std::deque<swss::KeyOpFieldsValuesTuple> entries;
+    entries.emplace_back("Vtep-1-100|never_seen", "DEL",
+                         std::vector<swss::FieldValueTuple>{});
+    mgr.process_vxlan_tunnel_map_notification(entries);
+
+    EXPECT_FALSE(is_vxlan_interface("Vtep-1-100-anything"));
+}
+
+TEST_F(IsVxlanInterfaceTest, process_vxlan_tunnel_map_notification_skips_malformed) {
+    DHCPMgr mgr;
+    EXPECT_GLOBAL_CALL(write, write(_, _, _)).Times(0);
+
+    std::deque<swss::KeyOpFieldsValuesTuple> entries;
+    entries.emplace_back("vtep1|map_no_vlan", "SET",
+                         std::vector<swss::FieldValueTuple>{{"vni", "100"}});
+    entries.emplace_back("vtep1|map_bad_vlan", "SET",
+                         std::vector<swss::FieldValueTuple>{{"vlan", "VlanXYZ"}});
+    entries.emplace_back("vtep1|map_no_prefix", "SET",
+                         std::vector<swss::FieldValueTuple>{{"vlan", "100"}});
+    entries.emplace_back("not_a_compound_key", "SET",
+                         std::vector<swss::FieldValueTuple>{{"vlan", "Vlan100"}});
+
+    mgr.process_vxlan_tunnel_map_notification(entries);
+
+    EXPECT_TRUE(vxlan_netdev_set.empty());
+}
+
+/* Primer wiring: VXLAN_TUNNEL_MAP rows that exist in CONFIG_DB before
+ * dhcp4relay starts must reach vxlan_netdev_set through the same
+ * SubscriberStateTable::pops() -> process_vxlan_tunnel_map_notification
+ * path used at runtime. */
+TEST_F(IsVxlanInterfaceTest, primer_snapshot_populates_set_via_processor) {
+    swss::Table tunnel_map_table(config_db.get(), "VXLAN_TUNNEL_MAP");
+    tunnel_map_table.set("Vtep-1-100|map_2727_Vlan100",
+                         {{"vlan", "Vlan100"}, {"vni", "2727"}});
+    tunnel_map_table.set("vtep1|map_100_Vlan200",
+                         {{"vlan", "Vlan200"}, {"vni", "100"}});
+
+    swss::SubscriberStateTable sst(config_db.get(), "VXLAN_TUNNEL_MAP");
+    std::deque<swss::KeyOpFieldsValuesTuple> initial;
+    sst.pops(initial);
+    ASSERT_EQ(initial.size(), 2u);
+
+    DHCPMgr mgr;
+    EXPECT_GLOBAL_CALL(write, write(_, _, _))
+                     .Times(AtLeast(1))
+                     .WillRepeatedly(Invoke(RealWrite));
+
+    int pipe_fds[2];
+    ASSERT_NE(pipe(pipe_fds), -1);
+    int saved_pipe = config_pipe[1];
+    config_pipe[1] = pipe_fds[1];
+
+    mgr.process_vxlan_tunnel_map_notification(initial);
+
+    std::unordered_map<std::string, relay_config> vlans;
+    config_event_callback(pipe_fds[0], 0, &vlans);
+    config_event_callback(pipe_fds[0], 0, &vlans);
+
+    EXPECT_TRUE(is_vxlan_interface("Vtep-1-100-100"));
+    EXPECT_TRUE(is_vxlan_interface("vtep1-200"));
+    EXPECT_FALSE(is_vxlan_interface("Ethernet0"));
+
+    config_pipe[1] = saved_pipe;
+    close(pipe_fds[0]);
+    close(pipe_fds[1]);
+    testing_db::reset();
+}
