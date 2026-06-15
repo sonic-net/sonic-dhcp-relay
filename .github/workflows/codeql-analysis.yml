@@ -77,8 +77,12 @@ jobs:
           curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libnl-genl-3-dev_3.7.0-0.2%2Bb1sonic1_amd64.deb" -o libnl-genl-3-dev_3.7.0-0.2+b1sonic1_amd64.deb
           curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libnl-nf-3-200_3.7.0-0.2%2Bb1sonic1_amd64.deb" -o libnl-nf-3-200_3.7.0-0.2+b1sonic1_amd64.deb
           curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libnl-nf-3-dev_3.7.0-0.2%2Bb1sonic1_amd64.deb" -o libnl-nf-3-dev_3.7.0-0.2+b1sonic1_amd64.deb
-          curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libyang3_3.12.2-1_amd64.deb" -o libyang3_3.12.2-1_amd64.deb
-          curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm/libyang-dev_3.12.2-1_amd64.deb" -o libyang-dev_3.12.2-1_amd64.deb
+          # The sonic-build artifacts REST API requires an exact filename in
+          # target= (wildcards do not resolve), so to stay version-independent
+          # across libyang3 bumps we fetch the whole bookworm debs directory as
+          # a zip and extract just the libyang3 debs with a glob.
+          curl -L "https://sonic-build.azurewebsites.net/api/sonic/artifacts?branchName=master&platform=vs&target=target/debs/bookworm&format=zip" -o bookworm-debs.zip
+          unzip -j -o bookworm-debs.zip '*/libyang3_*.deb' '*/libyang-dev_*.deb'
           dpkg-deb -x libswsscommon_1.0.0_amd64.deb $(dirname $GITHUB_WORKSPACE)
           dpkg-deb -x libswsscommon-dev_1.0.0_amd64.deb $(dirname $GITHUB_WORKSPACE)
           dpkg -i libnl*.deb
