@@ -15,7 +15,6 @@ extraction:
       - "swig3.0"
       - "uuid-dev"
       - "libzmq3-dev"
-      - "libyang"
       - "libyang-dev"
     after_prepare:
     - "git clone https://github.com/Azure/sonic-swss-common; pushd sonic-swss-common; ./autogen.sh; fakeroot dpkg-buildpackage -us -uc -b; popd"
