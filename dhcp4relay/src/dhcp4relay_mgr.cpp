@@ -5,7 +5,7 @@
 #include <sstream>
 constexpr auto DEFAULT_TIMEOUT_MSEC = 1000;
 
-std::unordered_map<std::string, relay_config> vlans_copy;
+std::unordered_map<std::string, relay_config> interfaces_copy;
 
 #ifdef UNIT_TEST
 using namespace swss;
@@ -313,8 +313,8 @@ void DHCPMgr::process_interface_notification(std::deque<swss::KeyOpFieldsValuesT
         }
 
         // Check the source interface is configured in dhcp relay config.
-        for (auto &vlan : vlans_copy) {
-            if (vlan.second.source_interface == intf_name) {
+        for (auto &intf : interfaces_copy) {
+            if (intf.second.source_interface == intf_name) {
                 relay_config *relay_msg = nullptr;
                 try {
                     relay_msg = new relay_config();
@@ -323,7 +323,7 @@ void DHCPMgr::process_interface_notification(std::deque<swss::KeyOpFieldsValuesT
                     return;
                 }
 
-                relay_msg->vlan = vlan.second.vlan;
+                relay_msg->interface = intf.second.interface;
                 if (operation == "SET") {
                     relay_msg->is_add = true;
                     if (inet_pton(AF_INET, ip.c_str(), &relay_msg->src_intf_sel_addr.sin_addr) != 1) {
@@ -367,7 +367,7 @@ void DHCPMgr::process_interface_notification(std::deque<swss::KeyOpFieldsValuesT
  */
 void DHCPMgr::process_relay_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries) {
     for (auto &entry : entries) {
-        std::string vlan = kfvKey(entry);
+        std::string interface_name = kfvKey(entry);
         std::string operation = kfvOp(entry);
         std::vector<swss::FieldValueTuple> field_values = kfvFieldsValues(entry);
         relay_config *relay_msg = nullptr;
@@ -378,7 +378,7 @@ void DHCPMgr::process_relay_notification(std::deque<swss::KeyOpFieldsValuesTuple
             return;
         }
 
-        relay_msg->vlan = vlan;
+        relay_msg->interface = interface_name;
 
         if (operation == "SET") {
             relay_msg->is_add = true;
@@ -408,19 +408,32 @@ void DHCPMgr::process_relay_notification(std::deque<swss::KeyOpFieldsValuesTuple
                     try {
                         relay_msg->max_hop_count = static_cast<uint8_t>(std::stoi(v));
                     } catch (const std::exception &e) {
-                        SWSS_LOG_WARN("[DHCPV4_RELAY] Invalid max_hop_count value '%s' for VLAN %s: %s",
-                               v.c_str(), vlan.c_str(), e.what());
+                        SWSS_LOG_WARN("[DHCPV4_RELAY] Invalid max_hop_count value '%s' for interface %s: %s",
+                               v.c_str(), interface_name.c_str(), e.what());
                     }
+                } else if (f == "circuit_id_format") {
+                    relay_msg->circuit_id_format = v;
+                } else if (f == "circuit_id") {
+                    relay_msg->circuit_id = v;
                 }
-                SWSS_LOG_DEBUG("[DHCPV4_RELAY] key: %s, Operation: %s, f: %s, v: %s", vlan.c_str(), operation.c_str(), f.c_str(), v.c_str());
+                SWSS_LOG_DEBUG("[DHCPV4_RELAY] key: %s, Operation: %s, f: %s, v: %s", interface_name.c_str(), operation.c_str(), f.c_str(), v.c_str());
             }
 
             // Updating vrf value with client VRF if server vrf is not configured.
             if (relay_msg->vrf.length() == 0) {
                 std::string value;
                 std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector>("CONFIG_DB", 0);
+
+                // Check if this is a VLAN interface or physical port
                 std::shared_ptr<swss::Table> vlan_intf_tbl = std::make_shared<swss::Table>(config_db.get(), CFG_VLAN_INTF_TABLE_NAME);
-                vlan_intf_tbl->hget(vlan, VRF_NAME_FIELD, value);
+                vlan_intf_tbl->hget(interface_name, VRF_NAME_FIELD, value);
+
+                // If not found in VLAN_INTERFACE, check INTERFACE table for physical ports
+                if (value.size() <= 0) {
+                    std::shared_ptr<swss::Table> intf_tbl = std::make_shared<swss::Table>(config_db.get(), "INTERFACE");
+                    intf_tbl->hget(interface_name, VRF_NAME_FIELD, value);
+                }
+
                 if (value.size() <= 0) {
                     relay_msg->vrf = "default";
                 } else {
@@ -428,21 +441,21 @@ void DHCPMgr::process_relay_notification(std::deque<swss::KeyOpFieldsValuesTuple
                 }
             }
 
-            // Update the vlan cache entry
-            vlans_copy[relay_msg->vlan] = *relay_msg;
+            // Update the interface cache entry
+            interfaces_copy[relay_msg->interface] = *relay_msg;
         } else if (operation == "DEL") {
-            SWSS_LOG_INFO("[DHCPV4_RELAY] Received DELETE operation for VLAN %s", vlan.c_str());
+            SWSS_LOG_INFO("[DHCPV4_RELAY] Received DELETE operation for interface %s", interface_name.c_str());
             relay_msg->is_add = false;
-            // Remove the vlan cache entry
-            vlans_copy.erase(relay_msg->vlan);
+            // Remove the interface cache entry
+            interfaces_copy.erase(relay_msg->interface);
         }
 
         if (relay_msg->servers.empty() && operation != "DEL") {
-            SWSS_LOG_WARN("[DHCPV4_RELAY] No servers found for VLAN %s, skipping configuration.", vlan.c_str());
+            SWSS_LOG_WARN("[DHCPV4_RELAY] No servers found for interface %s, skipping configuration.", interface_name.c_str());
             delete relay_msg;
             continue;
         }
-        SWSS_LOG_INFO("[DHCPV4_RELAY] %s %s relay config", operation.c_str(), vlan.c_str());
+        SWSS_LOG_INFO("[DHCPV4_RELAY] %s %s relay config", operation.c_str(), interface_name.c_str());
 
         event_config event;
         event.type = DHCPv4_RELAY_CONFIG_UPDATE;
@@ -490,7 +503,7 @@ void DHCPMgr::process_feature_notification(std::deque<swss::KeyOpFieldsValuesTup
         }
 
         if (state == "enabled" && !feature_dhcp_server_enabled) {
-            //Delete the existing vlan configs in main thread
+            //Delete the existing interface configs in main thread
 	    event_config event;
             event.type = DHCPv4_SERVER_FEATURE_UPDATE;
 
@@ -498,7 +511,7 @@ void DHCPMgr::process_feature_notification(std::deque<swss::KeyOpFieldsValuesTup
                 SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to send delete event for dhcp_server feature update");
 		return;
             }
-            vlans_copy.clear();
+            interfaces_copy.clear();
             feature_dhcp_server_enabled = true;
 
 	    if (config_db_dhcp_server_ipv4_ptr) {
@@ -517,7 +530,7 @@ void DHCPMgr::process_feature_notification(std::deque<swss::KeyOpFieldsValuesTup
             SWSS_LOG_INFO("[DHCPV4_RELAY] Disabling DHCP server auto-config mode and cleaning up.");
             feature_dhcp_server_enabled = false;
             global_dhcp_server_ip.clear();
-	    vlans_copy.clear();
+	    interfaces_copy.clear();
 	    //Delete the old auto generated relay config in main thread
 	    event_config event;
             event.type = DHCPv4_SERVER_FEATURE_UPDATE;
@@ -608,7 +621,7 @@ void DHCPMgr::process_dhcp_server_ipv4_ip_notification(std::deque<swss::KeyOpFie
 		return;
             }
 	    global_dhcp_server_ip.clear();
-	    vlans_copy.clear();
+	    interfaces_copy.clear();
 	}
     }
 }
@@ -628,7 +641,7 @@ void DHCPMgr::process_vlan_member_notification(std::deque<swss::KeyOpFieldsValue
          std::string interface = key.substr(pos + 1);
 
         //If the vlan is not configured in DHCPV4 table then skip the entry.
-        if (vlans_copy.find(vlan) == vlans_copy.end()) {
+        if (interfaces_copy.find(vlan) == interfaces_copy.end()) {
             continue;
         }
 
@@ -685,7 +698,7 @@ void DHCPMgr::process_vlan_interface_notification(std::deque<swss::KeyOpFieldsVa
          }
 
         //If the vlan is not configured in DHCPV4 table then skip the entry.
-        if (vlans_copy.find(vlan) == vlans_copy.end()) {
+        if (interfaces_copy.find(vlan) == interfaces_copy.end()) {
             continue;
         }
 
@@ -743,7 +756,7 @@ void DHCPMgr::process_dhcp_server_ipv4_notification(std::deque<swss::KeyOpFields
             return;
         }
 
-        relay_msg->vlan = vlan;
+        relay_msg->interface = vlan;
 
         if (operation == "SET") {
             std::string state;
@@ -780,11 +793,11 @@ void DHCPMgr::process_dhcp_server_ipv4_notification(std::deque<swss::KeyOpFields
 	    relay_msg->is_add = false;
 	}
 
-	// Update the vlan cache entry
+	// Update the interface cache entry
 	if (relay_msg->is_add) {
-	    vlans_copy[relay_msg->vlan] = *relay_msg;
+	    interfaces_copy[relay_msg->interface] = *relay_msg;
 	} else {
-            vlans_copy.erase(relay_msg->vlan);
+            interfaces_copy.erase(relay_msg->interface);
 	}
 
 	/*Validation to check vlan is present in VLAN table or not */
@@ -822,7 +835,7 @@ void DHCPMgr::process_vlan_notification(std::deque<swss::KeyOpFieldsValuesTuple>
         std::string operation = kfvOp(entry);
 
         //If the vlan is not configured in DHCPV4 table then skip the entry.
-	if (vlans_copy.find(vlan) == vlans_copy.end()) {
+	if (interfaces_copy.find(vlan) == interfaces_copy.end()) {
             continue;
 	}
 
@@ -834,10 +847,10 @@ void DHCPMgr::process_vlan_notification(std::deque<swss::KeyOpFieldsValuesTuple>
             return;
         }
 
-	relay_msg->vlan = vlan;
+	relay_msg->interface = vlan;
 
 	if (operation == "SET") {
-           *relay_msg = vlans_copy[relay_msg->vlan];
+           *relay_msg = interfaces_copy[relay_msg->interface];
            relay_msg->is_add = true;
 	} else {
            relay_msg->is_add = false;

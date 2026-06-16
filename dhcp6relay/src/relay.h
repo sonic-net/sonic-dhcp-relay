@@ -181,16 +181,16 @@ int sock_open(const struct sock_fprog *fprog);
 int prepare_lo_socket(const char *lo);
 
 /**
- * @code                prepare_vlan_sockets(int &gua_sock, int &lla_sock, relay_config &config);
+ * @code                prepare_interface_sockets(int &gua_sock, int &lla_sock, relay_config &config);
  * 
- * @brief               prepare vlan L3 socket for sending
+ * @brief               prepare interface L3 socket for sending
  *
  * @param gua_sock      socket binded to global address for relaying client message to server and listening for server message
  * @param lla_sock      socket binded to link_local address for relaying server message to client
  *
  * @return              int
  */
-int prepare_vlan_sockets(int &gua_sock, int &lla_sock, relay_config &config);
+int prepare_interface_sockets(int &gua_sock, int &lla_sock, relay_config &config);
 
 /**
  * @code                        prepare_relay_config(relay_config &interface_config, int gua_sock, int filter);
@@ -250,7 +250,7 @@ void relay_relay_reply(const uint8_t *msg, int32_t len, relay_config *configs);
 /**
  * @code                struct relay_config *
  *                      get_relay_int_from_relay_msg(const uint8_t *msg, int32_t len,
- *                                                   std::unordered_map<std::string, relay_config> *vlans)
+ *                                                   std::unordered_map<std::string, relay_config> *interfaces)
  * 
  * @brief               get relay interface info from relay message
  *
@@ -259,7 +259,7 @@ void relay_relay_reply(const uint8_t *msg, int32_t len, relay_config *configs);
  * @return              bool
  */
 struct relay_config *
-get_relay_int_from_relay_msg(const uint8_t *msg, int32_t len, std::unordered_map<std::string, relay_config> *vlans);
+get_relay_int_from_relay_msg(const uint8_t *msg, int32_t len, std::unordered_map<std::string, relay_config> *interfaces);
 
 /**
  * @code                void server_callback_dualtor(evutil_socket_t fd, short event, void *arg);
@@ -275,14 +275,14 @@ get_relay_int_from_relay_msg(const uint8_t *msg, int32_t len, std::unordered_map
 void server_callback_dualtor(evutil_socket_t fd, short event, void *arg);
 
 /**
- * @code                loop_relay(std::unordered_map<std::string, relay_config> &vlans);
+ * @code                loop_relay(std::unordered_map<std::string, relay_config> &interfaces);
  * 
  * @brief               main loop: configure sockets, create libevent base, start server listener thread
  *  
- * @param vlans         list of vlans retrieved from config_db
+ * @param interfaces    list of interfaces retrieved from config_db
  * @param state_db      state_db connector
  */
-void loop_relay(std::unordered_map<std::string, relay_config> &vlans);
+void loop_relay(std::unordered_map<std::string, relay_config> &interfaces);
 
 /**
  * @code signal_init();
@@ -424,16 +424,31 @@ const struct dhcpv6_msg *parse_dhcpv6_hdr(const uint8_t *buffer);
 const struct dhcpv6_relay_msg *parse_dhcpv6_relay(const uint8_t *buffer);
 
 /**
- * @code                update_vlan_mapping(std::string vlan, std::shared_ptr<swss::DBConnector> cfgdb);
+ * @code                update_interface_mapping(std::string interface_name, std::shared_ptr<swss::DBConnector> cfgdb);
  *
- * @brief               build vlan member interface to vlan mapping table 
+ * @brief               build interface  mapping table (interface to vlan/interface) mapping table
  *
- * @param vlan          vlan name string
+ * @param interface_name interface_name name string
  * @param cfgdb         config db connection
  *
  * @return              none
  */
-void update_vlan_mapping(std::string vlan, std::shared_ptr<swss::DBConnector> cfgdb);
+void update_interface_mapping(std::string interface_name, std::shared_ptr<swss::DBConnector> cfgdb);
+
+/**
+ * @code                remove_interface_mapping(std::string interface_name, std::shared_ptr<swss::DBConnector> cfgdb);
+ *
+ * @brief               remove interface mapping from interface_map
+ *
+ * @param interface_name interface name string (VLAN or physical port)
+ * @param cfgdb         config db connection
+ *
+ * @return              none
+ */
+void remove_interface_mapping(std::string interface_name, std::shared_ptr<swss::DBConnector> cfgdb);
+
+/* Global interface to vlan/port mapping */
+extern std::unordered_map<std::string, std::string> interface_map;
 
 /**
  * @code                client_callback(evutil_socket_t fd, short event, void *arg);
@@ -455,8 +470,8 @@ void client_callback(evutil_socket_t fd, short event, void *arg);
  *
  * @param buffer        packet buffer
  * @param length        packet length
- * @param config        vlan related relay config
- * @param ifname        vlan member interface name
+ * @param config        interface related relay config
+ * @param ifname        interface name
  *
  * @return              none
  */
@@ -488,7 +503,7 @@ void clear_counter(std::shared_ptr<swss::DBConnector> state_db);
 /**
  * @code                void lla_check_callback(evutil_socket_t fd, short event, void *arg);
  * 
- * @brief               callback for libevent timer to check whether lla is ready for vlan
+ * @brief               callback for libevent timer to check whether lla is ready for interface
  *
  * @param fd            libevent socket
  * @param event         libevent triggered event  
