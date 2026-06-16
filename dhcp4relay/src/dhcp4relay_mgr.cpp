@@ -7,6 +7,12 @@ constexpr auto DEFAULT_TIMEOUT_MSEC = 1000;
 
 std::unordered_map<std::string, relay_config> vlans_copy;
 
+/* In-process cache of <intf_name, sockaddr_in> populated from *INTERFACE
+   table events. Lets us replay an INTERFACE_UPDATE for a vlan whose
+   source_interface IP was already observed before the DHCPV4_RELAY
+   config for that vlan landed in vlans_copy. */
+std::unordered_map<std::string, sockaddr_in> intf_to_addr_cache;
+
 #ifdef UNIT_TEST
 using namespace swss;
 #endif
@@ -104,6 +110,26 @@ void DHCPMgr::handle_swss_notification() {
             SWSS_LOG_INFO("[DHCPV4_RELAY] No DHCPV4_RELAY entries present at startup");
         }
 
+        /* Drain the *INTERFACE SubscriberStateTable buffers (already seeded
+           with the CONFIG_DB snapshot at construction time) before the
+           barrier. process_interface_notification populates
+           intf_to_addr_cache and dispatches INTERFACE_UPDATE for vlans
+           registered above so the main thread applies the correct
+           src_intf_sel_addr as part of the initial sync. */
+        std::deque<swss::KeyOpFieldsValuesTuple> intf_entries;
+        config_db_loopback_table.pops(intf_entries);
+        if (!intf_entries.empty()) {
+            process_interface_notification(intf_entries);
+        }
+        config_db_interface_table.pops(intf_entries);
+        if (!intf_entries.empty()) {
+            process_interface_notification(intf_entries);
+        }
+        config_db_portchannel_table.pops(intf_entries);
+        if (!intf_entries.empty()) {
+            process_interface_notification(intf_entries);
+        }
+
         event_config barrier_event{};
         barrier_event.type = DHCPv4_RELAY_SYNC_BARRIER;
         barrier_event.msg = nullptr;
@@ -133,6 +159,16 @@ void DHCPMgr::handle_swss_notification() {
             if (config_db_relaymgr_table_ptr && selectable == config_db_relaymgr_table_ptr.get()) {
                 config_db_relaymgr_table_ptr->pops(entries);
                 process_relay_notification(entries);
+                /* Runtime: a DHCPV4_RELAY batch may register a vlan whose
+                   source_interface IP was cached by an earlier *INTERFACE
+                   event but never dispatched (vlans_copy didn't yet
+                   contain the vlan at that point). Replay from the
+                   in-process cache so the main thread overwrites any
+                   src_intf_sel_addr=0 set by prepare_relay_interface_config()
+                   before relayed packets arrive. */
+                if (!entries.empty()) {
+                    dispatch_source_intf_from_cache();
+                }
             } else if (selectable == static_cast<swss::Selectable *>(&config_db_interface_table)) {
                 config_db_interface_table.pops(entries);
                 process_interface_notification(entries);
@@ -312,6 +348,23 @@ void DHCPMgr::process_interface_notification(std::deque<swss::KeyOpFieldsValuesT
             continue;
         }
 
+        /* Update intf_to_addr_cache (IPv4 only). Captures the IP for
+           any vlan whose source_interface gets configured later, so a
+           DHCPV4_RELAY batch arriving after the *INTERFACE event can
+           still recover the correct src_intf_sel_addr without a Redis
+           hit. */
+        if (ip.find(':') == std::string::npos) {
+            if (operation == "SET") {
+                sockaddr_in tmp{};
+                if (inet_pton(AF_INET, ip.c_str(), &tmp.sin_addr) == 1) {
+                    tmp.sin_family = AF_INET;
+                    intf_to_addr_cache[intf_name] = tmp;
+                }
+            } else if (operation == "DEL") {
+                intf_to_addr_cache.erase(intf_name);
+            }
+        }
+
         // Check the source interface is configured in dhcp relay config.
         for (auto &vlan : vlans_copy) {
             if (vlan.second.source_interface == intf_name) {
@@ -451,6 +504,56 @@ void DHCPMgr::process_relay_notification(std::deque<swss::KeyOpFieldsValuesTuple
         // Write the pointer address to the pipe
         if (write(config_pipe[1], &event, sizeof(event)) == -1) {
             SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to write to config update pipe: %s", strerror(errno));
+            delete relay_msg;
+        }
+    }
+}
+
+/**
+ * @brief Dispatch INTERFACE_UPDATE events from intf_to_addr_cache.
+ *
+ * For every vlan in vlans_copy with a configured source_interface that has
+ * an entry in intf_to_addr_cache, push a DHCPv4_RELAY_INTERFACE_UPDATE
+ * event down config_pipe. Pure in-process: no Redis access. Invoked after
+ * a runtime DHCPV4_RELAY batch to recover an IP that *INTERFACE
+ * notifications recorded into the cache before the matching vlan was in
+ * vlans_copy. Idempotent against the existing INTERFACE_UPDATE flow.
+ */
+void DHCPMgr::dispatch_source_intf_from_cache() {
+    if (vlans_copy.empty() || intf_to_addr_cache.empty()) {
+        return;
+    }
+
+    for (auto &vlan_entry : vlans_copy) {
+        const std::string &intf = vlan_entry.second.source_interface;
+        if (intf.empty()) {
+            continue;
+        }
+
+        auto it = intf_to_addr_cache.find(intf);
+        if (it == intf_to_addr_cache.end()) {
+            continue;
+        }
+
+        relay_config *relay_msg = nullptr;
+        try {
+            relay_msg = new relay_config();
+        } catch (const std::bad_alloc &e) {
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
+            return;
+        }
+
+        relay_msg->vlan = vlan_entry.second.vlan;
+        relay_msg->is_add = true;
+        relay_msg->src_intf_sel_addr = it->second;
+
+        event_config event;
+        event.type = DHCPv4_RELAY_INTERFACE_UPDATE;
+        event.msg = static_cast<void *>(relay_msg);
+
+        if (write(config_pipe[1], &event, sizeof(event)) == -1) {
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to write to config update pipe: %s",
+                           strerror(errno));
             delete relay_msg;
         }
     }

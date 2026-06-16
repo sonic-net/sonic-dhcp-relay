@@ -27,6 +27,11 @@ class DHCPMgr {
     void stop_db_updates();
     void process_relay_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
     void process_interface_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
+    /* Replay INTERFACE_UPDATE events from the in-process intf_to_addr_cache
+       for any vlan in vlans_copy whose source_interface has a cached IP.
+       Called after a runtime DHCPV4_RELAY batch so a missing getifaddrs()
+       result for the source IP does not leave src_intf_sel_addr at 0.0.0.0. */
+    void dispatch_source_intf_from_cache();
     void process_device_metadata_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
     void process_vlan_member_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
     void process_vlan_interface_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
