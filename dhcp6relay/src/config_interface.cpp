@@ -1,12 +1,26 @@
 #include <sstream>
 #include <syslog.h>
 #include <algorithm>
+#include <atomic>
+#include <deque>
+#include <mutex>
+#include <thread>
+#include <unistd.h>
 #include "config_interface.h"
 
 constexpr auto DEFAULT_TIMEOUT_MSEC = 1000;
 
 bool pollSwssNotifcation = true;
 swss::Select swssSelect;
+
+// Runtime config monitor state: the monitor thread publishes the desired
+// per-vlan config under g_cfg_mutex and wakes the main loop via g_notify_fd;
+// config_change_callback reconciles it with the live vlans map.
+static std::mutex g_cfg_mutex;
+static std::unordered_map<std::string, relay_config> g_desired_cfg;
+static std::thread g_monitor_thread;
+static std::atomic<bool> g_stop_monitor{false};
+static int g_notify_fd = -1;
 
 /**
  * @code                void initialize_swss()
@@ -21,7 +35,7 @@ void initialize_swss(std::unordered_map<std::string, relay_config> &vlans)
         std::shared_ptr<swss::DBConnector> configDbPtr = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
         swss::SubscriberStateTable ipHelpersTable(configDbPtr.get(), "DHCP_RELAY");
         swssSelect.addSelectable(&ipHelpersTable);
-        get_dhcp(vlans, &ipHelpersTable, false, configDbPtr);
+        get_dhcp(vlans, &ipHelpersTable, configDbPtr);
     }
     catch (const std::bad_alloc &e) {
         syslog(LOG_ERR, "Failed allocate memory. Exception details: %s", e.what());
@@ -53,14 +67,14 @@ void deinitialize_swss()
 
 /**
 
- * @code                void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic,
+ * @code                void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable,
                                       std::shared_ptr<swss::DBConnector> config_db)
  * 
  * @brief               initialize and get vlan table information from DHCP_RELAY
  *
  * @return              none
  */
-void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic,
+void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable,
               std::shared_ptr<swss::DBConnector> config_db) {
     swss::Selectable *selectable;
     int ret = swssSelect.select(&selectable, DEFAULT_TIMEOUT_MSEC);
@@ -70,12 +84,7 @@ void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::Subscr
     } else if (ret == swss::Select::TIMEOUT) {
     } 
     if (selectable == static_cast<swss::Selectable *> (ipHelpersTable)) {
-        if (!dynamic) {
-            handleRelayNotification(*ipHelpersTable, vlans, config_db);
-        } else {
-            syslog(LOG_WARNING, "relay config changed, "
-                   "need restart container to take effect");
-        }
+        handleRelayNotification(*ipHelpersTable, vlans, config_db);
     }
 }
 
@@ -206,4 +215,138 @@ bool check_is_lla_ready(std::string vlan) {
         }
     }
     return false;
+}
+
+/**
+ * @code                std::unordered_map<std::string, relay_config> build_desired_config(std::shared_ptr<swss::DBConnector> config_db)
+ *
+ * @brief               read the full DHCP_RELAY table and build the desired per-vlan relay config
+ *
+ * @param config_db     CONFIG_DB connector used to read DHCP_RELAY and VLAN_INTERFACE
+ *
+ * @return              desired map of vlan name to relay_config (config fields only)
+ */
+std::unordered_map<std::string, relay_config> build_desired_config(std::shared_ptr<swss::DBConnector> config_db)
+{
+    std::unordered_map<std::string, relay_config> desired;
+    swss::Table dhcp_relay_table(config_db.get(), "DHCP_RELAY");
+    std::vector<std::string> keys;
+    dhcp_relay_table.getKeys(keys);
+
+    std::deque<swss::KeyOpFieldsValuesTuple> entries;
+    for (const auto &key : keys) {
+        std::vector<swss::FieldValueTuple> field_values;
+        dhcp_relay_table.get(key, field_values);
+        entries.emplace_back(key, "SET", field_values);
+    }
+    // Reuse the notification parser so the server list, options and the
+    // VLAN_INTERFACE IPv6-presence check stay in one code path.
+    processRelayNotification(entries, desired, config_db);
+    return desired;
+}
+
+/**
+ * @code                static void publish_desired_config(std::shared_ptr<swss::DBConnector> config_db)
+ *
+ * @brief               snapshot the desired config, store it under lock and wake the main loop
+ *
+ * @param config_db     CONFIG_DB connector used to read the desired config
+ *
+ * @return              none
+ */
+static void publish_desired_config(std::shared_ptr<swss::DBConnector> config_db)
+{
+    auto desired = build_desired_config(config_db);
+    {
+        std::lock_guard<std::mutex> lock(g_cfg_mutex);
+        g_desired_cfg = std::move(desired);
+    }
+    if (g_notify_fd >= 0) {
+        char notify_byte = 1;
+        ssize_t written = write(g_notify_fd, &notify_byte, sizeof(notify_byte));
+        if (written < 0) {
+            syslog(LOG_WARNING, "Failed to notify main loop of config change: %s", strerror(errno));
+        }
+    }
+}
+
+/**
+ * @code                static void config_monitor_loop()
+ *
+ * @brief               detached thread: watch CONFIG_DB tables and publish desired config on change
+ *
+ * @return              none
+ */
+static void config_monitor_loop()
+{
+    auto config_db = std::make_shared<swss::DBConnector>("CONFIG_DB", 0);
+    auto state_db = std::make_shared<swss::DBConnector>("STATE_DB", 0);
+    swss::SubscriberStateTable dhcpRelaySub(config_db.get(), "DHCP_RELAY");
+    swss::SubscriberStateTable vlanIntfSub(config_db.get(), "VLAN_INTERFACE");
+    swss::SubscriberStateTable vlanSub(config_db.get(), "VLAN");
+    // STATE_DB INTERFACE_TABLE signals interface readiness (link-local address
+    // present). Watching it reconciles a vlan as soon as its interface comes up
+    // instead of waiting for the periodic 60s link-local check.
+    swss::SubscriberStateTable intfStateSub(state_db.get(), "INTERFACE_TABLE");
+
+    swss::Select select;
+    select.addSelectable(&dhcpRelaySub);
+    select.addSelectable(&vlanIntfSub);
+    select.addSelectable(&vlanSub);
+    select.addSelectable(&intfStateSub);
+
+    // Drain the initial snapshot the subscriber tables cache at construction so
+    // the first real notification is not preceded by a redundant reprocessing.
+    std::deque<swss::KeyOpFieldsValuesTuple> drain;
+    dhcpRelaySub.pops(drain);
+    vlanIntfSub.pops(drain);
+    vlanSub.pops(drain);
+    intfStateSub.pops(drain);
+
+    // Publish the current configuration once at startup.
+    publish_desired_config(config_db);
+
+    while (!g_stop_monitor.load()) {
+        swss::Selectable *selectable = nullptr;
+        int ret = select.select(&selectable, DEFAULT_TIMEOUT_MSEC);
+        if (ret == swss::Select::TIMEOUT) {
+            continue;
+        }
+        if (ret == swss::Select::ERROR) {
+            syslog(LOG_WARNING, "Select: returned ERROR in config monitor");
+            continue;
+        }
+
+        std::deque<swss::KeyOpFieldsValuesTuple> entries;
+        dhcpRelaySub.pops(entries);
+        entries.clear();
+        vlanIntfSub.pops(entries);
+        entries.clear();
+        vlanSub.pops(entries);
+        entries.clear();
+        intfStateSub.pops(entries);
+        entries.clear();
+
+        publish_desired_config(config_db);
+    }
+}
+
+void start_dhcp_config_monitor(int notify_fd)
+{
+    g_notify_fd = notify_fd;
+    g_stop_monitor.store(false);
+    g_monitor_thread = std::thread(config_monitor_loop);
+    g_monitor_thread.detach();
+}
+
+void stop_dhcp_config_monitor()
+{
+    g_stop_monitor.store(true);
+}
+
+bool fetch_desired_config(std::unordered_map<std::string, relay_config> &out)
+{
+    std::lock_guard<std::mutex> lock(g_cfg_mutex);
+    out = g_desired_cfg;
+    return true;
 }
