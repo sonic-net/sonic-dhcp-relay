@@ -2,6 +2,7 @@
 #include <unistd.h>
 #include <event.h>
 #include <sstream>
+#include <chrono>
 #include <event2/event.h>
 #include <event2/bufferevent.h>
 #include <signal.h>
@@ -19,6 +20,35 @@ static std::string counter_table = "DHCPv6_COUNTER_TABLE|";
 
 static uint8_t client_recv_buffer[BUFFER_SIZE];
 static uint8_t server_recv_buffer[BUFFER_SIZE];
+
+/**
+ * @code                bool should_log_throttled(const std::string &key);
+ *
+ * @brief               rate-limit a per-packet log so it cannot flood syslog.
+ *                      Each key is logged at most once per LOG_THROTTLE_INTERVAL.
+ *                      Used for warnings that can fire per packet, e.g. client
+ *                      traffic on an unconfigured interface (expected before any
+ *                      DHCP_RELAY config now that dhcp6relay starts always).
+ *
+ * @param key           identifier of the throttled log site (e.g. interface or
+ *                      vlan name)
+ *
+ * @return              true if the caller should emit the log now
+ *
+ * @note                Called only from the libevent main thread, so the static
+ *                      bookkeeping needs no locking.
+ */
+static bool should_log_throttled(const std::string &key) {
+    static std::unordered_map<std::string, std::chrono::steady_clock::time_point> last_logged;
+    constexpr auto LOG_THROTTLE_INTERVAL = std::chrono::seconds(60);
+    auto now = std::chrono::steady_clock::now();
+    auto it = last_logged.find(key);
+    if (it == last_logged.end() || (now - it->second) >= LOG_THROTTLE_INTERVAL) {
+        last_logged[key] = now;
+        return true;
+    }
+    return false;
+}
 
 /* DHCPv6 filter */
 /* sudo tcpdump -dd "inbound and ip6 dst ff02::1:2 && udp dst port 547" */
@@ -455,6 +485,31 @@ int sock_open(const struct sock_fprog *fprog)
 }
 
 /**
+ * @code                        build_servers_sock(relay_config &config);
+ *
+ * @brief                       (re)build the cached server sockaddr list from config.servers
+ *
+ * @param config                relay interface config whose servers_sock is rebuilt
+ *
+ * @return                      none
+ */
+void build_servers_sock(relay_config &config) {
+    config.servers_sock.clear();
+    for(auto server: config.servers) {
+        sockaddr_in6 tmp;
+        if(inet_pton(AF_INET6, server.c_str(), &tmp.sin6_addr) != 1)
+        {
+            syslog(LOG_WARNING, "inet_pton: Failed to convert IPv6 address\n");
+        }
+        tmp.sin6_family = AF_INET6;
+        tmp.sin6_flowinfo = 0;
+        tmp.sin6_port = htons(RELAY_PORT);
+        tmp.sin6_scope_id = 0;
+        config.servers_sock.push_back(tmp);
+    }
+}
+
+/**
  * @code                        prepare_relay_config(relay_config &interface_config, int gua_sock, int filter);
  * 
  * @brief                       prepare for specified relay interface config: server and link address
@@ -473,18 +528,7 @@ void prepare_relay_config(relay_config &interface_config, int gua_sock, int filt
     interface_config.gua_sock = gua_sock;
     interface_config.filter = filter; 
 
-    for(auto server: interface_config.servers) {
-        sockaddr_in6 tmp;
-        if(inet_pton(AF_INET6, server.c_str(), &tmp.sin6_addr) != 1)
-        {
-            syslog(LOG_WARNING, "inet_pton: Failed to convert IPv6 address\n");
-        }
-        tmp.sin6_family = AF_INET6;
-        tmp.sin6_flowinfo = 0;
-        tmp.sin6_port = htons(RELAY_PORT);
-        tmp.sin6_scope_id = 0; 
-        interface_config.servers_sock.push_back(tmp);
-    }
+    build_servers_sock(interface_config);
 
     if (getifaddrs(&ifa) == -1) {
         syslog(LOG_WARNING, "getifaddrs: Unable to get network interfaces\n");
@@ -899,14 +943,17 @@ void client_callback(evutil_socket_t fd, short event, void *arg) {
         // add is_lla_ready flag check in this callback func
         auto vlan = vlan_map.find(intf);
         if (vlan == vlan_map.end()) {
-            if (intf.find(CLIENT_IF_PREFIX) != std::string::npos) {
+            if (intf.find(CLIENT_IF_PREFIX) != std::string::npos &&
+                should_log_throttled("invalid_intf:" + intf)) {
                 syslog(LOG_WARNING, "Invalid input interface %s\n", interfaceName);
             }
             continue;
         }
         auto config_itr = vlans->find(vlan->second);
         if (config_itr == vlans->end()) {
-            syslog(LOG_WARNING, "Config not found for vlan %s\n", vlan->second.c_str());
+            if (should_log_throttled("no_config:" + vlan->second)) {
+                syslog(LOG_WARNING, "Config not found for vlan %s\n", vlan->second.c_str());
+            }
             continue;
         }
         auto config = config_itr->second;
@@ -1309,6 +1356,26 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
     // hence manually invoke it here to immediate execute it
     lla_check_callback(-1, 0, timer_args);
 
+    // Set up the runtime configuration monitor so relay configuration changes
+    // are applied without restarting the container. The monitor thread watches
+    // CONFIG_DB and wakes this libevent loop through a self-pipe.
+    int cfg_pipe[2];
+    if (pipe(cfg_pipe) == 0) {
+        evutil_make_socket_nonblocking(cfg_pipe[0]);
+        evutil_make_socket_nonblocking(cfg_pipe[1]);
+        auto *apply_ctx = new config_apply_ctx{&vlans, timer_args, timer_event, cfg_pipe[0]};
+        auto cfg_event = event_new(base, cfg_pipe[0], EV_READ|EV_PERSIST, config_change_callback, apply_ctx);
+        if (cfg_event != NULL) {
+            event_add(cfg_event, NULL);
+            start_dhcp_config_monitor(cfg_pipe[1]);
+            syslog(LOG_INFO, "libevent: Add runtime config monitor event\n");
+        } else {
+            syslog(LOG_ERR, "libevent: Failed to create runtime config monitor event\n");
+        }
+    } else {
+        syslog(LOG_ERR, "Failed to create config monitor pipe: %s\n", strerror(errno));
+    }
+
     if(signal_init() == 0 && signal_start() == 0) {
         shutdown_relay();
         for(std::size_t i = 0; i < sockets.size(); i++) {
@@ -1323,6 +1390,7 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
  * @brief free signals and terminate threads
  */
 void shutdown_relay() {
+    stop_dhcp_config_monitor();
     event_del(ev_sigint);
     event_del(ev_sigterm);
     event_free(ev_sigint);
@@ -1409,13 +1477,14 @@ void lla_check_callback(evutil_socket_t fd, short event, void *arg) {
             sockets.push_back(lla_sock);
             prepare_relay_config(vlan.second, gua_sock, filter);
             if (!dual_tor_sock) {
-	            auto server_callback_event = event_new(base, gua_sock, EV_READ|EV_PERSIST,
+	            vlan.second.server_event = event_new(base, gua_sock, EV_READ|EV_PERSIST,
                                        server_callback, &(vlan.second));
-                if (server_callback_event == NULL) {
+                if (vlan.second.server_event == NULL) {
                     syslog(LOG_ERR, "libevent: Failed to create server listen libevent\n");
+                } else {
+                    event_add(vlan.second.server_event, NULL);
+                    syslog(LOG_INFO, "libevent: add server listen socket for %s\n", vlan.first.c_str());
                 }
-                event_add(server_callback_event, NULL);
-                syslog(LOG_INFO, "libevent: add server listen socket for %s\n", vlan.first.c_str());
             }
         } else {
             syslog(LOG_ERR, "Failed to create dualtor loopback listen socket");
@@ -1425,5 +1494,165 @@ void lla_check_callback(evutil_socket_t fd, short event, void *arg) {
     if (all_llas_are_ready) {
         syslog(LOG_INFO, "All Vlans' lla are ready, terminate check timer");
         event_del(timer_event);
+    }
+}
+
+/**
+ * @code                void teardown_vlan_relay(relay_config &config);
+ *
+ * @brief               free libevent event and sockets for a vlan being removed at runtime
+ *
+ * @param config        relay interface config being torn down
+ *
+ * @return              none
+ */
+void teardown_vlan_relay(relay_config &config) {
+    if (config.server_event != nullptr) {
+        event_del(config.server_event);
+        event_free(config.server_event);
+        config.server_event = nullptr;
+    }
+    if (config.is_lla_ready) {
+        if (config.gua_sock > 0) {
+            close(config.gua_sock);
+            config.gua_sock = -1;
+        }
+        if (config.lla_sock > 0) {
+            close(config.lla_sock);
+            config.lla_sock = -1;
+        }
+    }
+    // Remove this vlan's entries from the global lookup maps so stale packets
+    // are not associated with a torn-down relay.
+    for (auto it = vlan_map.begin(); it != vlan_map.end(); ) {
+        if (it->second == config.interface) {
+            it = vlan_map.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto it = addr_vlan_map.begin(); it != addr_vlan_map.end(); ) {
+        if (it->second == config.interface) {
+            it = addr_vlan_map.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+/**
+ * @code                bool apply_desired_config(std::unordered_map<std::string, relay_config> &vlans,
+ *                                                std::unordered_map<std::string, relay_config> &desired);
+ *
+ * @brief               reconcile the live vlans map with the desired config (add/remove/update)
+ *
+ * @param vlans         live per-vlan relay config (mutated in place)
+ * @param desired       desired per-vlan relay config (config fields only)
+ *
+ * @return              true if at least one vlan was newly added (sockets need arming)
+ */
+bool apply_desired_config(std::unordered_map<std::string, relay_config> &vlans,
+                          std::unordered_map<std::string, relay_config> &desired) {
+    bool added = false;
+
+    // Remove relay configs for vlans no longer present in the desired config.
+    for (auto it = vlans.begin(); it != vlans.end(); ) {
+        if (desired.find(it->first) == desired.end()) {
+            syslog(LOG_INFO, "Remove relay config for %s at runtime\n", it->first.c_str());
+            teardown_vlan_relay(it->second);
+            it = vlans.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    // Add new vlans and update existing ones.
+    for (auto &desired_entry : desired) {
+        const std::string &name = desired_entry.first;
+        relay_config &dcfg = desired_entry.second;
+        auto it = vlans.find(name);
+        if (it == vlans.end()) {
+            relay_config ncfg;
+            ncfg.interface = name;
+            ncfg.servers = dcfg.servers;
+            ncfg.is_option_79 = dcfg.is_option_79;
+            ncfg.is_interface_id = dcfg.is_interface_id;
+            ncfg.mux_key = "";
+            ncfg.state_db = nullptr;
+            ncfg.is_lla_ready = false;
+            ncfg.server_event = nullptr;
+            vlans[name] = ncfg;
+            added = true;
+            syslog(LOG_INFO, "Add relay config for %s at runtime\n", name.c_str());
+        } else {
+            relay_config &live = it->second;
+            bool changed = (live.servers != dcfg.servers) ||
+                           (live.is_option_79 != dcfg.is_option_79) ||
+                           (live.is_interface_id != dcfg.is_interface_id);
+            if (changed) {
+                live.servers = dcfg.servers;
+                live.is_option_79 = dcfg.is_option_79;
+                live.is_interface_id = dcfg.is_interface_id;
+                // Rebuild the cached server sockaddr list only when the relay
+                // for this vlan is already active; otherwise lla_check_callback
+                // builds it when the interface becomes ready.
+                if (live.is_lla_ready) {
+                    build_servers_sock(live);
+                }
+                syslog(LOG_INFO, "Update relay config for %s at runtime\n", name.c_str());
+            }
+        }
+    }
+
+    return added;
+}
+
+/**
+ * @code                void config_change_callback(evutil_socket_t fd, short event, void *arg);
+ *
+ * @brief               libevent callback that applies runtime relay configuration changes
+ *
+ * @param fd            notify pipe read end
+ * @param event         libevent triggered event
+ * @param arg           pointer to config_apply_ctx
+ *
+ * @return              none
+ */
+void config_change_callback(evutil_socket_t fd, short event, void *arg) {
+    auto *ctx = reinterpret_cast<config_apply_ctx *>(arg);
+
+    // Drain the notify pipe; the monitor thread may have coalesced several
+    // changes into one or more wake bytes.
+    char drain_buf[64];
+    while (read(ctx->notify_rd, drain_buf, sizeof(drain_buf)) > 0) {
+        // discard
+    }
+
+    std::unordered_map<std::string, relay_config> desired;
+    if (!fetch_desired_config(desired)) {
+        return;
+    }
+
+    bool added = apply_desired_config(*ctx->vlans, desired);
+
+    // A vlan's sockets are armed once its interface link-local address is ready,
+    // which happens when a vlan is added or when its interface later becomes
+    // ready (a STATE_DB INTERFACE_TABLE change). Such vlans still have
+    // is_lla_ready == false; re-fire the link-local check so the existing arming
+    // path picks them up now instead of at the next periodic 60s tick.
+    bool pending_lla = false;
+    for (const auto &vlan : *ctx->vlans) {
+        if (!vlan.second.is_lla_ready) {
+            pending_lla = true;
+            break;
+        }
+    }
+
+    if (added || pending_lla) {
+        struct timeval tv;
+        evutil_timerclear(&tv);
+        tv.tv_sec = 60;
+        event_add(ctx->timer_event, &tv);
+        lla_check_callback(-1, 0, ctx->timer_args);
     }
 }
