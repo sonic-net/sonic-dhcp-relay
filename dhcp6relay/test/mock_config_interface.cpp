@@ -128,6 +128,80 @@ TEST(configInterface, build_desired_config_interface_id_default_tracks_dualtor) 
   config_db->del("VLAN_INTERFACE|Vlan4200|fc02:4200::1");
 }
 
+TEST(configInterface, build_desired_config_vrf_from_vlan_interface) {
+  // A VLAN bound to a non-default VRF (VLAN_INTERFACE vrf_name) with no explicit
+  // server_vrf: the upstream socket VRF tracks the VLAN's own vrf_name and there
+  // is no separate server VRF.
+  std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+  config_db->hset("DHCP_RELAY|Vlan5000", "dhcpv6_servers@", "fc02:5000::1");
+  config_db->hset("VLAN_INTERFACE|Vlan5000", "vrf_name", "Vrf-RED");
+  config_db->hset("VLAN_INTERFACE|Vlan5000|fc02:5000::1", "", "");
+
+  auto desired = build_desired_config(config_db);
+  ASSERT_EQ(desired.count("Vlan5000"), 1);
+  EXPECT_EQ(desired["Vlan5000"].vrf, "Vrf-RED");
+  EXPECT_EQ(desired["Vlan5000"].server_vrf, "");
+
+  config_db->del("DHCP_RELAY|Vlan5000");
+  config_db->del("VLAN_INTERFACE|Vlan5000");
+  config_db->del("VLAN_INTERFACE|Vlan5000|fc02:5000::1");
+}
+
+TEST(configInterface, build_desired_config_server_vrf_distinct_from_vlan_vrf) {
+  // An explicit server_vrf different from the VLAN's vrf_name is preserved
+  // separately: the gua socket binds the VLAN VRF and the servers are reached via
+  // the distinct server VRF.
+  std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+  config_db->hset("DHCP_RELAY|Vlan5100", "dhcpv6_servers@", "fc02:5100::1");
+  config_db->hset("DHCP_RELAY|Vlan5100", "server_vrf", "Vrf-BLUE");
+  config_db->hset("VLAN_INTERFACE|Vlan5100", "vrf_name", "Vrf-RED");
+  config_db->hset("VLAN_INTERFACE|Vlan5100|fc02:5100::1", "", "");
+
+  auto desired = build_desired_config(config_db);
+  ASSERT_EQ(desired.count("Vlan5100"), 1);
+  EXPECT_EQ(desired["Vlan5100"].vrf, "Vrf-RED");
+  EXPECT_EQ(desired["Vlan5100"].server_vrf, "Vrf-BLUE");
+
+  config_db->del("DHCP_RELAY|Vlan5100");
+  config_db->del("VLAN_INTERFACE|Vlan5100");
+  config_db->del("VLAN_INTERFACE|Vlan5100|fc02:5100::1");
+}
+
+TEST(configInterface, build_desired_config_server_vrf_same_as_vlan_vrf_is_cleared) {
+  // When server_vrf equals the VLAN's own vrf_name the servers are already
+  // reachable on the gua socket, so server_vrf is cleared (no separate socket).
+  std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+  config_db->hset("DHCP_RELAY|Vlan5150", "dhcpv6_servers@", "fc02:5150::1");
+  config_db->hset("DHCP_RELAY|Vlan5150", "server_vrf", "Vrf-RED");
+  config_db->hset("VLAN_INTERFACE|Vlan5150", "vrf_name", "Vrf-RED");
+  config_db->hset("VLAN_INTERFACE|Vlan5150|fc02:5150::1", "", "");
+
+  auto desired = build_desired_config(config_db);
+  ASSERT_EQ(desired.count("Vlan5150"), 1);
+  EXPECT_EQ(desired["Vlan5150"].vrf, "Vrf-RED");
+  EXPECT_EQ(desired["Vlan5150"].server_vrf, "");
+
+  config_db->del("DHCP_RELAY|Vlan5150");
+  config_db->del("VLAN_INTERFACE|Vlan5150");
+  config_db->del("VLAN_INTERFACE|Vlan5150|fc02:5150::1");
+}
+
+TEST(configInterface, build_desired_config_vrf_defaults_to_global) {
+  // No vrf_name and no server_vrf: the vrf resolves to the global (default) table
+  // and there is no separate server VRF.
+  std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+  config_db->hset("DHCP_RELAY|Vlan5200", "dhcpv6_servers@", "fc02:5200::1");
+  config_db->hset("VLAN_INTERFACE|Vlan5200|fc02:5200::1", "", "");
+
+  auto desired = build_desired_config(config_db);
+  ASSERT_EQ(desired.count("Vlan5200"), 1);
+  EXPECT_EQ(desired["Vlan5200"].vrf, "default");
+  EXPECT_EQ(desired["Vlan5200"].server_vrf, "");
+
+  config_db->del("DHCP_RELAY|Vlan5200");
+  config_db->del("VLAN_INTERFACE|Vlan5200|fc02:5200::1");
+}
+
 TEST(configInterface, fetch_desired_config) {
   std::unordered_map<std::string, relay_config> out;
   EXPECT_TRUE(fetch_desired_config(out));
