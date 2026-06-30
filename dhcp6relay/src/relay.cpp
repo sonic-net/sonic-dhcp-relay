@@ -21,6 +21,23 @@ static std::string counter_table = "DHCPv6_COUNTER_TABLE|";
 static uint8_t client_recv_buffer[BUFFER_SIZE];
 static uint8_t server_recv_buffer[BUFFER_SIZE];
 
+/* Shared upstream sockets for reaching DHCPv6 servers that live in an explicit
+ * server VRF (different from the client VLAN's VRF). One socket + listen-event
+ * per server VRF is shared by all vlans using it; the relay-reply is
+ * demultiplexed to the owning vlan by link-address (server_callback_vrf).
+ * Created on first use and released once the last vlan referencing it is
+ * removed or re-pointed (see release_server_vrf_sock_if_unused) so a deleted
+ * (and possibly recreated) server VRF does not leave a stale SO_BINDTODEVICE
+ * socket behind. The type/map/accessors are declared in relay.h (non-static) so
+ * the unit tests can verify the lifecycle. */
+std::map<std::string, server_vrf_socket> g_server_vrf_socks;
+
+/* Return the shared upstream socket fd for `vrf`, or -1 if it is not armed. */
+int lookup_server_vrf_sock(const std::string &vrf) {
+    auto it = g_server_vrf_socks.find(vrf);
+    return (it == g_server_vrf_socks.end()) ? -1 : it->second.sock;
+}
+
 /**
  * @code                bool should_log_throttled(const std::string &key);
  *
@@ -645,6 +662,23 @@ int prepare_vlan_sockets(int &gua_sock, int &lla_sock, relay_config &config) {
     evutil_make_listen_socket_reuseable(lla_sock);
     evutil_make_socket_nonblocking(lla_sock);
 
+    // Bind the upstream (gua) socket to the configured VRF so relay-forward
+    // messages to the DHCPv6 servers egress in that VRF's routing table. A
+    // non-default VRF requires SO_BINDTODEVICE to the VRF master device; the
+    // default (global) table needs no binding. The client-facing lla socket is
+    // link-scoped and stays on the vlan interface.
+    if (!config.vrf.empty() && config.vrf != DEFAULT_VRF) {
+        if (setsockopt(gua_sock, SOL_SOCKET, SO_BINDTODEVICE,
+                       config.vrf.c_str(), config.vrf.size()) < 0) {
+            syslog(LOG_ERR, "setsockopt: Failed to bind upstream socket for %s to VRF %s: %s\n",
+                   config.interface.c_str(), config.vrf.c_str(), strerror(errno));
+            close(gua_sock);
+            close(lla_sock);
+            return -1;
+        }
+        syslog(LOG_INFO, "Bound upstream socket for %s to VRF %s\n", config.interface.c_str(), config.vrf.c_str());
+    }
+
     int retry = 0;
     bool bind_gua = false;
     bool bind_lla = false;
@@ -766,6 +800,17 @@ void relay_client(const uint8_t *msg, uint16_t len, const ip6_hdr *ip_hdr, const
     if (dual_tor_sock) {
         sock = config->lo_sock;
     }
+    // Servers in an explicit (different) VRF are reached over the shared per-VRF
+    // socket so relay-forward egresses in that VRF and the reply returns on it.
+    if (!config->server_vrf.empty()) {
+        int vrf_sock = lookup_server_vrf_sock(config->server_vrf);
+        if (vrf_sock < 0) {
+            syslog(LOG_WARNING, "Server VRF socket for %s not ready, dropping relay-forward for %s\n",
+                   config->server_vrf.c_str(), config->interface.c_str());
+            return;
+        }
+        sock = vrf_sock;
+    }
     for(auto server: config->servers_sock) {
         if(send_udp(sock, relay_pkt, server, relay_pkt_len)) {
             increase_counter(config->state_db, config->interface, DHCPv6_MESSAGE_TYPE_RELAY_FORW);
@@ -826,6 +871,17 @@ void relay_relay_forw(const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, re
     int sock = config->gua_sock;
     if (dual_tor_sock) {
         sock = config->lo_sock;
+    }
+    // Servers in an explicit (different) VRF are reached over the shared per-VRF
+    // socket so relay-forward egresses in that VRF and the reply returns on it.
+    if (!config->server_vrf.empty()) {
+        int vrf_sock = lookup_server_vrf_sock(config->server_vrf);
+        if (vrf_sock < 0) {
+            syslog(LOG_WARNING, "Server VRF socket for %s not ready, dropping relay-forward for %s\n",
+                   config->server_vrf.c_str(), config->interface.c_str());
+            return;
+        }
+        sock = vrf_sock;
     }
     for(auto server: config->servers_sock) {
         if(send_udp(sock, send_buffer, server, send_buffer_len)) {
@@ -1145,6 +1201,158 @@ void server_callback_dualtor(evutil_socket_t fd, short event, void *arg) {
         increase_counter(config->state_db, loopback_str, msg_type);
         relay_relay_reply(server_recv_buffer, buffer_sz, config);
     }
+}
+
+/**
+ * @code                void server_callback_vrf(evutil_socket_t fd, short event, void *arg);
+ *
+ * @brief               callback for a shared per-server-VRF upstream socket. All
+ *                      vlans whose servers live in this VRF share one socket; the
+ *                      relay-reply is demultiplexed to the owning vlan by its
+ *                      link-address, exactly like the dualtor loopback path.
+ *
+ * @param fd            the shared server-VRF socket
+ * @param event         libevent triggered event
+ * @param arg           pointer to the live vlans map
+ *
+ * @return              none
+ */
+void server_callback_vrf(evutil_socket_t fd, short event, void *arg) {
+    auto vlans = reinterpret_cast<std::unordered_map<std::string, struct relay_config> *>(arg);
+    sockaddr_in6 from;
+    socklen_t len = sizeof(from);
+    int32_t pkts_num = 0;
+
+    while (pkts_num++ < BATCH_SIZE) {
+        auto buffer_sz = recvfrom(fd, server_recv_buffer, BUFFER_SIZE, 0, (sockaddr *)&from, &len);
+        if (buffer_sz <= 0) {
+            if (errno != EAGAIN) {
+                syslog(LOG_ERR, "recv: Failed to receive data from server VRF socket: %s\n", strerror(errno));
+            }
+            return;
+        }
+
+        if (buffer_sz < (int32_t)sizeof(struct dhcpv6_msg)) {
+            syslog(LOG_WARNING, "Invalid DHCPv6 packet length %zd on server VRF socket\n", buffer_sz);
+            continue;
+        }
+
+        auto msg_type = parse_dhcpv6_hdr(server_recv_buffer)->msg_type;
+        if (msg_type != DHCPv6_MESSAGE_TYPE_RELAY_REPL) {
+            syslog(LOG_WARNING, "Invalid DHCPv6 message type %d received on server VRF socket\n", msg_type);
+            continue;
+        }
+        auto config = get_relay_int_from_relay_msg(server_recv_buffer, buffer_sz, vlans);
+        if (!config) {
+            syslog(LOG_WARNING, "Invalid DHCPv6 header content on server VRF socket, packet will be dropped\n");
+            continue;
+        }
+        if (!config->is_lla_ready) {
+            syslog(LOG_WARNING, "Link local address for %s is not ready, packet will be dropped\n", config->interface.c_str());
+            continue;
+        }
+        increase_counter(config->state_db, config->interface, msg_type);
+        relay_relay_reply(server_recv_buffer, buffer_sz, config);
+    }
+}
+
+/**
+ * @code                static int get_or_create_server_vrf_sock(const std::string &vrf, vlans);
+ *
+ * @brief               return the shared upstream socket for `vrf`, creating and
+ *                      arming it on first use. Bound in6addr_any:547 +
+ *                      SO_BINDTODEVICE(vrf) so the kernel sources relay-forward
+ *                      from an address valid in `vrf` and the relay-reply returns
+ *                      on the same socket.
+ *
+ * @param vrf           server VRF name (must be non-default, non-empty)
+ * @param vlans         live vlans map, used as the listen-event callback arg
+ *
+ * @return              socket fd on success, -1 on failure
+ */
+static int get_or_create_server_vrf_sock(const std::string &vrf,
+                                         std::unordered_map<std::string, struct relay_config> *vlans) {
+    auto it = g_server_vrf_socks.find(vrf);
+    if (it != g_server_vrf_socks.end()) {
+        return it->second.sock;
+    }
+
+    int sock = socket(AF_INET6, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        syslog(LOG_ERR, "socket: Failed to create server VRF socket for %s: %s\n", vrf.c_str(), strerror(errno));
+        return -1;
+    }
+    evutil_make_listen_socket_reuseable(sock);
+    evutil_make_socket_nonblocking(sock);
+
+    if (setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, vrf.c_str(), vrf.size()) < 0) {
+        syslog(LOG_ERR, "setsockopt: Failed to bind server VRF socket to %s: %s\n", vrf.c_str(), strerror(errno));
+        close(sock);
+        return -1;
+    }
+
+    sockaddr_in6 any_addr = {};
+    any_addr.sin6_family = AF_INET6;
+    any_addr.sin6_addr = in6addr_any;
+    any_addr.sin6_port = htons(RELAY_PORT);
+    if (bind(sock, (sockaddr *)&any_addr, sizeof(any_addr)) < 0) {
+        syslog(LOG_ERR, "bind: Failed to bind server VRF socket for %s: %s\n", vrf.c_str(), strerror(errno));
+        close(sock);
+        return -1;
+    }
+
+    struct event *ev = event_new(base, sock, EV_READ | EV_PERSIST, server_callback_vrf, vlans);
+    if (ev == nullptr) {
+        syslog(LOG_ERR, "libevent: Failed to create server VRF listen event for %s\n", vrf.c_str());
+        close(sock);
+        return -1;
+    }
+    event_add(ev, NULL);
+    g_server_vrf_socks[vrf] = {sock, ev};
+    syslog(LOG_INFO, "Created shared upstream socket for server VRF %s\n", vrf.c_str());
+    return sock;
+}
+
+/**
+ * @code                static void release_server_vrf_sock_if_unused(const std::string &vrf, vlans);
+ *
+ * @brief               close and drop the shared upstream socket for `vrf` once
+ *                      no live vlan still references it as its server_vrf, so a
+ *                      server VRF that is deleted (and possibly recreated) does
+ *                      not leave a stale SO_BINDTODEVICE socket that
+ *                      get_or_create_server_vrf_sock would later hand back. Keeps
+ *                      the shared-socket lifecycle symmetric with the per-vlan
+ *                      upstream sockets freed in teardown_vlan_relay.
+ *
+ * @param vrf           server VRF whose socket may now be unreferenced
+ * @param vlans         live per-vlan relay config
+ *
+ * @return              none
+ */
+void release_server_vrf_sock_if_unused(
+        const std::string &vrf,
+        const std::unordered_map<std::string, relay_config> &vlans) {
+    if (vrf.empty()) {
+        return;
+    }
+    auto sit = g_server_vrf_socks.find(vrf);
+    if (sit == g_server_vrf_socks.end()) {
+        return;
+    }
+    for (const auto &entry : vlans) {
+        if (entry.second.server_vrf == vrf) {
+            return;  // still referenced by a live vlan
+        }
+    }
+    if (sit->second.event != nullptr) {
+        event_del(sit->second.event);
+        event_free(sit->second.event);
+    }
+    if (sit->second.sock >= 0) {
+        close(sit->second.sock);
+    }
+    g_server_vrf_socks.erase(sit);
+    syslog(LOG_INFO, "Removed shared upstream socket for server VRF %s\n", vrf.c_str());
 }
 
 /**
@@ -1476,7 +1684,14 @@ void lla_check_callback(evutil_socket_t fd, short event, void *arg) {
             sockets.push_back(gua_sock);
             sockets.push_back(lla_sock);
             prepare_relay_config(vlan.second, gua_sock, filter);
-            if (!dual_tor_sock) {
+            if (!vlan.second.server_vrf.empty()) {
+                // Servers live in a different VRF: relay-reply arrives on the
+                // shared per-VRF socket (armed once, demuxed by link-address), so
+                // do not also listen on this vlan's gua socket.
+                if (get_or_create_server_vrf_sock(vlan.second.server_vrf, vlans) < 0) {
+                    syslog(LOG_ERR, "libevent: Failed to arm server VRF socket for %s\n", vlan.first.c_str());
+                }
+            } else if (!dual_tor_sock) {
 	            vlan.second.server_event = event_new(base, gua_sock, EV_READ|EV_PERSIST,
                                        server_callback, &(vlan.second));
                 if (vlan.second.server_event == NULL) {
@@ -1559,8 +1774,10 @@ bool apply_desired_config(std::unordered_map<std::string, relay_config> &vlans,
     for (auto it = vlans.begin(); it != vlans.end(); ) {
         if (desired.find(it->first) == desired.end()) {
             syslog(LOG_INFO, "Remove relay config for %s at runtime\n", it->first.c_str());
+            std::string removed_server_vrf = it->second.server_vrf;
             teardown_vlan_relay(it->second);
             it = vlans.erase(it);
+            release_server_vrf_sock_if_unused(removed_server_vrf, vlans);
         } else {
             ++it;
         }
@@ -1577,6 +1794,8 @@ bool apply_desired_config(std::unordered_map<std::string, relay_config> &vlans,
             ncfg.servers = dcfg.servers;
             ncfg.is_option_79 = dcfg.is_option_79;
             ncfg.is_interface_id = dcfg.is_interface_id;
+            ncfg.vrf = dcfg.vrf;
+            ncfg.server_vrf = dcfg.server_vrf;
             ncfg.mux_key = "";
             ncfg.state_db = nullptr;
             ncfg.is_lla_ready = false;
@@ -1586,18 +1805,39 @@ bool apply_desired_config(std::unordered_map<std::string, relay_config> &vlans,
             syslog(LOG_INFO, "Add relay config for %s at runtime\n", name.c_str());
         } else {
             relay_config &live = it->second;
+            bool vrf_changed = (live.vrf != dcfg.vrf) || (live.server_vrf != dcfg.server_vrf);
             bool changed = (live.servers != dcfg.servers) ||
                            (live.is_option_79 != dcfg.is_option_79) ||
-                           (live.is_interface_id != dcfg.is_interface_id);
+                           (live.is_interface_id != dcfg.is_interface_id) ||
+                           vrf_changed;
             if (changed) {
                 live.servers = dcfg.servers;
                 live.is_option_79 = dcfg.is_option_79;
                 live.is_interface_id = dcfg.is_interface_id;
-                // Rebuild the cached server sockaddr list only when the relay
-                // for this vlan is already active; otherwise lla_check_callback
-                // builds it when the interface becomes ready.
-                if (live.is_lla_ready) {
-                    build_servers_sock(live);
+                if (vrf_changed && live.is_lla_ready) {
+                    // The upstream socket is bound to the old VRF via
+                    // SO_BINDTODEVICE and cannot be rebound in place. Tear the
+                    // relay down and reset readiness so the link-local arming
+                    // path recreates the sockets under the new VRF.
+                    syslog(LOG_INFO, "VRF for %s changed (vrf '%s'->'%s', server_vrf '%s'->'%s') at runtime; rebinding upstream socket\n",
+                           name.c_str(), live.vrf.c_str(), dcfg.vrf.c_str(),
+                           live.server_vrf.c_str(), dcfg.server_vrf.c_str());
+                    std::string prev_server_vrf = live.server_vrf;
+                    teardown_vlan_relay(live);
+                    live.is_lla_ready = false;
+                    live.vrf = dcfg.vrf;
+                    live.server_vrf = dcfg.server_vrf;
+                    added = true;
+                    release_server_vrf_sock_if_unused(prev_server_vrf, vlans);
+                } else {
+                    live.vrf = dcfg.vrf;
+                    live.server_vrf = dcfg.server_vrf;
+                    // Rebuild the cached server sockaddr list only when the relay
+                    // for this vlan is already active; otherwise lla_check_callback
+                    // builds it when the interface becomes ready.
+                    if (live.is_lla_ready) {
+                        build_servers_sock(live);
+                    }
                 }
                 syslog(LOG_INFO, "Update relay config for %s at runtime\n", name.c_str());
             }

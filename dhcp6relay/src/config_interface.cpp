@@ -163,6 +163,7 @@ void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries,
         intf.mux_key = "";
         intf.state_db = nullptr;
         intf.is_lla_ready = false;
+        std::string server_vrf;
         for (auto &fieldValue: fieldValues) {
             std::string f = fvField(fieldValue);
             std::string v = fvValue(fieldValue);
@@ -181,13 +182,32 @@ void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries,
             if(f == "dhcpv6_option|interface_id" && v == "true") { // interface-id is off by default on non-Dual-ToR, unless specified in config db
                 intf.is_interface_id = true;
             }
+            if(f == SERVER_VRF_FIELD) {
+                server_vrf = v;
+            }
         }
+        // The upstream (gua) socket binds to the VLAN's own VRF (vrf_name), so a
+        // VLAN placed in a non-default VRF reaches servers reachable in that VRF.
+        intf.vrf = DEFAULT_VRF;
+        {
+            std::string vlan_vrf;
+            swss::Table vlan_intf_table(config_db.get(), "VLAN_INTERFACE");
+            vlan_intf_table.hget(vlan, VRF_NAME_FIELD, vlan_vrf);
+            if (!vlan_vrf.empty()) {
+                intf.vrf = vlan_vrf;
+            }
+        }
+        // An explicit server_vrf only matters when the servers live in a VRF
+        // different from the VLAN's own; otherwise the gua socket already reaches
+        // them. Empty server_vrf selects the same-VRF (gua socket) path.
+        intf.server_vrf = (!server_vrf.empty() && server_vrf != intf.vrf) ? server_vrf : "";
         if (intf.servers.empty()) {
             syslog(LOG_WARNING, "No servers found for VLAN %s, skipping configuration.", vlan.c_str());
             continue;
         }
-        syslog(LOG_INFO, "add %s relay config, option79 %s interface-id %s\n", vlan.c_str(),
-               intf.is_option_79 ? "enable" : "disable", intf.is_interface_id ? "enable" : "disable");
+        syslog(LOG_INFO, "add %s relay config, option79 %s interface-id %s vrf %s server_vrf %s\n", vlan.c_str(),
+               intf.is_option_79 ? "enable" : "disable", intf.is_interface_id ? "enable" : "disable",
+               intf.vrf.c_str(), intf.server_vrf.empty() ? "-" : intf.server_vrf.c_str());
         vlans[vlan] = intf;
     }
 }
