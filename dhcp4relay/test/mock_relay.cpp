@@ -10,6 +10,7 @@
 #include "gmock/gmock.h"
 #include "mock_relay.h"
 #include "mock_table.h"
+#include "../src/dhcp4_sender.h"
 #include <sys/syscall.h>
 
 #include <pcapplusplus/DhcpLayer.h>
@@ -1123,6 +1124,94 @@ TEST(DHCPRelayTest, from_client_relay_of_relay_discard) {
 
     EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).Times(0);
     from_client(&dhcpLayer, config);
+}
+/* Short DHCP packet (< sizeof(dhcp_header)): must be dropped before touching header fields. */
+TEST(DHCPRelayTest, from_client_short_header) {
+    /* Allocate on the heap: pcpp::Layer(data, len, nullptr, nullptr) sets
+     * m_IsAllocatedInPacket=false so ~Layer() always calls delete[] m_Data.
+     * Stack storage would cause an ASAN invalid-free. */
+    uint8_t* raw = new uint8_t[50]();
+    raw[0] = 0x01; /* opcode = BOOTREQUEST */
+    raw[1] = 0x01; raw[2] = 0x06;
+    raw[3] = 0x00; /* hops */
+    {
+        uint32_t giaddr = inet_addr("192.168.1.1");
+        memcpy(raw + 24, &giaddr, sizeof(giaddr)); /* relay-from-relay path */
+    }
+    pcpp::DhcpLayer short_dhcp(raw, 50, nullptr, nullptr);
+
+    relay_config config = {};
+    config.vlan = "Vlan10";
+    config.agent_relay_mode = "forward";
+    config.max_hop_count = 16;
+    config.vrf_sock = 1;
+    config.link_address.sin_addr.s_addr = inet_addr("192.168.10.1");
+    struct sockaddr_in srv_sock = {};
+    srv_sock.sin_family = AF_INET;
+    srv_sock.sin_addr.s_addr = inet_addr("10.0.0.1");
+    config.servers_sock = {srv_sock};
+    config.servers = {"10.0.0.1"};
+
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).Times(0);
+    from_client(&short_dhcp, config);
+}
+
+/* Short DHCP server reply (< sizeof(dhcp_header)): must be dropped before touching header fields. */
+TEST(DHCPRelayTest, to_client_short_header) {
+    /* Heap-allocated for the same ASAN reason as from_client_short_header. */
+    uint8_t* raw = new uint8_t[50]();
+    raw[0] = 0x02; /* opcode = BOOTREPLY */
+    raw[1] = 0x01; raw[2] = 0x06;
+    {
+        uint32_t giaddr = inet_addr("192.168.1.1");
+        memcpy(raw + 24, &giaddr, sizeof(giaddr));
+    }
+    pcpp::DhcpLayer short_dhcp(raw, 50, nullptr, nullptr);
+
+    std::unordered_map<std::string, relay_config> vlans;
+    relay_config config = {};
+    config.vlan = "Vlan10";
+    config.client_sock = 1;
+    vlans["Vlan10"] = config;
+
+    /* to_client() returns before getifaddrs() on a truncated DHCP layer */
+    EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_)).Times(0);
+    EXPECT_GLOBAL_CALL(freeifaddrs, freeifaddrs(_)).Times(0);
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).Times(0);
+    to_client(&short_dhcp, &vlans, "172.22.178.234", "Ethernet4");
+}
+
+/* bootp_pad() pads short packets to BOOTP_MIN_LEN and is compiled in both
+ * production and UNIT_TEST builds, allowing direct unit coverage of the logic
+ * that send_udp() uses without linking the real send_udp(). */
+TEST(DHCPRelayTest, bootp_pad_extends_short_packet) {
+    uint8_t src[50] = {};
+    src[0] = 0x01; /* BOOTREQUEST */
+    uint8_t out[BOOTP_MIN_LEN] = {};
+    uint32_t len = sizeof(src);
+    bootp_pad(out, src, &len, true);
+    EXPECT_EQ(len, (uint32_t)BOOTP_MIN_LEN);
+    EXPECT_EQ(out[0], 0x01);
+    EXPECT_EQ(out[49], 0x00); /* zero-padded */
+}
+
+TEST(DHCPRelayTest, bootp_pad_no_op_when_already_min_len) {
+    uint8_t src[BOOTP_MIN_LEN] = {};
+    src[0] = 0x02; /* BOOTREPLY */
+    uint8_t out[BOOTP_MIN_LEN] = {};
+    uint32_t len = BOOTP_MIN_LEN;
+    bootp_pad(out, src, &len, true);
+    EXPECT_EQ(len, (uint32_t)BOOTP_MIN_LEN);
+    /* out was not written — src was not copied */
+    EXPECT_EQ(out[0], 0x00);
+}
+
+TEST(DHCPRelayTest, bootp_pad_disabled_when_pad_false) {
+    uint8_t src[50] = {};
+    uint8_t out[BOOTP_MIN_LEN] = {};
+    uint32_t len = sizeof(src);
+    bootp_pad(out, src, &len, false);
+    EXPECT_EQ(len, (uint32_t)sizeof(src)); /* unchanged */
 }
 TEST(DHCPRelayTest, encode_relay_option_long_circuit_id) {
     interface_list.clear();
