@@ -8,3 +8,9 @@ dhcp4relay/debian/*
 !dhcp4relay/debian/compat
 !dhcp4relay/debian/control
 !dhcp4relay/debian/rules
+
+# Build artifacts
+*.buildinfo
+*.changes
+dhcp4relay/PcapPlusPlus-*/
+dhcp4relay/pcappp.stamp
