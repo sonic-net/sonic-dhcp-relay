@@ -662,11 +662,7 @@ int prepare_vlan_sockets(int &gua_sock, int &lla_sock, relay_config &config) {
     evutil_make_listen_socket_reuseable(lla_sock);
     evutil_make_socket_nonblocking(lla_sock);
 
-    // Bind the upstream (gua) socket to the configured VRF so relay-forward
-    // messages to the DHCPv6 servers egress in that VRF's routing table. A
-    // non-default VRF requires SO_BINDTODEVICE to the VRF master device; the
-    // default (global) table needs no binding. The client-facing lla socket is
-    // link-scoped and stays on the vlan interface.
+    // Bind the upstream (gua) socket to the VRF via SO_BINDTODEVICE so relay-forward egresses there; the default table needs no binding.
     if (!config.vrf.empty() && config.vrf != DEFAULT_VRF) {
         if (setsockopt(gua_sock, SOL_SOCKET, SO_BINDTODEVICE,
                        config.vrf.c_str(), config.vrf.size()) < 0) {
@@ -800,8 +796,7 @@ void relay_client(const uint8_t *msg, uint16_t len, const ip6_hdr *ip_hdr, const
     if (dual_tor_sock) {
         sock = config->lo_sock;
     }
-    // Servers in an explicit (different) VRF are reached over the shared per-VRF
-    // socket so relay-forward egresses in that VRF and the reply returns on it.
+    // Servers in an explicit VRF use the shared per-VRF socket so relay-forward egresses there and the reply returns on it.
     if (!config->server_vrf.empty()) {
         int vrf_sock = lookup_server_vrf_sock(config->server_vrf);
         if (vrf_sock < 0) {
@@ -872,8 +867,7 @@ void relay_relay_forw(const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, re
     if (dual_tor_sock) {
         sock = config->lo_sock;
     }
-    // Servers in an explicit (different) VRF are reached over the shared per-VRF
-    // socket so relay-forward egresses in that VRF and the reply returns on it.
+    // Servers in an explicit VRF use the shared per-VRF socket so relay-forward egresses there and the reply returns on it.
     if (!config->server_vrf.empty()) {
         int vrf_sock = lookup_server_vrf_sock(config->server_vrf);
         if (vrf_sock < 0) {
@@ -1564,9 +1558,7 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
     // hence manually invoke it here to immediate execute it
     lla_check_callback(-1, 0, timer_args);
 
-    // Set up the runtime configuration monitor so relay configuration changes
-    // are applied without restarting the container. The monitor thread watches
-    // CONFIG_DB and wakes this libevent loop through a self-pipe.
+    // Runtime config monitor: apply relay config changes without a container restart (wakes this loop via a self-pipe).
     int cfg_pipe[2];
     if (pipe(cfg_pipe) == 0) {
         evutil_make_socket_nonblocking(cfg_pipe[0]);
@@ -1685,9 +1677,7 @@ void lla_check_callback(evutil_socket_t fd, short event, void *arg) {
             sockets.push_back(lla_sock);
             prepare_relay_config(vlan.second, gua_sock, filter);
             if (!vlan.second.server_vrf.empty()) {
-                // Servers live in a different VRF: relay-reply arrives on the
-                // shared per-VRF socket (armed once, demuxed by link-address), so
-                // do not also listen on this vlan's gua socket.
+                // Servers in a different VRF: replies arrive on the shared per-VRF socket, so don't also listen on this vlan's gua socket.
                 if (get_or_create_server_vrf_sock(vlan.second.server_vrf, vlans) < 0) {
                     syslog(LOG_ERR, "libevent: Failed to arm server VRF socket for %s\n", vlan.first.c_str());
                 }
@@ -1737,8 +1727,7 @@ void teardown_vlan_relay(relay_config &config) {
             config.lla_sock = -1;
         }
     }
-    // Remove this vlan's entries from the global lookup maps so stale packets
-    // are not associated with a torn-down relay.
+    // Remove this vlan's entries from the global lookup maps to avoid stale packet associations.
     for (auto it = vlan_map.begin(); it != vlan_map.end(); ) {
         if (it->second == config.interface) {
             it = vlan_map.erase(it);
@@ -1815,10 +1804,7 @@ bool apply_desired_config(std::unordered_map<std::string, relay_config> &vlans,
                 live.is_option_79 = dcfg.is_option_79;
                 live.is_interface_id = dcfg.is_interface_id;
                 if (vrf_changed && live.is_lla_ready) {
-                    // The upstream socket is bound to the old VRF via
-                    // SO_BINDTODEVICE and cannot be rebound in place. Tear the
-                    // relay down and reset readiness so the link-local arming
-                    // path recreates the sockets under the new VRF.
+                    // SO_BINDTODEVICE can't be rebound in place: tear down and reset readiness so the arming path recreates sockets under the new VRF.
                     syslog(LOG_INFO, "VRF for %s changed (vrf '%s'->'%s', server_vrf '%s'->'%s') at runtime; rebinding upstream socket\n",
                            name.c_str(), live.vrf.c_str(), dcfg.vrf.c_str(),
                            live.server_vrf.c_str(), dcfg.server_vrf.c_str());
@@ -1861,8 +1847,7 @@ bool apply_desired_config(std::unordered_map<std::string, relay_config> &vlans,
 void config_change_callback(evutil_socket_t fd, short event, void *arg) {
     auto *ctx = reinterpret_cast<config_apply_ctx *>(arg);
 
-    // Drain the notify pipe; the monitor thread may have coalesced several
-    // changes into one or more wake bytes.
+    // Drain the notify pipe (the monitor may have coalesced several changes into wake bytes).
     char drain_buf[64];
     while (read(ctx->notify_rd, drain_buf, sizeof(drain_buf)) > 0) {
         // discard
@@ -1875,11 +1860,7 @@ void config_change_callback(evutil_socket_t fd, short event, void *arg) {
 
     bool added = apply_desired_config(*ctx->vlans, desired);
 
-    // A vlan's sockets are armed once its interface link-local address is ready,
-    // which happens when a vlan is added or when its interface later becomes
-    // ready (a STATE_DB INTERFACE_TABLE change). Such vlans still have
-    // is_lla_ready == false; re-fire the link-local check so the existing arming
-    // path picks them up now instead of at the next periodic 60s tick.
+    // Re-fire the link-local check so newly-ready vlans (is_lla_ready == false) get armed now, not at the next 60s tick.
     bool pending_lla = false;
     for (const auto &vlan : *ctx->vlans) {
         if (!vlan.second.is_lla_ready) {

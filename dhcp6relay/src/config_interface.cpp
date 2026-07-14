@@ -13,9 +13,7 @@ constexpr auto DEFAULT_TIMEOUT_MSEC = 1000;
 bool pollSwssNotifcation = true;
 swss::Select swssSelect;
 
-// Runtime config monitor state: the monitor thread publishes the desired
-// per-vlan config under g_cfg_mutex and wakes the main loop via g_notify_fd;
-// config_change_callback reconciles it with the live vlans map.
+// Config-monitor thread state: publishes desired config under g_cfg_mutex, wakes the main loop via g_notify_fd.
 static std::mutex g_cfg_mutex;
 static std::unordered_map<std::string, relay_config> g_desired_cfg;
 static std::thread g_monitor_thread;
@@ -186,8 +184,7 @@ void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries,
                 server_vrf = v;
             }
         }
-        // The upstream (gua) socket binds to the VLAN's own VRF (vrf_name), so a
-        // VLAN placed in a non-default VRF reaches servers reachable in that VRF.
+        // The gua socket binds to the VLAN's own vrf_name, so a VLAN in a non-default VRF reaches servers in that VRF.
         intf.vrf = DEFAULT_VRF;
         {
             std::string vlan_vrf;
@@ -197,9 +194,7 @@ void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries,
                 intf.vrf = vlan_vrf;
             }
         }
-        // An explicit server_vrf only matters when the servers live in a VRF
-        // different from the VLAN's own; otherwise the gua socket already reaches
-        // them. Empty server_vrf selects the same-VRF (gua socket) path.
+        // An explicit server_vrf only applies when servers live in a different VRF than the VLAN's; empty selects the same-VRF path.
         intf.server_vrf = (!server_vrf.empty() && server_vrf != intf.vrf) ? server_vrf : "";
         if (intf.servers.empty()) {
             syslog(LOG_WARNING, "No servers found for VLAN %s, skipping configuration.", vlan.c_str());
@@ -259,8 +254,7 @@ std::unordered_map<std::string, relay_config> build_desired_config(std::shared_p
         dhcp_relay_table.get(key, field_values);
         entries.emplace_back(key, "SET", field_values);
     }
-    // Reuse the notification parser so the server list, options and the
-    // VLAN_INTERFACE IPv6-presence check stay in one code path.
+    // Reuse the notification parser to keep parsing in one code path.
     processRelayNotification(entries, desired, config_db);
     return desired;
 }
@@ -293,7 +287,7 @@ static void publish_desired_config(std::shared_ptr<swss::DBConnector> config_db)
 /**
  * @code                static void config_monitor_loop()
  *
- * @brief               detached thread: watch CONFIG_DB tables and publish desired config on change
+ * @brief               monitor thread: watch CONFIG_DB tables and publish desired config on change
  *
  * @return              none
  */
@@ -304,9 +298,7 @@ static void config_monitor_loop()
     swss::SubscriberStateTable dhcpRelaySub(config_db.get(), "DHCP_RELAY");
     swss::SubscriberStateTable vlanIntfSub(config_db.get(), "VLAN_INTERFACE");
     swss::SubscriberStateTable vlanSub(config_db.get(), "VLAN");
-    // STATE_DB INTERFACE_TABLE signals interface readiness (link-local address
-    // present). Watching it reconciles a vlan as soon as its interface comes up
-    // instead of waiting for the periodic 60s link-local check.
+    // Watch STATE_DB INTERFACE_TABLE to reconcile a vlan as soon as its interface is up.
     swss::SubscriberStateTable intfStateSub(state_db.get(), "INTERFACE_TABLE");
 
     swss::Select select;
@@ -315,16 +307,18 @@ static void config_monitor_loop()
     select.addSelectable(&vlanSub);
     select.addSelectable(&intfStateSub);
 
-    // Drain the initial snapshot the subscriber tables cache at construction so
-    // the first real notification is not preceded by a redundant reprocessing.
+    // Drain the initial cached snapshot to avoid a redundant first reprocess.
     std::deque<swss::KeyOpFieldsValuesTuple> drain;
     dhcpRelaySub.pops(drain);
     vlanIntfSub.pops(drain);
     vlanSub.pops(drain);
     intfStateSub.pops(drain);
 
-    // Publish the current configuration once at startup.
-    publish_desired_config(config_db);
+    try {
+        publish_desired_config(config_db);
+    } catch (const std::exception &e) {
+        syslog(LOG_WARNING, "config monitor: initial publish failed, will retry on next change: %s", e.what());
+    }
 
     while (!g_stop_monitor.load()) {
         swss::Selectable *selectable = nullptr;
@@ -337,31 +331,44 @@ static void config_monitor_loop()
             continue;
         }
 
-        std::deque<swss::KeyOpFieldsValuesTuple> entries;
-        dhcpRelaySub.pops(entries);
-        entries.clear();
-        vlanIntfSub.pops(entries);
-        entries.clear();
-        vlanSub.pops(entries);
-        entries.clear();
-        intfStateSub.pops(entries);
-        entries.clear();
+        try {
+            std::deque<swss::KeyOpFieldsValuesTuple> entries;
+            dhcpRelaySub.pops(entries);
+            entries.clear();
+            vlanIntfSub.pops(entries);
+            entries.clear();
+            vlanSub.pops(entries);
+            entries.clear();
+            intfStateSub.pops(entries);
+            entries.clear();
 
-        publish_desired_config(config_db);
+            publish_desired_config(config_db);
+        } catch (const std::exception &e) {
+            // A transient CONFIG_DB error must not crash the relay; log and retry.
+            syslog(LOG_WARNING, "config monitor: reconcile failed, will retry: %s", e.what());
+        }
     }
 }
 
 void start_dhcp_config_monitor(int notify_fd)
 {
+    // Stop any previous monitor before starting a new one.
+    if (g_monitor_thread.joinable()) {
+        stop_dhcp_config_monitor();
+    }
     g_notify_fd = notify_fd;
     g_stop_monitor.store(false);
     g_monitor_thread = std::thread(config_monitor_loop);
-    g_monitor_thread.detach();
 }
 
 void stop_dhcp_config_monitor()
 {
     g_stop_monitor.store(true);
+    // Join before shutdown_relay tears down the state the thread uses.
+    if (g_monitor_thread.joinable()) {
+        g_monitor_thread.join();
+    }
+    g_notify_fd = -1;
 }
 
 bool fetch_desired_config(std::unordered_map<std::string, relay_config> &out)
