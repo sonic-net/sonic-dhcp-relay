@@ -6,6 +6,25 @@
 #include <string>
 
 #define BOOTP_MIN_LEN 300
+
+/**
+ * @brief Apply BOOTP minimum-length padding.
+ *
+ * Copies *buffer into out and updates *len to BOOTP_MIN_LEN when pad is true
+ * and *len < BOOTP_MIN_LEN.  out must point to at least BOOTP_MIN_LEN
+ * zero-initialised bytes; the caller is responsible for switching to out as
+ * the send buffer when the returned length differs from the input length.
+ *
+ * Compiled in both production and UNIT_TEST builds so tests can exercise the
+ * padding logic directly without linking the real send_udp().
+ *
+ * @param out     destination buffer (>= BOOTP_MIN_LEN bytes, zero-filled)
+ * @param buffer  source packet bytes
+ * @param len     packet length; updated to BOOTP_MIN_LEN if padding applied
+ * @param pad     enable padding
+ */
+void bootp_pad(uint8_t *out, const uint8_t *buffer, uint32_t *len, bool pad);
+
 /**
  * @code                            bool send_udp(int sock, uint8_t *buffer, struct sockaddr_in target, uint32_t len, const char* src_ip, bool use_src_ip);
  *
@@ -13,7 +32,7 @@
  *
  * @param *buffer                   message buffer
  * @param sockaddr_in  target       target socket
- * @param len                         length of message
+ * @param len                       length of message
  * @param src_ip                    source IP address as string (optional)
  * @param use_src_ip                if true, use src_ip as source address
  * @param pad                       if true, do padding
