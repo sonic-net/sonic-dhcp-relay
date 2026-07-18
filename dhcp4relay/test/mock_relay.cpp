@@ -796,7 +796,7 @@ TEST(DHCPRelayTest, encode_relay_option) {
     auto link_sel_ip_ptr = decode_tlv((const uint8_t *)options_ptr, OPTION82_SUBOPT_LINK_SELECTION,
                                         link_sel_len, agent_option_size);
     auto link_sel_ip = *((uint32_t *)link_sel_ip_ptr);
-    EXPECT_EQ((config.link_address.sin_addr.s_addr & config.link_address_netmask.sin_addr.s_addr), link_sel_ip);
+    EXPECT_EQ(config.link_address.sin_addr.s_addr, link_sel_ip);
 
     auto srv_ovr_ride = decode_tlv((const uint8_t *)options_ptr, OPTION82_SUBOPT_SERVER_OVERRIDE,
                                     link_sel_len, agent_option_size);
@@ -871,7 +871,7 @@ TEST(DHCPRelayTest, encode_relay_option_server_client_same_vrf) {
     auto link_sel_ip_ptr = decode_tlv((const uint8_t *)options_ptr, OPTION82_SUBOPT_LINK_SELECTION,
                                         link_sel_len, agent_option_size);
     auto link_sel_ip = *((uint32_t *)link_sel_ip_ptr);
-    EXPECT_EQ((config.link_address.sin_addr.s_addr & config.link_address_netmask.sin_addr.s_addr), link_sel_ip);
+    EXPECT_EQ(config.link_address.sin_addr.s_addr, link_sel_ip);
 
     auto srv_ovr_ride = decode_tlv((const uint8_t *)options_ptr, OPTION82_SUBOPT_SERVER_OVERRIDE,
                                     link_sel_len, agent_option_size);
