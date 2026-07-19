@@ -560,6 +560,52 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
     return;
 }
 
+static bool has_dhcp_option(const pcpp::DhcpLayer *dhcp_pkt,
+                            pcpp::DhcpOptionTypes option_type) {
+    const pcpp::dhcp_header *dhcp_header = dhcp_pkt->getDhcpHeader();
+    if (dhcp_header == nullptr || dhcp_header->magicNumber != DHCP_MAGIC_NUMBER) {
+        return false;
+    }
+
+    size_t remaining = dhcp_pkt->getHeaderLen();
+    if (remaining <= sizeof(pcpp::dhcp_header)) {
+        return false;
+    }
+
+    const uint8_t *option = reinterpret_cast<const uint8_t *>(dhcp_header) +
+                            sizeof(pcpp::dhcp_header);
+    remaining -= sizeof(pcpp::dhcp_header);
+
+    while (remaining > 0) {
+        const uint8_t option_code = *option++;
+        --remaining;
+
+        if (option_code == static_cast<uint8_t>(pcpp::DHCPOPT_PAD)) {
+            continue;
+        }
+        if (option_code == static_cast<uint8_t>(pcpp::DHCPOPT_END)) {
+            return false;
+        }
+        if (remaining == 0) {
+            return false;
+        }
+
+        const uint8_t option_len = *option++;
+        --remaining;
+        if (option_len > remaining) {
+            return false;
+        }
+        if (option_code == static_cast<uint8_t>(option_type)) {
+            return true;
+        }
+
+        option += option_len;
+        remaining -= option_len;
+    }
+
+    return false;
+}
+
 /**
  * @code                 void from_client(pcpp::DhcpLayer* dhcp_pkt, relay_config *config)
  *
@@ -573,6 +619,13 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
 void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
     /* Update giaddr */
     if (!(dhcp_pkt->getDhcpHeader()->gatewayIpAddress)) {
+        if (has_dhcp_option(dhcp_pkt, pcpp::DHCPOPT_DHCP_AGENT_OPTIONS)) {
+            SWSS_LOG_NOTICE("[DHCPV4_RELAY] Dropping first-hop packet with pre-existing Option 82 on untrusted interface %s",
+                    config.vlan.c_str());
+            dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
+            return;
+        }
+
         if (config.source_interface.length() > 0) {
             /* find the IP of the interface and update to giaddr */
             dhcp_pkt->getDhcpHeader()->gatewayIpAddress =
