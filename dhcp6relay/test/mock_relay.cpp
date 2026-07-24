@@ -10,6 +10,7 @@
 #include "gmock/gmock.h"
 
 #include "mock_relay.h"
+#include "../src/config_interface.h"
 
 using namespace ::testing;
 
@@ -443,6 +444,57 @@ TEST(relay, relay_client)
       EXPECT_EQ(sent_msg->link_address.__in6_u.__u6_addr8[i], config.link_address.sin6_addr.__in6_u.__u6_addr8[i]);
       EXPECT_EQ(sent_msg->peer_address.__in6_u.__u6_addr8[i], ip_hdr.ip6_src.__in6_u.__u6_addr8[i]);
   }
+}
+
+TEST(relay, relay_client_server_vrf_not_ready_drops)
+{
+  // When an explicit server_vrf is configured but its shared per-VRF socket is
+  // not yet ready (lookup returns -1), relay_client MUST drop the relay-forward
+  // instead of falling back to the per-vlan gua socket -- otherwise a client's
+  // relay-forward would leak into the wrong VRF. (Regression guard: the client
+  // path must honour server_vrf, not only the relay-of-relay path.)
+  uint8_t msg[] = {
+      0x01, 0x2f, 0xf4, 0xc8, 0x00, 0x01, 0x00, 0x0e,
+      0x00, 0x01, 0x00, 0x01, 0x25, 0x3a, 0x37, 0xb9,
+      0x5a, 0xc6, 0xb0, 0x12, 0xe8, 0xb4, 0x00, 0x06,
+      0x00, 0x04, 0x00, 0x17, 0x00, 0x18, 0x00, 0x08,
+      0x00, 0x02, 0x00, 0x00, 0x00, 0x03, 0x00, 0x0c,
+      0xb0, 0x12, 0xe8, 0xb4, 0x00, 0x00, 0x0e, 0x10,
+      0x00, 0x00, 0x15, 0x18
+  };
+  int32_t msg_len = sizeof(msg);
+
+  struct relay_config config{};
+  config.is_option_79 = true;
+  config.is_interface_id = true;
+  config.gua_sock = mock_sock;
+  config.lla_sock = mock_sock;
+  config.lo_sock = mock_sock;
+  config.server_vrf = "Vrf-NOSOCK-TEST";
+  sockaddr_in6 tmp{};
+  inet_pton(AF_INET6, "fc02:2000::1", &tmp.sin6_addr);
+  tmp.sin6_family = AF_INET6;
+  tmp.sin6_port = htons(RELAY_PORT);
+  config.servers_sock.push_back(tmp);
+  std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+  config.state_db = state_db;
+
+  struct ether_header ether_hdr;
+  ether_hdr.ether_shost[0] = 0x5a;
+  ether_hdr.ether_shost[1] = 0xc6;
+  ether_hdr.ether_shost[2] = 0xb0;
+  ether_hdr.ether_shost[3] = 0x12;
+  ether_hdr.ether_shost[4] = 0xe8;
+  ether_hdr.ether_shost[5] = 0xb4;
+
+  ip6_hdr ip_hdr;
+  inet_pton(AF_INET6, "2000::3", &ip_hdr.ip6_src);
+
+  dual_tor_sock = false;
+  last_used_sock = -999;
+  ASSERT_NO_THROW(relay_client(msg, msg_len, &ip_hdr, &ether_hdr, &config));
+  // server_vrf configured but its socket is absent -> dropped, NOT sent on gua_sock
+  EXPECT_EQ(last_used_sock, -999);
 }
 
 TEST(relay, relay_relay_forw) {
@@ -1161,6 +1213,391 @@ TEST(relay, server_callback_dualtor) {
   //ASSERT_NO_THROW(server_callback_dualtor(0, 0, &vlans_in_loop));
   // normal size and NULL from get_relay_int_from_relay_msg
   ASSERT_NO_THROW(server_callback_dualtor(0, 0, &vlans_in_loop));
+}
+
+TEST(relay, build_servers_sock) {
+  struct relay_config config{};
+  config.interface = "Vlan1000";
+  config.servers.push_back("fc02:2000::1");
+  config.servers.push_back("fc02:2000::2");
+
+  build_servers_sock(config);
+  EXPECT_EQ(config.servers_sock.size(), 2);
+
+  // rebuilding is idempotent: the cached list is cleared then repopulated
+  build_servers_sock(config);
+  EXPECT_EQ(config.servers_sock.size(), 2);
+
+  // shrinking the server list shrinks the cached sockaddr list
+  config.servers.pop_back();
+  build_servers_sock(config);
+  EXPECT_EQ(config.servers_sock.size(), 1);
+}
+
+TEST(relay, teardown_vlan_relay_config_only) {
+  struct relay_config config{};
+  config.interface = "Vlan1000";
+  config.is_lla_ready = false;
+  config.server_event = nullptr;
+
+  vlan_map["Ethernet0"] = "Vlan1000";
+  addr_vlan_map["fc02:1000::1"] = "Vlan1000";
+
+  // A config-only entry (no event, not yet active) tears down cleanly and
+  // clears its entries from the global lookup maps.
+  ASSERT_NO_THROW(teardown_vlan_relay(config));
+  EXPECT_EQ(vlan_map.count("Ethernet0"), 0);
+  EXPECT_EQ(addr_vlan_map.count("fc02:1000::1"), 0);
+}
+
+TEST(relay, apply_desired_config_add_update_remove) {
+  std::unordered_map<std::string, relay_config> vlans;
+  std::unordered_map<std::string, relay_config> desired;
+
+  relay_config d1{};
+  d1.interface = "Vlan1000";
+  d1.servers = {"fc02:2000::1", "fc02:2000::2"};
+  d1.is_option_79 = true;
+  d1.is_interface_id = false;
+  d1.is_lla_ready = false;
+  d1.server_event = nullptr;
+  desired["Vlan1000"] = d1;
+
+  // Add: empty live map gains Vlan1000 and reports that a vlan was added.
+  bool added = apply_desired_config(vlans, desired);
+  EXPECT_TRUE(added);
+  ASSERT_EQ(vlans.count("Vlan1000"), 1);
+  EXPECT_EQ(vlans["Vlan1000"].servers.size(), 2);
+  EXPECT_TRUE(vlans["Vlan1000"].is_option_79);
+  EXPECT_FALSE(vlans["Vlan1000"].is_interface_id);
+
+  // Update: changing servers and options is applied in place with no add.
+  desired["Vlan1000"].servers = {"fc02:2000::9"};
+  desired["Vlan1000"].is_option_79 = false;
+  desired["Vlan1000"].is_interface_id = true;
+  added = apply_desired_config(vlans, desired);
+  EXPECT_FALSE(added);
+  EXPECT_EQ(vlans["Vlan1000"].servers.size(), 1);
+  EXPECT_FALSE(vlans["Vlan1000"].is_option_79);
+  EXPECT_TRUE(vlans["Vlan1000"].is_interface_id);
+
+  // Remove: an empty desired map tears the vlan down.
+  std::unordered_map<std::string, relay_config> empty_desired;
+  added = apply_desired_config(vlans, empty_desired);
+  EXPECT_FALSE(added);
+  EXPECT_EQ(vlans.count("Vlan1000"), 0);
+}
+
+TEST(relay, apply_desired_config_rebuilds_active_servers_sock) {
+  std::unordered_map<std::string, relay_config> vlans;
+  std::unordered_map<std::string, relay_config> desired;
+
+  // An already-active vlan (is_lla_ready true) with a cached sockaddr list.
+  relay_config live{};
+  live.interface = "Vlan1000";
+  live.servers = {"fc02:2000::1"};
+  live.is_lla_ready = true;
+  build_servers_sock(live);
+  EXPECT_EQ(live.servers_sock.size(), 1);
+  vlans["Vlan1000"] = live;
+
+  // Desired adds a second server; the cached sockaddr list must be rebuilt.
+  relay_config d{};
+  d.interface = "Vlan1000";
+  d.servers = {"fc02:2000::1", "fc02:2000::2"};
+  desired["Vlan1000"] = d;
+
+  bool added = apply_desired_config(vlans, desired);
+  EXPECT_FALSE(added);
+  EXPECT_EQ(vlans["Vlan1000"].servers.size(), 2);
+  EXPECT_EQ(vlans["Vlan1000"].servers_sock.size(), 2);
+}
+
+TEST(relay, teardown_vlan_relay_active) {
+  // An active relay (lla ready) owns a libevent event and two sockets; teardown
+  // must free the event, close both sockets and clear the global lookup maps.
+  base = event_base_new();
+  ASSERT_NE(base, nullptr);
+
+  struct relay_config config{};
+  config.interface = "Vlan2000";
+  config.is_lla_ready = true;
+  config.gua_sock = socket(AF_INET6, SOCK_DGRAM, 0);
+  config.lla_sock = socket(AF_INET6, SOCK_DGRAM, 0);
+  ASSERT_GT(config.gua_sock, 0);
+  ASSERT_GT(config.lla_sock, 0);
+  config.server_event = event_new(base, config.gua_sock, EV_READ | EV_PERSIST, server_callback, &config);
+  ASSERT_NE(config.server_event, nullptr);
+
+  vlan_map["Ethernet4"] = "Vlan2000";
+  addr_vlan_map["fc02:2000::1"] = "Vlan2000";
+
+  ASSERT_NO_THROW(teardown_vlan_relay(config));
+
+  EXPECT_EQ(config.server_event, nullptr);
+  EXPECT_EQ(config.gua_sock, -1);
+  EXPECT_EQ(config.lla_sock, -1);
+  EXPECT_EQ(vlan_map.count("Ethernet4"), 0);
+  EXPECT_EQ(addr_vlan_map.count("fc02:2000::1"), 0);
+
+  event_base_free(base);
+  base = nullptr;
+}
+
+TEST(relay, apply_desired_config_vrf_change_inactive_updates_in_place) {
+  // A vlan whose relay is not yet armed (lla not ready): a VRF change is just
+  // recorded; the socket is created later by lla_check_callback under the new
+  // VRF, so no teardown and no re-arm request are needed.
+  std::unordered_map<std::string, relay_config> vlans;
+  std::unordered_map<std::string, relay_config> desired;
+
+  relay_config live{};
+  live.interface = "Vlan1000";
+  live.servers = {"fc02:2000::1"};
+  live.vrf = "default";
+  live.is_lla_ready = false;
+  vlans["Vlan1000"] = live;
+
+  relay_config d{};
+  d.interface = "Vlan1000";
+  d.servers = {"fc02:2000::1"};
+  d.vrf = "Vrf-RED";
+  desired["Vlan1000"] = d;
+
+  bool added = apply_desired_config(vlans, desired);
+  EXPECT_FALSE(added);
+  EXPECT_EQ(vlans["Vlan1000"].vrf, "Vrf-RED");
+  EXPECT_FALSE(vlans["Vlan1000"].is_lla_ready);
+}
+
+TEST(relay, apply_desired_config_vrf_change_active_rebinds) {
+  // An active relay (lla ready) bound to the default VRF; moving it to a
+  // non-default VRF must tear the relay down (so the upstream socket is later
+  // recreated with SO_BINDTODEVICE under the new VRF) and request re-arming.
+  base = event_base_new();
+  ASSERT_NE(base, nullptr);
+
+  std::unordered_map<std::string, relay_config> vlans;
+  std::unordered_map<std::string, relay_config> desired;
+
+  relay_config live{};
+  live.interface = "Vlan3000";
+  live.servers = {"fc02:3000::1"};
+  live.vrf = "default";
+  live.is_lla_ready = true;
+  live.gua_sock = socket(AF_INET6, SOCK_DGRAM, 0);
+  live.lla_sock = socket(AF_INET6, SOCK_DGRAM, 0);
+  ASSERT_GT(live.gua_sock, 0);
+  ASSERT_GT(live.lla_sock, 0);
+  live.server_event = event_new(base, live.gua_sock, EV_READ | EV_PERSIST, server_callback, &live);
+  ASSERT_NE(live.server_event, nullptr);
+  vlans["Vlan3000"] = live;
+
+  relay_config d{};
+  d.interface = "Vlan3000";
+  d.servers = {"fc02:3000::1"};
+  d.vrf = "Vrf-RED";
+  desired["Vlan3000"] = d;
+
+  bool added = apply_desired_config(vlans, desired);
+  EXPECT_TRUE(added);                               // re-arm requested
+  EXPECT_EQ(vlans["Vlan3000"].vrf, "Vrf-RED");      // new VRF recorded
+  EXPECT_FALSE(vlans["Vlan3000"].is_lla_ready);     // reset so lla_check re-arms
+  EXPECT_EQ(vlans["Vlan3000"].server_event, nullptr); // event freed by teardown
+  EXPECT_EQ(vlans["Vlan3000"].gua_sock, -1);          // socket closed by teardown
+
+  event_base_free(base);
+  base = nullptr;
+}
+
+TEST(relay, apply_desired_config_server_vrf_change_flows_through) {
+  // Setting an explicit server_vrf on a not-yet-armed vlan is recorded so the
+  // arming path can route relay-forward through the shared server-VRF socket.
+  std::unordered_map<std::string, relay_config> vlans;
+  std::unordered_map<std::string, relay_config> desired;
+
+  relay_config live{};
+  live.interface = "Vlan1000";
+  live.servers = {"fc02:2000::1"};
+  live.vrf = "Vrf-RED";
+  live.server_vrf = "";
+  live.is_lla_ready = false;
+  vlans["Vlan1000"] = live;
+
+  relay_config d{};
+  d.interface = "Vlan1000";
+  d.servers = {"fc02:2000::1"};
+  d.vrf = "Vrf-RED";
+  d.server_vrf = "Vrf-BLUE";
+  desired["Vlan1000"] = d;
+
+  bool added = apply_desired_config(vlans, desired);
+  EXPECT_FALSE(added);
+  EXPECT_EQ(vlans["Vlan1000"].vrf, "Vrf-RED");
+  EXPECT_EQ(vlans["Vlan1000"].server_vrf, "Vrf-BLUE");
+}
+
+TEST(relay, release_server_vrf_sock_frees_only_when_unreferenced) {
+  // The shared server-VRF socket must persist while any live vlan still names
+  // that server_vrf, and be closed + dropped from the map once the last one is
+  // gone -- so a server VRF that is deleted and recreated does not leave a stale
+  // SO_BINDTODEVICE socket behind for get_or_create_server_vrf_sock to reuse.
+  const std::string vrf = "Vrf-REL-TEST";
+  g_server_vrf_socks.erase(vrf);
+
+  // Arm a placeholder shared socket (a plain UDP fd is enough here; the real
+  // arming path additionally SO_BINDTODEVICE-binds it, which needs a live VRF
+  // device that does not exist in the unit-test environment).
+  int fd = socket(AF_INET6, SOCK_DGRAM, 0);
+  ASSERT_GT(fd, 0);
+  g_server_vrf_socks[vrf] = {fd, nullptr};
+  EXPECT_EQ(lookup_server_vrf_sock(vrf), fd);
+
+  // A live vlan still references the server VRF -> the socket is kept.
+  std::unordered_map<std::string, relay_config> vlans;
+  relay_config user{};
+  user.interface = "Vlan1000";
+  user.server_vrf = vrf;
+  vlans["Vlan1000"] = user;
+  release_server_vrf_sock_if_unused(vrf, vlans);
+  EXPECT_EQ(lookup_server_vrf_sock(vrf), fd);
+
+  // A vlan using a *different* server VRF does not keep this one alive: once the
+  // last referrer is removed, the socket is closed and dropped from the map.
+  relay_config other{};
+  other.interface = "Vlan2000";
+  other.server_vrf = "Vrf-OTHER";
+  vlans["Vlan2000"] = other;
+  vlans.erase("Vlan1000");
+  release_server_vrf_sock_if_unused(vrf, vlans);
+  EXPECT_EQ(lookup_server_vrf_sock(vrf), -1);
+
+  // Idempotent: releasing an already-absent or empty VRF is a safe no-op.
+  ASSERT_NO_THROW(release_server_vrf_sock_if_unused(vrf, vlans));
+  ASSERT_NO_THROW(release_server_vrf_sock_if_unused("", vlans));
+}
+
+TEST(relay, config_change_callback_remove) {
+  // No desired config has been published yet, so the callback must drain the
+  // notify pipe, fetch the (empty) desired config and remove the live vlan.
+  std::unordered_map<std::string, relay_config> vlans;
+  relay_config c{};
+  c.interface = "Vlan1000";
+  c.is_lla_ready = false;
+  c.server_event = nullptr;
+  vlans["Vlan1000"] = c;
+
+  int pipefd[2];
+  ASSERT_EQ(pipe(pipefd), 0);
+  evutil_make_socket_nonblocking(pipefd[0]);
+  char wake = 1;
+  ASSERT_EQ(write(pipefd[1], &wake, 1), 1);
+
+  config_apply_ctx ctx{};
+  ctx.vlans = &vlans;
+  ctx.timer_args = nullptr;
+  ctx.timer_event = nullptr;
+  ctx.notify_rd = pipefd[0];
+
+  ASSERT_NO_THROW(config_change_callback(pipefd[0], 0, &ctx));
+  EXPECT_EQ(vlans.count("Vlan1000"), 0);
+
+  close(pipefd[0]);
+  close(pipefd[1]);
+}
+
+TEST(relay, config_change_callback_interface_ready_pending_lla) {
+  // A vlan that is configured but whose interface is not yet link-local ready
+  // must trigger the lla-check arming path even though no vlan is newly added
+  // (the interface-ready signal arrives via STATE_DB INTERFACE_TABLE). The
+  // callback must re-arm the timer and fire the lla check without throwing.
+  base = event_base_new();
+  ASSERT_NE(base, nullptr);
+
+  // Clear DHCP_RELAY so the published desired config contains only Vlan9100,
+  // making 'desired' match 'live' exactly (added==false, so pending_lla is what
+  // drives the arming path).
+  std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector>("CONFIG_DB", 0);
+  for (const auto &k : config_db->keys("DHCP_RELAY|*")) {
+    config_db->del(k);
+  }
+  config_db->hset("DHCP_RELAY|Vlan9100", "dhcpv6_servers@", "fc02:9100::1");
+  config_db->hset("VLAN_INTERFACE|Vlan9100|fc02:9100::1", "", "");
+
+  // Publish {Vlan9100} into the global desired config via a brief monitor cycle.
+  int notify[2];
+  ASSERT_EQ(pipe(notify), 0);
+  ASSERT_NO_THROW(start_dhcp_config_monitor(notify[1]));
+  std::this_thread::sleep_for(std::chrono::milliseconds(600));
+  ASSERT_NO_THROW(stop_dhcp_config_monitor());
+  std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+  close(notify[0]);
+  close(notify[1]);
+
+  std::unordered_map<std::string, relay_config> published;
+  ASSERT_TRUE(fetch_desired_config(published));
+  ASSERT_EQ(published.count("Vlan9100"), 1);
+
+  // Live map already has Vlan9100 but it is not lla ready yet (interface down).
+  std::unordered_map<std::string, relay_config> vlans;
+  relay_config c{};
+  c.interface = "Vlan9100";
+  c.servers = {"fc02:9100::1"};
+  c.is_lla_ready = false;
+  c.server_event = nullptr;
+  vlans["Vlan9100"] = c;
+
+  // Build a valid timer_args tuple (same shape lla_check_callback expects) and a
+  // real timer event so the pending-lla arming path can run end to end.
+  auto state_db = std::make_shared<swss::DBConnector>("STATE_DB", 0);
+  std::shared_ptr<swss::Table> mux_table = nullptr;
+  std::vector<int> sockets;
+  auto timer_args = new std::tuple<
+      std::unordered_map<std::string, struct relay_config> &,
+      std::shared_ptr<swss::DBConnector>,
+      std::shared_ptr<swss::DBConnector>,
+      std::shared_ptr<swss::Table>,
+      std::vector<int>,
+      int,
+      int,
+      struct event *
+  >(vlans, config_db, state_db, mux_table, sockets, 0, 0, nullptr);
+  struct event *timer_event = event_new(base, -1, EV_PERSIST, lla_check_callback, timer_args);
+  ASSERT_NE(timer_event, nullptr);
+  std::get<7>(*timer_args) = timer_event;
+
+  int pipefd[2];
+  ASSERT_EQ(pipe(pipefd), 0);
+  evutil_make_socket_nonblocking(pipefd[0]);
+  char wake = 1;
+  ASSERT_EQ(write(pipefd[1], &wake, 1), 1);
+
+  config_apply_ctx ctx{};
+  ctx.vlans = &vlans;
+  ctx.timer_args = timer_args;
+  ctx.timer_event = timer_event;
+  ctx.notify_rd = pipefd[0];
+
+  // Vlan9100 stays configured (still in desired) and not lla ready, so the
+  // pending-lla branch must arm the timer (event_add is globally mocked) and run
+  // the lla check.
+  EXPECT_GLOBAL_CALL(event_add, event_add(_, _)).Times(1).WillOnce(Return(0));
+  ASSERT_NO_THROW(config_change_callback(pipefd[0], 0, &ctx));
+  EXPECT_EQ(vlans.count("Vlan9100"), 1);
+  EXPECT_FALSE(vlans["Vlan9100"].is_lla_ready);
+
+  // Clean up the keys this test added so it does not perturb the shared redis
+  // state other tests rely on.
+  config_db->del("DHCP_RELAY|Vlan9100");
+  config_db->del("VLAN_INTERFACE|Vlan9100|fc02:9100::1");
+
+  event_del(timer_event);
+  event_free(timer_event);
+  delete timer_args;
+  event_base_free(base);
+  base = nullptr;
+  close(pipefd[0]);
+  close(pipefd[1]);
 }
 
 
