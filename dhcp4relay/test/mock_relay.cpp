@@ -821,13 +821,20 @@ TEST(DHCPRelayTest, encode_relay_option) {
     uint8_t link_sel_len = 0;
     auto link_sel_ip_ptr = decode_tlv((const uint8_t *)options_ptr, OPTION82_SUBOPT_LINK_SELECTION,
                                         link_sel_len, agent_option_size);
-    auto link_sel_ip = *((uint32_t *)link_sel_ip_ptr);
-    EXPECT_EQ((config.link_address.sin_addr.s_addr & config.link_address_netmask.sin_addr.s_addr), link_sel_ip);
+    ASSERT_NE(link_sel_ip_ptr, nullptr);
+    ASSERT_EQ(link_sel_len, sizeof(uint32_t));
+    uint32_t link_sel_ip;
+    memcpy(&link_sel_ip, link_sel_ip_ptr, sizeof(link_sel_ip));
+    EXPECT_EQ(config.link_address.sin_addr.s_addr, link_sel_ip);
 
-    auto srv_ovr_ride = decode_tlv((const uint8_t *)options_ptr, OPTION82_SUBOPT_SERVER_OVERRIDE,
-                                    link_sel_len, agent_option_size);
-    auto srv_ip = *((uint32_t *)srv_ovr_ride);
-    EXPECT_EQ(srv_ip, config.link_address.sin_addr.s_addr);
+    uint8_t server_override_len = 0;
+    auto server_override_ptr = decode_tlv((const uint8_t *)options_ptr, OPTION82_SUBOPT_SERVER_OVERRIDE,
+                                           server_override_len, agent_option_size);
+    ASSERT_NE(server_override_ptr, nullptr);
+    ASSERT_EQ(server_override_len, sizeof(uint32_t));
+    uint32_t server_override_ip;
+    memcpy(&server_override_ip, server_override_ptr, sizeof(server_override_ip));
+    EXPECT_EQ(server_override_ip, config.link_address.sin_addr.s_addr);
 
     uint8_t vrf_len = 0;
     auto vrf_ptr = decode_tlv((const uint8_t *)options_ptr, OPTION82_SUBOPT_VIRTUAL_SUBNET,
@@ -896,13 +903,20 @@ TEST(DHCPRelayTest, encode_relay_option_server_client_same_vrf) {
     uint8_t link_sel_len = 0;
     auto link_sel_ip_ptr = decode_tlv((const uint8_t *)options_ptr, OPTION82_SUBOPT_LINK_SELECTION,
                                         link_sel_len, agent_option_size);
-    auto link_sel_ip = *((uint32_t *)link_sel_ip_ptr);
-    EXPECT_EQ((config.link_address.sin_addr.s_addr & config.link_address_netmask.sin_addr.s_addr), link_sel_ip);
+    ASSERT_NE(link_sel_ip_ptr, nullptr);
+    ASSERT_EQ(link_sel_len, sizeof(uint32_t));
+    uint32_t link_sel_ip;
+    memcpy(&link_sel_ip, link_sel_ip_ptr, sizeof(link_sel_ip));
+    EXPECT_EQ(config.link_address.sin_addr.s_addr, link_sel_ip);
 
-    auto srv_ovr_ride = decode_tlv((const uint8_t *)options_ptr, OPTION82_SUBOPT_SERVER_OVERRIDE,
-                                    link_sel_len, agent_option_size);
-    auto srv_ip = *((uint32_t *)srv_ovr_ride);
-    EXPECT_EQ(srv_ip, config.link_address.sin_addr.s_addr);
+    uint8_t server_override_len = 0;
+    auto server_override_ptr = decode_tlv((const uint8_t *)options_ptr, OPTION82_SUBOPT_SERVER_OVERRIDE,
+                                           server_override_len, agent_option_size);
+    ASSERT_NE(server_override_ptr, nullptr);
+    ASSERT_EQ(server_override_len, sizeof(uint32_t));
+    uint32_t server_override_ip;
+    memcpy(&server_override_ip, server_override_ptr, sizeof(server_override_ip));
+    EXPECT_EQ(server_override_ip, config.link_address.sin_addr.s_addr);
 
     uint8_t vrf_len = 0;
     uint8_t *vrf_ptr = NULL;
@@ -1027,6 +1041,76 @@ TEST(DHCPRelayTest, from_client) {
         return true;
     });
     from_client(&dhcpLayer, config);
+}
+
+static relay_config make_from_client_giaddr_config(bool use_source_interface) {
+    interface_list.push_back("Ethernet12");
+    phy_interface_alias_map["Ethernet12"] = "eth12";
+
+    relay_config config = {};
+    config.phy_interface = "Ethernet12";
+    config.vlan = "Vlan10";
+    config.source_interface = use_source_interface ? "Loopback0" : "";
+    config.src_intf_sel_addr.sin_addr.s_addr = inet_addr("10.1.0.32");
+    config.link_address.sin_addr.s_addr = inet_addr("192.168.10.10");
+    config.link_address_netmask.sin_addr.s_addr = inet_addr("255.255.255.0");
+
+    struct sockaddr_in addr = {0};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = inet_addr("192.168.20.100");
+    config.servers_sock = {addr};
+    config.servers = {"192.168.20.100"};
+
+    m_config.hostname = "sonic";
+    m_config.host_mac_addr = "12:32:54:24:95:36";
+    return config;
+}
+
+static void verify_from_client_giaddr(bool is_dhcp, bool use_source_interface,
+                                      const char *expected_giaddr) {
+    pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
+    pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_DISCOVER, clientMac);
+    dhcpLayer.getDhcpHeader()->gatewayIpAddress = 0;
+    dhcpLayer.getDhcpHeader()->magicNumber =
+        is_dhcp ? DHCP_MAGIC_NUMBER : 0;
+
+    relay_config config = make_from_client_giaddr_config(use_source_interface);
+    const uint32_t expected_giaddr_addr = inet_addr(expected_giaddr);
+
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).WillOnce(
+        [expected_giaddr_addr](int, uint8_t *hdr, struct sockaddr_in, uint32_t,
+                               in_addr, bool, bool) {
+            pcpp::dhcp_header *dhcp_hdr =
+                reinterpret_cast<pcpp::dhcp_header *>(hdr);
+            EXPECT_EQ(dhcp_hdr->gatewayIpAddress, expected_giaddr_addr);
+            return true;
+        });
+
+    from_client(&dhcpLayer, config);
+
+    auto agent_option =
+        dhcpLayer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
+    if (is_dhcp) {
+        EXPECT_NE(agent_option.getValue(), nullptr);
+    } else {
+        EXPECT_EQ(agent_option.getValue(), nullptr);
+    }
+}
+
+TEST(DHCPRelayTest, from_client_single_tor_dhcp_uses_vlan_giaddr) {
+    verify_from_client_giaddr(true, false, "192.168.10.10");
+}
+
+TEST(DHCPRelayTest, from_client_single_tor_bootp_uses_vlan_giaddr) {
+    verify_from_client_giaddr(false, false, "192.168.10.10");
+}
+
+TEST(DHCPRelayTest, from_client_dual_tor_dhcp_uses_source_interface_giaddr) {
+    verify_from_client_giaddr(true, true, "10.1.0.32");
+}
+
+TEST(DHCPRelayTest, from_client_dual_tor_bootp_uses_vlan_giaddr) {
+    verify_from_client_giaddr(false, true, "192.168.10.10");
 }
 
 /* Helper: build a relay-of-relay packet (giaddr already set) with a pre-existing Option 82. */

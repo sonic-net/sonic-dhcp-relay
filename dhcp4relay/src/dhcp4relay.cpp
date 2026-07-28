@@ -553,8 +553,8 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
     /* TODO: this sub-option should be set if source interface selection is enabled */
     /* | 5 | 4 | ipv4 | */
     if (snap.is_dualTor || config->link_selection_opt == "enable") {
-        uint32_t link_sel_ip = ((config->link_address.sin_addr.s_addr) &
-                                (config->link_address_netmask.sin_addr.s_addr));
+        /* RFC 3527 specifies an address contained in the client subnet; match ISC's VLAN address. */
+        uint32_t link_sel_ip = config->link_address.sin_addr.s_addr;
         offset = encode_tlv((buf + buf_offset), OPTION82_SUBOPT_LINK_SELECTION,
                             sizeof(uint32_t), (uint8_t *)&link_sel_ip, sizeof(buf) - buf_offset);
         if (!offset) {
@@ -633,7 +633,10 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
     }
     /* Update giaddr */
     if (!(dhcp_pkt->getDhcpHeader()->gatewayIpAddress)) {
-        if (config.source_interface.length() > 0) {
+        const bool is_dhcp =
+            dhcp_pkt->getDhcpHeader()->magicNumber == DHCP_MAGIC_NUMBER;
+
+        if (is_dhcp && config.source_interface.length() > 0) {
             /* find the IP of the interface and update to giaddr */
             dhcp_pkt->getDhcpHeader()->gatewayIpAddress =
                 config.src_intf_sel_addr.sin_addr.s_addr;
@@ -648,8 +651,7 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
             dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
             return;
         }
-        if ((dhcp_pkt->getDhcpHeader()->magicNumber) &&
-            (dhcp_pkt->getDhcpHeader()->magicNumber) == DHCP_MAGIC_NUMBER) {
+        if (is_dhcp) {
             SWSS_LOG_WARN("[DHCPV4_RELAY] encode DHCP relay option");
             encode_relay_option(dhcp_pkt, &config);
         }
