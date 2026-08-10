@@ -48,6 +48,14 @@
 #define DHCP_SUB_OPT_TLV_LENGTH_OFFSET 1
 #define DHCP_SUB_OPT_TLV_HEADER_LEN 2
 
+/* DHCP option value is length-prefixed with a 1-byte field, so max 255 bytes. */
+#define DHCP_OPTION_VALUE_MAX_LEN 255
+/*
+ * VRF names in SONiC are Linux network interfaces (IFNAMSIZ = 16, null-terminated),
+ * so the max usable length is IF_NAMESIZE - 1 = 15.
+ */
+#define OPTION82_VSS_VRF_MAX_LEN (IF_NAMESIZE - 1)
+
 #define lengthof(A) (sizeof(A) / sizeof(A)[0])
 
 extern char vrf_single[IF_NAMESIZE];
@@ -320,5 +328,5 @@ void update_vlan_mapping(std::string vlan, bool is_add);
  */
 void pkt_in_callback(evutil_socket_t fd, short event, void *arg);
 void config_event_callback(evutil_socket_t fd, short event, void *arg);
+size_t encode_tlv(uint8_t *buf, uint8_t t, uint8_t l, const uint8_t *v, size_t remaining);
 uint8_t *decode_tlv(const uint8_t *buf, uint8_t t, uint8_t &l, uint32_t options_total_size);
-uint8_t encode_tlv(uint8_t *buf, uint8_t t, uint8_t l, uint8_t *v);
