@@ -129,28 +129,40 @@ void DHCPMgr::handle_swss_notification() {
             continue;
         }
 
-	if (!feature_dhcp_server_enabled) {
-            if (config_db_relaymgr_table_ptr && selectable == config_db_relaymgr_table_ptr.get()) {
-                config_db_relaymgr_table_ptr->pops(entries);
+        /* Always pops() whatever selectable fired so its keyspace-event buffer
+           drains, then gate processing on feature_dhcp_server_enabled. Leaving a
+           feature-gated selectable undrained keeps hasCachedData() true, which
+           makes swss::Select re-queue it and spin at 100% CPU. */
+        if (config_db_relaymgr_table_ptr && selectable == config_db_relaymgr_table_ptr.get()) {
+            config_db_relaymgr_table_ptr->pops(entries);
+            if (!feature_dhcp_server_enabled) {
                 process_relay_notification(entries);
-            } else if (selectable == static_cast<swss::Selectable *>(&config_db_interface_table)) {
-                config_db_interface_table.pops(entries);
+            }
+        } else if (selectable == static_cast<swss::Selectable *>(&config_db_interface_table)) {
+            config_db_interface_table.pops(entries);
+            if (!feature_dhcp_server_enabled) {
                 process_interface_notification(entries);
-            } else if (selectable == static_cast<swss::Selectable *>(&config_db_loopback_table)) {
-                config_db_loopback_table.pops(entries);
+            }
+        } else if (selectable == static_cast<swss::Selectable *>(&config_db_loopback_table)) {
+            config_db_loopback_table.pops(entries);
+            if (!feature_dhcp_server_enabled) {
                 process_interface_notification(entries);
-            } else if (selectable == static_cast<swss::Selectable *>(&config_db_portchannel_table)) {
-                config_db_portchannel_table.pops(entries);
+            }
+        } else if (selectable == static_cast<swss::Selectable *>(&config_db_portchannel_table)) {
+            config_db_portchannel_table.pops(entries);
+            if (!feature_dhcp_server_enabled) {
                 process_interface_notification(entries);
-	    }
-	} else {
-            if (config_db_dhcp_server_ipv4_ptr && selectable == config_db_dhcp_server_ipv4_ptr.get()) {
-                config_db_dhcp_server_ipv4_ptr->pops(entries);
+            }
+        } else if (config_db_dhcp_server_ipv4_ptr && selectable == config_db_dhcp_server_ipv4_ptr.get()) {
+            config_db_dhcp_server_ipv4_ptr->pops(entries);
+            if (feature_dhcp_server_enabled) {
                 process_dhcp_server_ipv4_notification(entries);
-            } else if (state_db_dhcp_server_ipv4_ip_ptr && selectable == state_db_dhcp_server_ipv4_ip_ptr.get()) {
-                state_db_dhcp_server_ipv4_ip_ptr->pops(entries);
+            }
+        } else if (state_db_dhcp_server_ipv4_ip_ptr && selectable == state_db_dhcp_server_ipv4_ip_ptr.get()) {
+            state_db_dhcp_server_ipv4_ip_ptr->pops(entries);
+            if (feature_dhcp_server_enabled) {
                 process_dhcp_server_ipv4_ip_notification(entries, swss_select, config_db_ptr);
-	    }
+            }
 	}
 
 	if (selectable == static_cast<swss::Selectable *>(&config_db_device_metadata_table)) {
