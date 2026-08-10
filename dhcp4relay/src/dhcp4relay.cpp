@@ -696,7 +696,7 @@ uint8_t *decode_tlv(const uint8_t *buf, uint8_t t, uint8_t &l, uint32_t options_
  * @return              none
  */
 void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_config> *vlans,
-               std::string src_ip) {
+               std::string src_ip, const std::string &ingress_intf) {
     struct ifaddrs *ifa, *ifa_tmp;
     struct sockaddr_in target_addr = {0};
     uint32_t giaddr = dhcp_pkt->getDhcpHeader()->gatewayIpAddress;
@@ -713,6 +713,15 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
     if (giaddr == 0) {
         SWSS_LOG_ERROR("[DHCPV4_RELAY] Message received with empty giaddr from server %s",
                src_ip.c_str());
+        freeifaddrs(ifa);
+        return;
+    }
+
+    /* Reject server replies arriving on a client-facing VLAN member interface */
+    if (vlan_map.count(ingress_intf)) {
+        SWSS_LOG_WARN("[DHCPV4_RELAY] Dropping server reply from %s:"
+                      " arrived on client-facing interface %s",
+                      src_ip.c_str(), ingress_intf.c_str());
         freeifaddrs(ifa);
         return;
     }
@@ -1092,7 +1101,7 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
             dhcp_cntr_table.increment_counter(config.vlan, "RX", (int)dhcp_pkt->getMessageType());
             from_client(dhcp_pkt, config_itr->second);
         } else if (dhcp_pkt->getDhcpHeader()->opCode == BOOTPREPLY) {
-            to_client(dhcp_pkt, vlans, src_ip);
+            to_client(dhcp_pkt, vlans, src_ip, intf);
         } else {
             if (!vlan_str.empty()) {
                 dhcp_cntr_table.increment_counter(vlan_str, "RX", DHCPv4_MESSAGE_TYPE_UNKNOWN);

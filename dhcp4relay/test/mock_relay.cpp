@@ -29,7 +29,7 @@ MOCK_GLOBAL_FUNC7(send_udp, bool(int, uint8_t *, struct sockaddr_in, uint32_t, i
 
 void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config);
 void to_client(pcpp::DhcpLayer* dhcp_pkt, std::unordered_map<std::string, relay_config > *vlans,
-                std::string src_ip);
+                std::string src_ip, const std::string &ingress_intf);
 void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config);
 
 ssize_t RealWrite(int fd, const void *buf, size_t count) {
@@ -946,7 +946,35 @@ TEST(DHCPRelayTest, to_client) {
         EXPECT_EQ((dhcp_hdr->gatewayIpAddress), inet_addr("192.168.1.1"));
         return true;
     });
-    to_client(&dhcpLayer, &vlans, "172.22.178.234");
+    to_client(&dhcpLayer, &vlans, "172.22.178.234", "Ethernet4");
+}
+
+TEST(DHCPRelayTest, to_client_ingress_on_client_vlan) {
+    std::unordered_map<std::string, relay_config> vlans;
+
+    pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
+    pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_OFFER, clientMac);
+    dhcpLayer.getDhcpHeader()->hops = 1;
+    dhcpLayer.getDhcpHeader()->gatewayIpAddress = inet_addr("192.168.1.1");
+    dhcpLayer.getDhcpHeader()->opCode = 1;
+
+    relay_config config = {};
+    config.vlan = "Vlan10";
+    config.client_sock = 1;
+    vlan_vrf_map["Vlan10"] = "default";
+    vlans["Vlan10"] = config;
+    /* Simulate Ethernet12 being a client-facing VLAN member port */
+    vlan_map["Ethernet12"] = "Vlan10";
+
+    /* giaddr must resolve to Vlan10 so removing the ingress drop reaches send_udp */
+    struct ifaddrs *mock_ifaddrs = CreateMockIfaddrs("192.168.1.1", "255.255.255.0", "Vlan10", "192.168.1.2", "Ethernet4");
+    EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_)).WillOnce(DoAll(
+        testing::SetArgPointee<0>(mock_ifaddrs), Return(0)));
+    EXPECT_GLOBAL_CALL(freeifaddrs, freeifaddrs(_)).Times(1);
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).Times(0);
+    to_client(&dhcpLayer, &vlans, "10.0.0.1", "Ethernet12");
+    vlan_map.erase("Ethernet12");
+    FreeMockIfaddrs(mock_ifaddrs);
 }
 
 TEST(DHCPRelayTest, from_client) {
