@@ -18,6 +18,7 @@
 #include <pcapplusplus/EthLayer.h>
 #include <pcapplusplus/UdpLayer.h>
 #include <pcapplusplus/PayloadLayer.h>
+#include <fcntl.h>
 
 using namespace ::testing;
 using namespace swss;
@@ -34,6 +35,17 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config);
 
 ssize_t RealWrite(int fd, const void *buf, size_t count) {
     return syscall(SYS_write, fd, buf, count);
+}
+
+void InitConfigPipeForTest() {
+    if (config_pipe[0] > 0) {
+        close(config_pipe[0]);
+    }
+    if (config_pipe[1] > 0) {
+        close(config_pipe[1]);
+    }
+    ASSERT_EQ(pipe(config_pipe), 0);
+    fcntl(config_pipe[0], F_SETFL, O_NONBLOCK);
 }
 
 struct ifaddrs *CreateMockIfaddrs(const std::string &vlan_ip, const std::string &vlan_mask, const std::string &vlan_name,
@@ -567,9 +579,10 @@ TEST(relay, signal_start) {
 
 TEST(DHCPMgrTest, initialize_config_listener) {
     DHCPMgr dhcpMgr;
+    InitConfigPipeForTest();
     EXPECT_GLOBAL_CALL(write, write(_, _, _))
                      .Times(AtLeast(1))
-                     .WillRepeatedly(Return(-1));
+                     .WillRepeatedly(Invoke(RealWrite));
     dhcpMgr.initialize_config_listener();
     
     swss::Table dhcp_table(config_db.get(), "DHCPV4_RELAY");
@@ -637,9 +650,10 @@ TEST(DHCPMgrTest, initialize_config_listener) {
 
 TEST(DHCPMgrTest, process_vlan_events) {
     DHCPMgr dhcpMgr;
+    InitConfigPipeForTest();
     EXPECT_GLOBAL_CALL(write, write(_, _, _))
                      .Times(AtLeast(1))
-                     .WillRepeatedly(Return(-1));
+                     .WillRepeatedly(Invoke(RealWrite));
     vlans_copy.clear();
     relay_config *config = new relay_config();
     config->vlan = "Vlan100";
@@ -652,9 +666,10 @@ TEST(DHCPMgrTest, process_vlan_events) {
 
 TEST(DHCPMgrTest, dhcp_server_feature_enable) {
     DHCPMgr dhcpMgr;
+    InitConfigPipeForTest();
     EXPECT_GLOBAL_CALL(write, write(_, _, _))
                      .Times(AtLeast(1))
-                     .WillRepeatedly(Return(0));
+                     .WillRepeatedly(Invoke(RealWrite));
     dhcpMgr.initialize_config_listener();
 
     std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
@@ -693,9 +708,10 @@ TEST(DHCPMgrTest, dhcp_server_feature_enable) {
 
 TEST(DHCPMgrTest, dhcp_server_feature_disable) {
     DHCPMgr dhcpMgr;
+    InitConfigPipeForTest();
     EXPECT_GLOBAL_CALL(write, write(_, _, _))
                      .Times(AtLeast(1))
-                     .WillRepeatedly(Return(0));
+                     .WillRepeatedly(Invoke(RealWrite));
     dhcpMgr.initialize_config_listener();
 
     swss::Table feature_table(config_db.get(), "FEATURE");
@@ -713,9 +729,10 @@ TEST(DHCPMgrTest, dhcp_server_feature_disable) {
 
 TEST(DHCPMgrTest, dhcp_server_ip_modification) {
     DHCPMgr dhcpMgr;
+    InitConfigPipeForTest();
     EXPECT_GLOBAL_CALL(write, write(_, _, _))
                      .Times(AtLeast(1))
-                     .WillRepeatedly(Return(0));
+                     .WillRepeatedly(Invoke(RealWrite));
     global_dhcp_server_ip = "240.127.1.3";
     std::deque<swss::KeyOpFieldsValuesTuple> entries;
     swss::Select select;
@@ -729,9 +746,10 @@ TEST(DHCPMgrTest, dhcp_server_ip_modification) {
 
 TEST(DHCPMgrTest, dhcp_server_ip_deletion) {
     DHCPMgr dhcpMgr;
+    InitConfigPipeForTest();
     EXPECT_GLOBAL_CALL(write, write(_, _, _))
                      .Times(AtLeast(1))
-                     .WillRepeatedly(Return(0));
+                     .WillRepeatedly(Invoke(RealWrite));
     std::deque<swss::KeyOpFieldsValuesTuple> entries;
     swss::Select select;
     entries.emplace_back("eth0", "DEL", std::vector<swss::FieldValueTuple>{});
