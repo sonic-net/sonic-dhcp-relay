@@ -452,12 +452,19 @@ int prepare_vlan_sockets(relay_config &config) {
     return 0;
 }
 
-uint8_t encode_tlv(uint8_t *buf, uint8_t t, uint8_t l, uint8_t *v) {
-    *buf = t;
-    *(buf + DHCP_SUB_OPT_TLV_LENGTH_OFFSET) = l;
-    memcpy((buf + DHCP_SUB_OPT_TLV_HEADER_LEN), v, l);
 
-    return (l + DHCP_SUB_OPT_TLV_HEADER_LEN);
+/*
+ * Writes one TLV sub-option into buf if remaining space allows.
+ * Returns bytes written (type + length + value), or 0 on overflow.
+ */
+size_t encode_tlv(uint8_t *buf, uint8_t t, uint8_t l, const uint8_t *v, size_t remaining) {
+    size_t needed = (size_t)l + DHCP_SUB_OPT_TLV_HEADER_LEN;
+    if (needed > remaining)
+        return 0;
+    buf[0] = t;
+    buf[DHCP_SUB_OPT_TLV_LENGTH_OFFSET] = l;
+    memcpy(buf + DHCP_SUB_OPT_TLV_HEADER_LEN, v, l);
+    return needed;
 }
 
 std::string get_mac_address(const std::string &ifname) {
@@ -473,7 +480,7 @@ std::string get_mac_address(const std::string &ifname) {
 }
 
 void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
-    uint8_t buf[256] = {0};
+    uint8_t buf[DHCP_OPTION_VALUE_MAX_LEN] = {0};
     uint8_t buf_offset = 0;
     std::string bm_mac;
 
@@ -493,26 +500,43 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
     } else {
         circuit_id = m_config.hostname + ":" + intf_alias + ":" + config->vlan;
     }
-    auto offset = encode_tlv(buf, OPTION82_SUBOPT_CIRCUIT_ID, circuit_id.length(),
-                             (uint8_t *)circuit_id.c_str());
+
+    if (circuit_id.length() > UINT8_MAX) {
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] circuit-id length %zu exceeds maximum on %s, dropping option 82",
+                       circuit_id.length(), config->vlan.c_str());
+        return;
+    }
+    auto offset = encode_tlv(buf, OPTION82_SUBOPT_CIRCUIT_ID, (uint8_t)circuit_id.length(),
+                             (uint8_t *)circuit_id.c_str(), sizeof(buf));
+    if (!offset) {
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] circuit-id length %zu exceeds buffer on %s, dropping option 82",
+                       circuit_id.length(), config->vlan.c_str());
+        return;
+    }
     buf_offset += offset;
 
     if (!m_config.midplane_bridge.empty()) {
         bm_mac = get_mac_address(m_config.midplane_bridge);
     }
 
-    /* Encode remote ID sub-option */
+    /* Encode remote ID sub-option (required, like circuit-id) */
     /* | 2 | 6 | my_mac| */
     /* if its SmartSwitch we need to fetch mac of bridge-midplane */
     if ((m_config.is_SmartSwitch) && (!bm_mac.empty())) {
+        uint8_t len = (uint8_t)std::min((size_t)MAC_ADDR_STR_LEN, bm_mac.length());
         offset = encode_tlv((buf + buf_offset), OPTION82_SUBOPT_REMOTE_ID,
-                            MAC_ADDR_STR_LEN, (uint8_t *)(bm_mac.c_str()));
-        buf_offset += offset;
+                            len, (uint8_t *)(bm_mac.c_str()), sizeof(buf) - buf_offset);
     } else {
+        uint8_t len = (uint8_t)std::min((size_t)MAC_ADDR_STR_LEN, m_config.host_mac_addr.length());
         offset = encode_tlv((buf + buf_offset), OPTION82_SUBOPT_REMOTE_ID,
-                            MAC_ADDR_STR_LEN, (uint8_t *)(m_config.host_mac_addr.c_str()));
-        buf_offset += offset;
+                            len, (uint8_t *)(m_config.host_mac_addr.c_str()), sizeof(buf) - buf_offset);
     }
+    if (!offset) {
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] remote-id does not fit after circuit-id on %s, dropping option 82",
+                       config->vlan.c_str());
+        return;
+    }
+    buf_offset += offset;
 
     /* TODO: this sub-option should be set if source interface selection is enabled */
     /* | 5 | 4 | ipv4 | */
@@ -520,30 +544,48 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
         /* RFC 3527 specifies an address contained in the client subnet; match ISC's VLAN address. */
         uint32_t link_sel_ip = config->link_address.sin_addr.s_addr;
         offset = encode_tlv((buf + buf_offset), OPTION82_SUBOPT_LINK_SELECTION, sizeof(uint32_t),
-                            (uint8_t *)&link_sel_ip);
+                            (uint8_t *)&link_sel_ip, sizeof(buf) - buf_offset);
+        if (!offset) {
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] link-selection does not fit on %s, dropping option 82",
+                           config->vlan.c_str());
+            return;
+        }
         buf_offset += offset;
     }
 
     /* | 11 | 4 | ipv4 | */
     if (config->server_id_override_opt == "enable") {
-        offset = encode_tlv((buf + buf_offset), OPTION82_SUBOPT_SERVER_OVERRIDE, sizeof(uint32_t),
-                            (uint8_t *)(&(config->link_address.sin_addr.s_addr)));
+        offset = encode_tlv((buf + buf_offset), OPTION82_SUBOPT_SERVER_OVERRIDE,
+                            sizeof(uint32_t), (uint8_t *)(&(config->link_address.sin_addr.s_addr)),
+                            sizeof(buf) - buf_offset);
+        if (!offset) {
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] server-override does not fit on %s, dropping option 82",
+                           config->vlan.c_str());
+            return;
+        }
         buf_offset += offset;
     }
 
     /* Encode VSS sub-option 151 if client is not default VRF */
     /* | 151 | vrf_len | 0 | vrf_name | */
-    uint8_t vss_buf[32] = {0};
     /* Enable VSS only if client and server are in two different VRF's */
     if ((config->vrf_selection_opt == "enable") && (vrf != "default") &&
         (config->vrf != vrf)) {
-        uint8_t zero_encode = 0;
-        memcpy(vss_buf, &zero_encode, sizeof(uint8_t));
-        memcpy((vss_buf + 1), (uint8_t *)vrf.c_str(), (uint8_t)vrf.length());
-
-        offset = encode_tlv((buf + buf_offset), OPTION82_SUBOPT_VIRTUAL_SUBNET,
-                            (uint8_t)(vrf.length() + 1), vss_buf);
-        buf_offset += offset;
+        if (vrf.length() > OPTION82_VSS_VRF_MAX_LEN) {
+            SWSS_LOG_WARN("[DHCPV4_RELAY] VRF name '%s' exceeds %d bytes, skipping VSS sub-option",
+                          vrf.c_str(), OPTION82_VSS_VRF_MAX_LEN);
+        } else {
+            uint8_t vss_buf[OPTION82_VSS_VRF_MAX_LEN + 1] = {0};
+            memcpy(vss_buf + 1, vrf.c_str(), vrf.length());
+            offset = encode_tlv((buf + buf_offset), OPTION82_SUBOPT_VIRTUAL_SUBNET,
+                                (uint8_t)(vrf.length() + 1), vss_buf, sizeof(buf) - buf_offset);
+            if (!offset) {
+                SWSS_LOG_ERROR("[DHCPV4_RELAY] VSS sub-option does not fit on %s, dropping option 82",
+                               config->vlan.c_str());
+                return;
+            }
+            buf_offset += offset;
+        }
     }
 
     /* We shouldn't append relay information if packet size is exceeding MTU size */
@@ -664,7 +706,7 @@ uint8_t *decode_tlv(const uint8_t *buf, uint8_t t, uint8_t &l, uint32_t options_
 
     while (temp && ((offset + DHCP_SUB_OPT_TLV_HEADER_LEN) <= options_total_size)) {
         len = *(temp + DHCP_SUB_OPT_TLV_LENGTH_OFFSET);
-        if ((offset + DHCP_SUB_OPT_TLV_LENGTH_OFFSET + len) > options_total_size) {
+        if ((offset + DHCP_SUB_OPT_TLV_HEADER_LEN + len) > options_total_size) {
             /* Malformed packet */
             SWSS_LOG_ERROR("[DHCPV4_INFO] Failed to decode relay agent sub-option %d"
                        " exceeded total option len %d offset %d sub-option len %d",
