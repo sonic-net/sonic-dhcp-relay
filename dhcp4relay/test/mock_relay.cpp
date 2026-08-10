@@ -989,8 +989,10 @@ TEST(DHCPRelayTest, to_client) {
     config.link_address.sin_addr.s_addr = inet_addr("192.168.10.10");
     config.link_address_netmask.sin_addr.s_addr = inet_addr("255.255.255.0");
     config.vrf_selection_opt = "enable";
+    config.client_sock = 1;
     vlan_vrf_map["Vlan10"] = "Vrf01";
 
+    m_config.hostname = "cisco";
     m_config.host_mac_addr = "12:32:54:24:95:36";
     vlans["Vlan10"] = config;
     encode_relay_option(&dhcpLayer, &config);
@@ -1014,7 +1016,7 @@ TEST(DHCPRelayTest, from_client) {
     pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
     pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_DISCOVER, clientMac);
     dhcpLayer.getDhcpHeader()->hops = 0;
-    dhcpLayer.getDhcpHeader()->gatewayIpAddress = inet_addr("192.168.1.1");
+    dhcpLayer.getDhcpHeader()->gatewayIpAddress = 0;
     dhcpLayer.getDhcpHeader()->opCode = 0;
 
     interface_list.push_back("Ethernet12");
@@ -1033,17 +1035,18 @@ TEST(DHCPRelayTest, from_client) {
     config.link_address.sin_addr.s_addr = inet_addr("192.168.10.10");
     config.link_address_netmask.sin_addr.s_addr = inet_addr("255.255.255.0");
     config.vrf_selection_opt = "enable";
+    config.vrf_sock = 1;
     vlan_vrf_map["Vlan10"] = "Vrf01";
 
+    m_config.hostname = "cisco";
     m_config.host_mac_addr = "12:32:54:24:95:36";
-    encode_relay_option(&dhcpLayer, &config);
 
     EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).WillOnce([]
 		    (int sock, uint8_t* hdr, struct sockaddr_in target, uint32_t len, in_addr src_ip, bool use_src_ip, bool pad) {
         pcpp::dhcp_header* dhcp_hdr = (pcpp::dhcp_header*)hdr;
         EXPECT_EQ((dhcp_hdr->opCode), 0);
         EXPECT_EQ((dhcp_hdr->hops), 1);
-        EXPECT_EQ((dhcp_hdr->gatewayIpAddress), inet_addr("192.168.1.1"));
+        EXPECT_EQ((dhcp_hdr->gatewayIpAddress), inet_addr("192.168.10.10"));
         return true;
     });
     from_client(&dhcpLayer, config);
