@@ -207,21 +207,28 @@ int passthrough_sock_open(void) {
 /**
  * @code                passthrough_frame(...);
  *
- * @brief               reinject original L2 frame on ingress interface for flooding
+ * @brief               reinject original L2 frame on the VLAN netdev for bridge flooding
  */
-bool passthrough_frame(int sock, const struct sockaddr_ll *addr, const uint8_t *frame, size_t len) {
-    if (sock <= 0 || addr == NULL || frame == NULL || len == 0) {
+bool passthrough_frame(int sock, const std::string &vlan, int ingress_ifindex,
+                       const uint8_t *frame, size_t len) {
+    if (sock <= 0 || vlan.empty() || frame == NULL || len == 0) {
+        return false;
+    }
+
+    int vlan_ifindex = if_nametoindex(vlan.c_str());
+    if (vlan_ifindex == 0) {
+        SWSS_LOG_WARN("[DHCPV4_RELAY] passthrough: Unknown VLAN interface %s: %s",
+               vlan.c_str(), strerror(errno));
         return false;
     }
 
     struct msghdr msg = {0};
     struct iovec iov = {0};
-    struct sockaddr_ll dest = *addr;
-
-    dest.sll_family = AF_PACKET;
-    if (dest.sll_protocol == 0) {
-        dest.sll_protocol = htons(ETH_P_ALL);
-    }
+    struct sockaddr_ll dest = {
+        .sll_family = AF_PACKET,
+        .sll_protocol = htons(ETH_P_ALL),
+        .sll_ifindex = static_cast<int>(vlan_ifindex)
+    };
 
     iov.iov_base = (void *)frame;
     iov.iov_len = len;
@@ -232,8 +239,9 @@ bool passthrough_frame(int sock, const struct sockaddr_ll *addr, const uint8_t *
 
     ssize_t sent = sendmsg(sock, &msg, 0);
     if (sent < 0 || static_cast<size_t>(sent) != len) {
-        SWSS_LOG_WARN("[DHCPV4_RELAY] passthrough: Failed to reinject frame on ifindex %d: %s",
-               dest.sll_ifindex, strerror(errno));
+        SWSS_LOG_WARN("[DHCPV4_RELAY] passthrough: Failed to flood frame on %s (ifindex %d, "
+               "ingress ifindex %d): %s",
+               vlan.c_str(), vlan_ifindex, ingress_ifindex, strerror(errno));
         return false;
     }
     return true;
@@ -1154,11 +1162,11 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
             auto config_itr = vlans->find(vlan_str);
             if (config_itr == vlans->end()) {
                 auto msg_type = (int)dhcp_pkt->getMessageType();
-                if (passthrough_frame(passthrough_sock, sll,
+                if (passthrough_frame(passthrough_sock, vlan_str, sll->sll_ifindex,
                                       static_cast<const uint8_t *>(client_recv_buffer),
                                       static_cast<size_t>(buffer_sz))) {
-                    SWSS_LOG_INFO("[DHCPV4_RELAY] Passthrough reinjected DHCP packet on %s "
-                           "(interface %s, vlan_id %d, no relay config)",
+                    SWSS_LOG_INFO("[DHCPV4_RELAY] Passthrough flooded DHCP packet on %s "
+                           "(ingress %s, vlan_id %d, no relay config)",
                            vlan_str.c_str(), intf.c_str(), vlan_id);
                     dhcp_cntr_table.increment_counter(vlan_str, "RX", msg_type);
                     dhcp_cntr_table.increment_counter(vlan_str, "TX", msg_type);

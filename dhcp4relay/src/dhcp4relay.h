@@ -199,20 +199,24 @@ int sock_open(const struct sock_fprog *fprog);
 int passthrough_sock_open(void);
 
 /**
- * @code                passthrough_frame(int sock, const struct sockaddr_ll *addr,
- *                                        const uint8_t *frame, size_t len);
+ * @code                passthrough_frame(int sock, const std::string &vlan,
+ *                                        int ingress_ifindex, const uint8_t *frame,
+ *                                        size_t len);
  *
- * @brief               reinject an original L2 frame on the ingress interface so the
- *                      kernel can flood it when CoPP trap prevented hardware forwarding
+ * @brief               reinject an original L2 frame on the VLAN netdev so the kernel
+ *                      bridge can flood it to other member ports (excluding the normal
+ *                      ingress-port echo) when CoPP trap prevented hardware forwarding
  *
  * @param sock          passthrough raw socket from passthrough_sock_open()
- * @param addr          ingress sockaddr_ll from recvmsg()
+ * @param vlan          VLAN interface name (e.g. "Vlan10")
+ * @param ingress_ifindex ingress physical interface ifindex from recvmsg(), for logging
  * @param frame         original frame bytes
  * @param len           frame length
  *
  * @return              true if the full frame was sent
  */
-bool passthrough_frame(int sock, const struct sockaddr_ll *addr, const uint8_t *frame, size_t len);
+bool passthrough_frame(int sock, const std::string &vlan, int ingress_ifindex,
+                       const uint8_t *frame, size_t len);
 
 /**
  * @code                        addr_is_primary(const std::string &ifname, const struct in_addr *addr);
