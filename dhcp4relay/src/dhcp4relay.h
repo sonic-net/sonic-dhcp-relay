@@ -190,6 +190,31 @@ struct metadata_config {
 int sock_open(const struct sock_fprog *fprog);
 
 /**
+ * @code                passthrough_sock_open();
+ *
+ * @brief               prepare raw socket for L2 frame reinjection on non-relay VLANs
+ *
+ * @return              socket descriptor, or -1 on failure
+ */
+int passthrough_sock_open(void);
+
+/**
+ * @code                passthrough_frame(int sock, const struct sockaddr_ll *addr,
+ *                                        const uint8_t *frame, size_t len);
+ *
+ * @brief               reinject an original L2 frame on the ingress interface so the
+ *                      kernel can flood it when CoPP trap prevented hardware forwarding
+ *
+ * @param sock          passthrough raw socket from passthrough_sock_open()
+ * @param addr          ingress sockaddr_ll from recvmsg()
+ * @param frame         original frame bytes
+ * @param len           frame length
+ *
+ * @return              true if the full frame was sent
+ */
+bool passthrough_frame(int sock, const struct sockaddr_ll *addr, const uint8_t *frame, size_t len);
+
+/**
  * @code                        addr_is_primary(const std::string &ifname, const struct in_addr *addr);
  *
  * @brief                       Check if the given IPv4 address is primary on the interface

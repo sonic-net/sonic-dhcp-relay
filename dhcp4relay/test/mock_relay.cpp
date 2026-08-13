@@ -18,6 +18,7 @@
 #include <pcapplusplus/EthLayer.h>
 #include <pcapplusplus/UdpLayer.h>
 #include <pcapplusplus/PayloadLayer.h>
+#include <sys/socket.h>
 
 using namespace ::testing;
 using namespace swss;
@@ -26,6 +27,7 @@ MOCK_GLOBAL_FUNC1(getifaddrs, int(struct ifaddrs **));
 MOCK_GLOBAL_FUNC1(freeifaddrs, void(struct ifaddrs *));
 MOCK_GLOBAL_FUNC3(write, ssize_t(int, const void*, size_t));
 MOCK_GLOBAL_FUNC7(send_udp, bool(int, uint8_t *, struct sockaddr_in, uint32_t, in_addr, bool, bool));
+MOCK_GLOBAL_FUNC3(sendmsg, ssize_t(int, const struct msghdr *, int));
 
 void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config);
 void to_client(pcpp::DhcpLayer* dhcp_pkt, std::unordered_map<std::string, relay_config > *vlans,
@@ -1154,4 +1156,76 @@ TEST(DHCPRelayTest, from_client_relay_of_relay_discard) {
 
     EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).Times(0);
     from_client(&dhcpLayer, config);
+}
+
+TEST(DHCPRelayTest, passthrough_frame_rejects_invalid_args) {
+    struct sockaddr_ll addr = {};
+    uint8_t frame[64] = {0};
+
+    EXPECT_GLOBAL_CALL(sendmsg, sendmsg(_, _, _)).Times(0);
+    EXPECT_FALSE(passthrough_frame(-1, &addr, frame, sizeof(frame)));
+    EXPECT_FALSE(passthrough_frame(1, nullptr, frame, sizeof(frame)));
+    EXPECT_FALSE(passthrough_frame(1, &addr, nullptr, sizeof(frame)));
+    EXPECT_FALSE(passthrough_frame(1, &addr, frame, 0));
+}
+
+TEST(DHCPRelayTest, passthrough_frame_success) {
+    struct sockaddr_ll addr = {};
+    addr.sll_ifindex = 5;
+    uint8_t frame[64] = {0};
+
+    EXPECT_GLOBAL_CALL(sendmsg, sendmsg(_, _, _))
+        .WillOnce([](int, const struct msghdr *msg, int) {
+            EXPECT_EQ(msg->msg_iovlen, 1u);
+            EXPECT_EQ(msg->msg_iov[0].iov_len, 64u);
+            auto *dest = reinterpret_cast<const struct sockaddr_ll *>(msg->msg_name);
+            EXPECT_EQ(dest->sll_ifindex, 5);
+            return 64;
+        });
+    EXPECT_TRUE(passthrough_frame(1, &addr, frame, sizeof(frame)));
+}
+
+TEST(DHCPRelayTest, passthrough_frame_send_failure) {
+    struct sockaddr_ll addr = {};
+    addr.sll_ifindex = 3;
+    uint8_t frame[32] = {0};
+
+    EXPECT_GLOBAL_CALL(sendmsg, sendmsg(_, _, _)).WillOnce(Return(-1));
+    EXPECT_FALSE(passthrough_frame(1, &addr, frame, sizeof(frame)));
+}
+
+TEST(DHCPRelayTest, passthrough_frame_rejects_invalid_args) {
+    struct sockaddr_ll addr = {};
+    uint8_t frame[64] = {0};
+
+    EXPECT_GLOBAL_CALL(sendmsg, sendmsg(_, _, _)).Times(0);
+    EXPECT_FALSE(passthrough_frame(-1, &addr, frame, sizeof(frame)));
+    EXPECT_FALSE(passthrough_frame(1, nullptr, frame, sizeof(frame)));
+    EXPECT_FALSE(passthrough_frame(1, &addr, nullptr, sizeof(frame)));
+    EXPECT_FALSE(passthrough_frame(1, &addr, frame, 0));
+}
+
+TEST(DHCPRelayTest, passthrough_frame_success) {
+    struct sockaddr_ll addr = {};
+    addr.sll_ifindex = 5;
+    uint8_t frame[64] = {0};
+
+    EXPECT_GLOBAL_CALL(sendmsg, sendmsg(_, _, _))
+        .WillOnce([](int, const struct msghdr *msg, int) {
+            EXPECT_EQ(msg->msg_iovlen, 1u);
+            EXPECT_EQ(msg->msg_iov[0].iov_len, 64u);
+            auto *dest = reinterpret_cast<const struct sockaddr_ll *>(msg->msg_name);
+            EXPECT_EQ(dest->sll_ifindex, 5);
+            return 64;
+        });
+    EXPECT_TRUE(passthrough_frame(1, &addr, frame, sizeof(frame)));
+}
+
+TEST(DHCPRelayTest, passthrough_frame_send_failure) {
+    struct sockaddr_ll addr = {};
+    addr.sll_ifindex = 3;
+    uint8_t frame[32] = {0};
+
+    EXPECT_GLOBAL_CALL(sendmsg, sendmsg(_, _, _)).WillOnce(Return(-1));
+    EXPECT_FALSE(passthrough_frame(1, &addr, frame, sizeof(frame)));
 }

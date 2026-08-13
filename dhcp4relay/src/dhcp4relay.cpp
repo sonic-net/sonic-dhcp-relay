@@ -29,6 +29,7 @@ extern metadata_config m_config;
 
 static uint8_t client_recv_buffer[BUFFER_SIZE];
 int config_pipe[2];
+int passthrough_sock = -1;
 
 /* DHCPv4 filter */
 static struct sock_filter ether_relay_filter[] = {
@@ -165,6 +166,77 @@ int sock_open(const struct sock_fprog *fprog) {
     }
 
     return s;
+}
+
+/**
+ * @code                passthrough_sock_open();
+ *
+ * @brief               prepare raw socket for L2 frame reinjection
+ *
+ * @return              socket descriptor, or -1 on failure
+ */
+int passthrough_sock_open(void) {
+#ifdef UNIT_TEST
+    return 1;
+#else
+    int s = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+    if (s == -1) {
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] passthrough socket: Failed to create socket: %s", strerror(errno));
+        return -1;
+    }
+
+    evutil_make_listen_socket_reuseable(s);
+    evutil_make_socket_nonblocking(s);
+
+    struct sockaddr_ll sll = {
+        .sll_family = AF_PACKET,
+        .sll_protocol = htons(ETH_P_ALL),
+        .sll_ifindex = 0
+    };
+
+    if (bind(s, (struct sockaddr *)&sll, sizeof sll) == -1) {
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] passthrough socket: bind failed: %s", strerror(errno));
+        (void)close(s);
+        return -1;
+    }
+
+    return s;
+#endif
+}
+
+/**
+ * @code                passthrough_frame(...);
+ *
+ * @brief               reinject original L2 frame on ingress interface for flooding
+ */
+bool passthrough_frame(int sock, const struct sockaddr_ll *addr, const uint8_t *frame, size_t len) {
+    if (sock <= 0 || addr == NULL || frame == NULL || len == 0) {
+        return false;
+    }
+
+    struct msghdr msg = {0};
+    struct iovec iov = {0};
+    struct sockaddr_ll dest = *addr;
+
+    dest.sll_family = AF_PACKET;
+    if (dest.sll_protocol == 0) {
+        dest.sll_protocol = htons(ETH_P_ALL);
+    }
+
+    iov.iov_base = (void *)frame;
+    iov.iov_len = len;
+    msg.msg_name = &dest;
+    msg.msg_namelen = sizeof(dest);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+
+    ssize_t sent = sendmsg(sock, &msg, 0);
+    if (sent < 0 || static_cast<size_t>(sent) != len) {
+        SWSS_LOG_WARN("[DHCPV4_RELAY] passthrough: Failed to reinject frame on ifindex %d: %s",
+               dest.sll_ifindex, strerror(errno));
+        return false;
+    }
+    return true;
 }
 
 void prepare_relay_server_config(relay_config &interface_config) {
@@ -1081,9 +1153,21 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
 
             auto config_itr = vlans->find(vlan_str);
             if (config_itr == vlans->end()) {
-                SWSS_LOG_INFO("[DHCPV4_RELAY] Relay config not found for %s (interface %s, vlan_id %d)",
-                       vlan_str.c_str(), intf.c_str(), vlan_id);
-                dhcp_cntr_table.increment_counter(vlan_str, "RX", DHCPv4_MESSAGE_TYPE_DROP);
+                auto msg_type = (int)dhcp_pkt->getMessageType();
+                if (passthrough_frame(passthrough_sock, sll,
+                                      static_cast<const uint8_t *>(client_recv_buffer),
+                                      static_cast<size_t>(buffer_sz))) {
+                    SWSS_LOG_INFO("[DHCPV4_RELAY] Passthrough reinjected DHCP packet on %s "
+                           "(interface %s, vlan_id %d, no relay config)",
+                           vlan_str.c_str(), intf.c_str(), vlan_id);
+                    dhcp_cntr_table.increment_counter(vlan_str, "RX", msg_type);
+                    dhcp_cntr_table.increment_counter(vlan_str, "TX", msg_type);
+                } else {
+                    SWSS_LOG_WARN("[DHCPV4_RELAY] Passthrough failed for %s (interface %s, vlan_id %d, "
+                           "no relay config)", vlan_str.c_str(), intf.c_str(), vlan_id);
+                    dhcp_cntr_table.increment_counter(vlan_str, "RX", msg_type);
+                    dhcp_cntr_table.increment_counter(vlan_str, "TX", DHCPv4_MESSAGE_TYPE_DROP);
+                }
                 continue;
             }
             auto config = config_itr->second;
@@ -1562,6 +1646,12 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
         exit(EXIT_FAILURE);
     }
 
+    passthrough_sock = passthrough_sock_open();
+    if (passthrough_sock == -1) {
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to create passthrough socket");
+        exit(EXIT_FAILURE);
+    }
+
     // Start thread for periodic counters updates to DB
     dhcp_cntr_table.start_db_updates();
 
@@ -1598,6 +1688,10 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
         shutdown_relay();
         if (filter != -1) {
             close(filter);
+        }
+        if (passthrough_sock != -1) {
+            close(passthrough_sock);
+            passthrough_sock = -1;
         }
     }
 }
