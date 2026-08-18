@@ -975,6 +975,76 @@ TEST(DHCPRelayTest, from_client) {
     from_client(&dhcpLayer, config);
 }
 
+static relay_config make_from_client_giaddr_config(bool use_source_interface) {
+    interface_list.push_back("Ethernet12");
+    phy_interface_alias_map["Ethernet12"] = "eth12";
+
+    relay_config config = {};
+    config.phy_interface = "Ethernet12";
+    config.vlan = "Vlan10";
+    config.source_interface = use_source_interface ? "Loopback0" : "";
+    config.src_intf_sel_addr.sin_addr.s_addr = inet_addr("10.1.0.32");
+    config.link_address.sin_addr.s_addr = inet_addr("192.168.10.10");
+    config.link_address_netmask.sin_addr.s_addr = inet_addr("255.255.255.0");
+
+    struct sockaddr_in addr = {0};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = inet_addr("192.168.20.100");
+    config.servers_sock = {addr};
+    config.servers = {"192.168.20.100"};
+
+    m_config.hostname = "sonic";
+    m_config.host_mac_addr = "12:32:54:24:95:36";
+    return config;
+}
+
+static void verify_from_client_giaddr(bool is_dhcp, bool use_source_interface,
+                                      const char *expected_giaddr) {
+    pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
+    pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_DISCOVER, clientMac);
+    dhcpLayer.getDhcpHeader()->gatewayIpAddress = 0;
+    dhcpLayer.getDhcpHeader()->magicNumber =
+        is_dhcp ? DHCP_MAGIC_NUMBER : 0;
+
+    relay_config config = make_from_client_giaddr_config(use_source_interface);
+    const uint32_t expected_giaddr_addr = inet_addr(expected_giaddr);
+
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).WillOnce(
+        [expected_giaddr_addr](int, uint8_t *hdr, struct sockaddr_in, uint32_t,
+                               in_addr, bool, bool) {
+            pcpp::dhcp_header *dhcp_hdr =
+                reinterpret_cast<pcpp::dhcp_header *>(hdr);
+            EXPECT_EQ(dhcp_hdr->gatewayIpAddress, expected_giaddr_addr);
+            return true;
+        });
+
+    from_client(&dhcpLayer, config);
+
+    auto agent_option =
+        dhcpLayer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
+    if (is_dhcp) {
+        EXPECT_NE(agent_option.getValue(), nullptr);
+    } else {
+        EXPECT_EQ(agent_option.getValue(), nullptr);
+    }
+}
+
+TEST(DHCPRelayTest, from_client_single_tor_dhcp_uses_vlan_giaddr) {
+    verify_from_client_giaddr(true, false, "192.168.10.10");
+}
+
+TEST(DHCPRelayTest, from_client_single_tor_bootp_uses_vlan_giaddr) {
+    verify_from_client_giaddr(false, false, "192.168.10.10");
+}
+
+TEST(DHCPRelayTest, from_client_dual_tor_dhcp_uses_source_interface_giaddr) {
+    verify_from_client_giaddr(true, true, "10.1.0.32");
+}
+
+TEST(DHCPRelayTest, from_client_dual_tor_bootp_uses_vlan_giaddr) {
+    verify_from_client_giaddr(false, true, "192.168.10.10");
+}
+
 /* Helper: build a relay-of-relay packet (giaddr already set) with a pre-existing Option 82. */
 static relay_config make_relay_of_relay_config(const std::string &agent_relay_mode) {
     interface_list.push_back("Ethernet12");
