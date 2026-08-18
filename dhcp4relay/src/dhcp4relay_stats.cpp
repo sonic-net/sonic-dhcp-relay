@@ -180,12 +180,16 @@ void DHCPCounter_table::stop_db_updates() {
  */
 void DHCPCounter_table::initialize_interface(const std::string& interface) {
     std::lock_guard<std::mutex> lock(interfaces_mutex);
+    if (interfaces_cntr_table.find(interface) != interfaces_cntr_table.end()) {
+        return;
+    }
+
     DHCPCounters counter;
     for (const auto& type : counter_map) {
         counter.RX[type.second] = 0;
         counter.TX[type.second] = 0;
     }
-    interfaces_cntr_table[interface] = counter;
+    interfaces_cntr_table.emplace(interface, counter);
 }
 
 /**

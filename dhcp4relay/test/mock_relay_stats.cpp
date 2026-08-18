@@ -61,6 +61,17 @@ TEST_F(DHCPCounter_table_test, Initialize_interface) {
     SUCCEED();
 }
 
+TEST_F(DHCPCounter_table_test, Reinitialize_interface_preserves_counters) {
+    const std::string interface = "Vlan1000";
+
+    counter_table->initialize_interface(interface);
+    counter_table->increment_counter(interface, "RX", DHCPv4_MESSAGE_TYPE_DISCOVER);
+    counter_table->initialize_interface(interface);
+
+    auto counters = counter_table->get_counters_data();
+    EXPECT_EQ(counters.at(interface).RX.at(counter_map.at(DHCPv4_MESSAGE_TYPE_DISCOVER)), 1);
+}
+
 // Test counter incrementation
 TEST_F(DHCPCounter_table_test, Increment_counter) {
     const std::string interface = "Ethernet0";
