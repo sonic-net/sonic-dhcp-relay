@@ -65,6 +65,46 @@ bool InitConfigPipeForTest() {
     return true;
 }
 
+// DHCP options start after the 236-byte BOOTP header and 4-byte magic cookie.
+static constexpr size_t kDhcpOptionsOffset = 240;
+
+static const uint8_t *dhcp_buffer_find_option(const uint8_t *dhcp_hdr, uint32_t pkt_len,
+                                               uint8_t option_code, uint8_t *option_len) {
+    *option_len = 0;
+    if (pkt_len <= kDhcpOptionsOffset) {
+        return nullptr;
+    }
+    const uint8_t *opt = dhcp_hdr + kDhcpOptionsOffset;
+    const uint8_t *end = dhcp_hdr + pkt_len;
+    while (opt < end) {
+        if (*opt == pcpp::DHCPOPT_PAD) {
+            ++opt;
+            continue;
+        }
+        if (*opt == pcpp::DHCPOPT_END) {
+            break;
+        }
+        if (opt + 1 >= end) {
+            break;
+        }
+        const uint8_t len = opt[1];
+        if (*opt == option_code) {
+            *option_len = len;
+            return opt + 2;
+        }
+        if (opt + 2 + len > end) {
+            break;
+        }
+        opt += 2 + len;
+    }
+    return nullptr;
+}
+
+static bool dhcp_buffer_has_option82(const uint8_t *dhcp_hdr, uint32_t len) {
+    uint8_t opt_len = 0;
+    return dhcp_buffer_find_option(dhcp_hdr, len, pcpp::DHCPOPT_DHCP_AGENT_OPTIONS, &opt_len) != nullptr;
+}
+
 struct ifaddrs *CreateMockIfaddrs(const std::string &vlan_ip, const std::string &vlan_mask, const std::string &vlan_name,
                                   const std::string &src_ip, const std::string &src_name) {
     struct ifaddrs *mock_ifaddrs = new ifaddrs;
@@ -996,6 +1036,7 @@ TEST(DHCPRelayTest, to_client) {
     m_config.host_mac_addr = "12:32:54:24:95:36";
     vlans["Vlan10"] = config;
     encode_relay_option(&dhcpLayer, &config);
+    EXPECT_NE(dhcpLayer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS).getDataSize(), 0U);
 
     struct ifaddrs *mock_ifaddrs = CreateMockIfaddrs("192.168.1.1", "255.255.255.0", "Vlan100", "192.168.1.2", "Ethernet4");
     EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_)).WillOnce(DoAll(testing::SetArgPointee<0>(mock_ifaddrs), Return(0)));
@@ -1006,6 +1047,8 @@ TEST(DHCPRelayTest, to_client) {
         EXPECT_EQ((dhcp_hdr->opCode), 1);
         EXPECT_EQ((dhcp_hdr->hops), 1);
         EXPECT_EQ((dhcp_hdr->gatewayIpAddress), inet_addr("192.168.1.1"));
+        EXPECT_TRUE(pad);
+        EXPECT_FALSE(dhcp_buffer_has_option82(reinterpret_cast<const uint8_t *>(hdr), len));
         return true;
     });
     to_client(&dhcpLayer, &vlans, "172.22.178.234");
@@ -1018,6 +1061,7 @@ TEST(DHCPRelayTest, from_client) {
     dhcpLayer.getDhcpHeader()->hops = 0;
     dhcpLayer.getDhcpHeader()->gatewayIpAddress = 0;
     dhcpLayer.getDhcpHeader()->opCode = 0;
+    dhcpLayer.getDhcpHeader()->magicNumber = DHCP_MAGIC_NUMBER;
 
     interface_list.push_back("Ethernet12");
     phy_interface_alias_map["Ethernet12"] = "eth12";
@@ -1040,6 +1084,7 @@ TEST(DHCPRelayTest, from_client) {
 
     m_config.hostname = "cisco";
     m_config.host_mac_addr = "12:32:54:24:95:36";
+    EXPECT_EQ(dhcpLayer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS).getDataSize(), 0U);
 
     EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).WillOnce([]
 		    (int sock, uint8_t* hdr, struct sockaddr_in target, uint32_t len, in_addr src_ip, bool use_src_ip, bool pad) {
@@ -1047,6 +1092,26 @@ TEST(DHCPRelayTest, from_client) {
         EXPECT_EQ((dhcp_hdr->opCode), 0);
         EXPECT_EQ((dhcp_hdr->hops), 1);
         EXPECT_EQ((dhcp_hdr->gatewayIpAddress), inet_addr("192.168.10.10"));
+        EXPECT_TRUE(pad);
+
+        uint8_t agent_option_size = 0;
+        const uint8_t *options_ptr = dhcp_buffer_find_option(
+            reinterpret_cast<const uint8_t *>(hdr), len,
+            pcpp::DHCPOPT_DHCP_AGENT_OPTIONS, &agent_option_size);
+        EXPECT_NE(options_ptr, nullptr);
+        EXPECT_NE(agent_option_size, 0U);
+        if (options_ptr == nullptr) {
+            return false;
+        }
+        uint8_t circuit_id_len = 0;
+        auto circuit_id_ptr = decode_tlv(options_ptr, OPTION82_SUBOPT_CIRCUIT_ID,
+                                         circuit_id_len, agent_option_size);
+        EXPECT_NE(circuit_id_ptr, nullptr);
+        if (circuit_id_ptr == nullptr) {
+            return false;
+        }
+        std::string circuit_id(reinterpret_cast<const char *>(circuit_id_ptr), circuit_id_len);
+        EXPECT_EQ(circuit_id, "cisco:eth12:Vlan10");
         return true;
     });
     from_client(&dhcpLayer, config);
