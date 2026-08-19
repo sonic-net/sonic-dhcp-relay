@@ -21,16 +21,13 @@ std::string global_dhcp_server_ip;
 /**
  * @brief Initializes the configuration listener for the DHCP manager.
  *
- * This function starts a new detached thread that listens for SWSS (Switch State Service)
- * notifications by invoking the handle_swss_notification method. It also sets the stop_thread
- * flag to false to indicate that the listener thread should be running.
- *
- * @note The spawned thread is detached, so it will run independently of the main thread.
+ * Starts a joinable thread that listens for SWSS notifications via
+ * handle_swss_notification(). Any prior listener is stopped and joined first.
  */
 void DHCPMgr::initialize_config_listener() {
+    stop_db_updates();
     stop_thread = false;
-    std::thread m_swss_thread(&DHCPMgr::handle_swss_notification, this);
-    m_swss_thread.detach();
+    config_listener_thread_ = std::thread(&DHCPMgr::handle_swss_notification, this);
 }
 
 /**
@@ -907,7 +904,10 @@ void DHCPMgr::process_port_notification(std::deque<swss::KeyOpFieldsValuesTuple>
  */
 
 void DHCPMgr::stop_db_updates() {
-	stop_thread = true;
+    stop_thread = true;
+    if (config_listener_thread_.joinable()) {
+        config_listener_thread_.join();
+    }
 }
 
 /**

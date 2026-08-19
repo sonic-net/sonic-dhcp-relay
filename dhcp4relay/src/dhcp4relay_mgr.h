@@ -17,6 +17,7 @@
 class DHCPMgr {
    private:
     std::atomic<bool> stop_thread;
+    std::thread config_listener_thread_;
 
    public:
     DHCPMgr() : stop_thread(false) {}
