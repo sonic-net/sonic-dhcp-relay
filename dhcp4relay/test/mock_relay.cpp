@@ -19,6 +19,8 @@
 #include <pcapplusplus/UdpLayer.h>
 #include <pcapplusplus/PayloadLayer.h>
 #include <fcntl.h>
+#include <cerrno>
+#include <cstring>
 
 using namespace ::testing;
 using namespace swss;
@@ -37,15 +39,30 @@ ssize_t RealWrite(int fd, const void *buf, size_t count) {
     return syscall(SYS_write, fd, buf, count);
 }
 
-void InitConfigPipeForTest() {
+bool InitConfigPipeForTest() {
     if (config_pipe[0] > 0) {
-        close(config_pipe[0]);
+        if (close(config_pipe[0]) != 0) {
+            ADD_FAILURE() << "close config_pipe[0]: " << strerror(errno);
+            return false;
+        }
+        config_pipe[0] = -1;
     }
     if (config_pipe[1] > 0) {
-        close(config_pipe[1]);
+        if (close(config_pipe[1]) != 0) {
+            ADD_FAILURE() << "close config_pipe[1]: " << strerror(errno);
+            return false;
+        }
+        config_pipe[1] = -1;
     }
-    ASSERT_EQ(pipe(config_pipe), 0);
-    fcntl(config_pipe[0], F_SETFL, O_NONBLOCK);
+    if (pipe(config_pipe) != 0) {
+        ADD_FAILURE() << "pipe config_pipe: " << strerror(errno);
+        return false;
+    }
+    if (fcntl(config_pipe[0], F_SETFL, O_NONBLOCK) == -1) {
+        ADD_FAILURE() << "fcntl O_NONBLOCK on config_pipe[0]: " << strerror(errno);
+        return false;
+    }
+    return true;
 }
 
 struct ifaddrs *CreateMockIfaddrs(const std::string &vlan_ip, const std::string &vlan_mask, const std::string &vlan_name,
@@ -579,7 +596,7 @@ TEST(relay, signal_start) {
 
 TEST(DHCPMgrTest, initialize_config_listener) {
     DHCPMgr dhcpMgr;
-    InitConfigPipeForTest();
+    ASSERT_TRUE(InitConfigPipeForTest());
     EXPECT_GLOBAL_CALL(write, write(_, _, _))
                      .Times(AtLeast(1))
                      .WillRepeatedly(Invoke(RealWrite));
@@ -650,7 +667,7 @@ TEST(DHCPMgrTest, initialize_config_listener) {
 
 TEST(DHCPMgrTest, process_vlan_events) {
     DHCPMgr dhcpMgr;
-    InitConfigPipeForTest();
+    ASSERT_TRUE(InitConfigPipeForTest());
     EXPECT_GLOBAL_CALL(write, write(_, _, _))
                      .Times(AtLeast(1))
                      .WillRepeatedly(Invoke(RealWrite));
@@ -666,7 +683,7 @@ TEST(DHCPMgrTest, process_vlan_events) {
 
 TEST(DHCPMgrTest, dhcp_server_feature_enable) {
     DHCPMgr dhcpMgr;
-    InitConfigPipeForTest();
+    ASSERT_TRUE(InitConfigPipeForTest());
     EXPECT_GLOBAL_CALL(write, write(_, _, _))
                      .Times(AtLeast(1))
                      .WillRepeatedly(Invoke(RealWrite));
@@ -708,7 +725,7 @@ TEST(DHCPMgrTest, dhcp_server_feature_enable) {
 
 TEST(DHCPMgrTest, dhcp_server_feature_disable) {
     DHCPMgr dhcpMgr;
-    InitConfigPipeForTest();
+    ASSERT_TRUE(InitConfigPipeForTest());
     EXPECT_GLOBAL_CALL(write, write(_, _, _))
                      .Times(AtLeast(1))
                      .WillRepeatedly(Invoke(RealWrite));
@@ -729,7 +746,7 @@ TEST(DHCPMgrTest, dhcp_server_feature_disable) {
 
 TEST(DHCPMgrTest, dhcp_server_ip_modification) {
     DHCPMgr dhcpMgr;
-    InitConfigPipeForTest();
+    ASSERT_TRUE(InitConfigPipeForTest());
     EXPECT_GLOBAL_CALL(write, write(_, _, _))
                      .Times(AtLeast(1))
                      .WillRepeatedly(Invoke(RealWrite));
@@ -746,7 +763,7 @@ TEST(DHCPMgrTest, dhcp_server_ip_modification) {
 
 TEST(DHCPMgrTest, dhcp_server_ip_deletion) {
     DHCPMgr dhcpMgr;
-    InitConfigPipeForTest();
+    ASSERT_TRUE(InitConfigPipeForTest());
     EXPECT_GLOBAL_CALL(write, write(_, _, _))
                      .Times(AtLeast(1))
                      .WillRepeatedly(Invoke(RealWrite));
