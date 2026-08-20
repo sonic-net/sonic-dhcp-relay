@@ -650,6 +650,66 @@ TEST(DHCPMgrTest, process_vlan_events) {
     dhcpMgr.process_vlan_notification(entries);
 }
 
+TEST(DHCPMgrTest, replay_cached_source_interface_for_updated_relay_entries) {
+    DHCPMgr dhcpMgr;
+    vlans_copy.clear();
+    testing_db::reset();
+
+    std::deque<swss::KeyOpFieldsValuesTuple> intf_entries;
+    intf_entries.emplace_back("Loopback4096|10.10.10.1/32", "DEL", std::vector<swss::FieldValueTuple>{});
+    dhcpMgr.process_interface_notification(intf_entries);
+
+    intf_entries.clear();
+    intf_entries.emplace_back("Loopback4096|10.10.10.1/32", "SET", std::vector<swss::FieldValueTuple>{
+        {"NULL", "NULL"}
+    });
+    dhcpMgr.process_interface_notification(intf_entries);
+
+    relay_config existing_config{};
+    existing_config.vlan = "Vlan200";
+    existing_config.source_interface = "Loopback4096";
+    existing_config.servers = {"192.0.2.1"};
+    vlans_copy[existing_config.vlan] = existing_config;
+
+    std::vector<event_type> written_types;
+    std::vector<std::string> replayed_vlans;
+    EXPECT_GLOBAL_CALL(write, write(_, _, _))
+        .Times(2)
+        .WillRepeatedly(Invoke([&](int, const void *buf, size_t count) -> ssize_t {
+            EXPECT_EQ(count, sizeof(event_config));
+
+            const auto *event = static_cast<const event_config *>(buf);
+            written_types.push_back(event->type);
+
+            auto *relay_msg = static_cast<relay_config *>(event->msg);
+            if (event->type == DHCPv4_RELAY_INTERFACE_UPDATE) {
+                replayed_vlans.push_back(relay_msg->vlan);
+                EXPECT_EQ(relay_msg->src_intf_sel_addr.sin_addr.s_addr, inet_addr("10.10.10.1"));
+            }
+
+            delete relay_msg;
+            return static_cast<ssize_t>(count);
+        }));
+
+    std::deque<swss::KeyOpFieldsValuesTuple> relay_entries;
+    relay_entries.emplace_back("Vlan100", "SET", std::vector<swss::FieldValueTuple>{
+        {"dhcpv4_servers", "192.0.2.10"},
+        {"source_interface", "Loopback4096"}
+    });
+
+    dhcpMgr.process_relay_notification(relay_entries);
+    dhcpMgr.dispatch_source_intf_from_cache(relay_entries);
+
+    EXPECT_THAT(written_types, ElementsAre(DHCPv4_RELAY_CONFIG_UPDATE, DHCPv4_RELAY_INTERFACE_UPDATE));
+    EXPECT_THAT(replayed_vlans, ElementsAre("Vlan100"));
+
+    vlans_copy.clear();
+    intf_entries.clear();
+    intf_entries.emplace_back("Loopback4096|10.10.10.1/32", "DEL", std::vector<swss::FieldValueTuple>{});
+    dhcpMgr.process_interface_notification(intf_entries);
+    testing_db::reset();
+}
+
 TEST(DHCPMgrTest, dhcp_server_feature_enable) {
     DHCPMgr dhcpMgr;
     EXPECT_GLOBAL_CALL(write, write(_, _, _))
