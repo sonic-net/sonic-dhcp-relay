@@ -13,6 +13,7 @@
 
 #include <map>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "dbconnector.h"
@@ -144,7 +145,8 @@ typedef enum {
      * initial DHCPV4_RELAY snapshot. Reusable for Redis-reconnect
      * resync, atomic config replace, etc.
      */
-    DHCPv4_RELAY_SYNC_BARRIER
+    DHCPv4_RELAY_SYNC_BARRIER,
+    DHCPv4_RELAY_VXLAN_TUNNEL_UPDATE
 } event_type;
 
 struct event_config {
@@ -169,6 +171,11 @@ struct port_config {
     bool is_add;
 };
 
+/* Add/remove a VxLAN kernel netdev in vxlan_netdev_set. */
+struct vxlan_tunnel_config {
+    std::string netdev_name;
+    bool is_add;
+};
 struct metadata_config {
     std::string host_mac_addr;
     std::string hostname = "sonic";
