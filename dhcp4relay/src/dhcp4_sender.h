@@ -8,20 +8,8 @@
 #define BOOTP_MIN_LEN 300
 
 /**
- * @brief Apply BOOTP minimum-length padding.
- *
- * Copies *buffer into out and updates *len to BOOTP_MIN_LEN when pad is true
- * and *len < BOOTP_MIN_LEN.  out must point to at least BOOTP_MIN_LEN
- * zero-initialised bytes; the caller is responsible for switching to out as
- * the send buffer when the returned length differs from the input length.
- *
- * Compiled in both production and UNIT_TEST builds so tests can exercise the
- * padding logic directly without linking the real send_udp().
- *
- * @param out     destination buffer (>= BOOTP_MIN_LEN bytes, zero-filled)
- * @param buffer  source packet bytes
- * @param len     packet length; updated to BOOTP_MIN_LEN if padding applied
- * @param pad     enable padding
+ * Copy a short packet into a zero-initialized BOOTP_MIN_LEN buffer and update
+ * its length. Does nothing when padding is disabled or unnecessary.
  */
 void bootp_pad(uint8_t *out, const uint8_t *buffer, uint32_t *len, bool pad);
 
