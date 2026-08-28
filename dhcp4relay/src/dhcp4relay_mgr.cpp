@@ -22,16 +22,13 @@ std::mutex m_config_mutex;
 /**
  * @brief Initializes the configuration listener for the DHCP manager.
  *
- * This function starts a new detached thread that listens for SWSS (Switch State Service)
- * notifications by invoking the handle_swss_notification method. It also sets the stop_thread
- * flag to false to indicate that the listener thread should be running.
- *
- * @note The spawned thread is detached, so it will run independently of the main thread.
+ * Starts a joinable thread that listens for SWSS notifications via
+ * handle_swss_notification(). Any prior listener is stopped and joined first.
  */
 void DHCPMgr::initialize_config_listener() {
+    stop_db_updates();
     stop_thread = false;
-    std::thread m_swss_thread(&DHCPMgr::handle_swss_notification, this);
-    m_swss_thread.detach();
+    config_listener_thread_ = std::thread(&DHCPMgr::handle_swss_notification, this);
 }
 
 /**
@@ -130,28 +127,40 @@ void DHCPMgr::handle_swss_notification() {
             continue;
         }
 
-	if (!feature_dhcp_server_enabled) {
-            if (config_db_relaymgr_table_ptr && selectable == config_db_relaymgr_table_ptr.get()) {
-                config_db_relaymgr_table_ptr->pops(entries);
+        /* Always pops() whatever selectable fired so its keyspace-event buffer
+           drains, then gate processing on feature_dhcp_server_enabled. Leaving a
+           feature-gated selectable undrained keeps hasCachedData() true, which
+           makes swss::Select re-queue it and spin at 100% CPU. */
+        if (config_db_relaymgr_table_ptr && selectable == config_db_relaymgr_table_ptr.get()) {
+            config_db_relaymgr_table_ptr->pops(entries);
+            if (!feature_dhcp_server_enabled) {
                 process_relay_notification(entries);
-            } else if (selectable == static_cast<swss::Selectable *>(&config_db_interface_table)) {
-                config_db_interface_table.pops(entries);
+            }
+        } else if (selectable == static_cast<swss::Selectable *>(&config_db_interface_table)) {
+            config_db_interface_table.pops(entries);
+            if (!feature_dhcp_server_enabled) {
                 process_interface_notification(entries);
-            } else if (selectable == static_cast<swss::Selectable *>(&config_db_loopback_table)) {
-                config_db_loopback_table.pops(entries);
+            }
+        } else if (selectable == static_cast<swss::Selectable *>(&config_db_loopback_table)) {
+            config_db_loopback_table.pops(entries);
+            if (!feature_dhcp_server_enabled) {
                 process_interface_notification(entries);
-            } else if (selectable == static_cast<swss::Selectable *>(&config_db_portchannel_table)) {
-                config_db_portchannel_table.pops(entries);
+            }
+        } else if (selectable == static_cast<swss::Selectable *>(&config_db_portchannel_table)) {
+            config_db_portchannel_table.pops(entries);
+            if (!feature_dhcp_server_enabled) {
                 process_interface_notification(entries);
-	    }
-	} else {
-            if (config_db_dhcp_server_ipv4_ptr && selectable == config_db_dhcp_server_ipv4_ptr.get()) {
-                config_db_dhcp_server_ipv4_ptr->pops(entries);
+            }
+        } else if (config_db_dhcp_server_ipv4_ptr && selectable == config_db_dhcp_server_ipv4_ptr.get()) {
+            config_db_dhcp_server_ipv4_ptr->pops(entries);
+            if (feature_dhcp_server_enabled) {
                 process_dhcp_server_ipv4_notification(entries);
-            } else if (state_db_dhcp_server_ipv4_ip_ptr && selectable == state_db_dhcp_server_ipv4_ip_ptr.get()) {
-                state_db_dhcp_server_ipv4_ip_ptr->pops(entries);
+            }
+        } else if (state_db_dhcp_server_ipv4_ip_ptr && selectable == state_db_dhcp_server_ipv4_ip_ptr.get()) {
+            state_db_dhcp_server_ipv4_ip_ptr->pops(entries);
+            if (feature_dhcp_server_enabled) {
                 process_dhcp_server_ipv4_ip_notification(entries, swss_select, config_db_ptr);
-	    }
+            }
 	}
 
 	if (selectable == static_cast<swss::Selectable *>(&config_db_device_metadata_table)) {
@@ -956,7 +965,10 @@ void DHCPMgr::process_port_notification(std::deque<swss::KeyOpFieldsValuesTuple>
  */
 
 void DHCPMgr::stop_db_updates() {
-	stop_thread = true;
+    stop_thread = true;
+    if (config_listener_thread_.joinable()) {
+        config_listener_thread_.join();
+    }
 }
 
 /**
