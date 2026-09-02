@@ -613,12 +613,6 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
  * @return none
  */
 void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
-    if (dhcp_pkt->getHeaderLen() < sizeof(pcpp::dhcp_header)) {
-        SWSS_LOG_WARN("[DHCPV4_RELAY] Dropping short DHCP packet from client on %s: len %zu < %zu",
-                      config.vlan.c_str(), dhcp_pkt->getHeaderLen(), sizeof(pcpp::dhcp_header));
-        dhcp_cntr_table.increment_counter(config.vlan, "RX", DHCPv4_MESSAGE_TYPE_DROP);
-        return;
-    }
     /* Update giaddr */
     if (!(dhcp_pkt->getDhcpHeader()->gatewayIpAddress)) {
         const bool is_dhcp =
@@ -745,11 +739,6 @@ uint8_t *decode_tlv(const uint8_t *buf, uint8_t t, uint8_t &l, uint32_t options_
  */
 void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_config> *vlans,
                std::string src_ip) {
-    if (dhcp_pkt->getHeaderLen() < sizeof(pcpp::dhcp_header)) {
-        SWSS_LOG_WARN("[DHCPV4_RELAY] Dropping short DHCP server reply from %s: len %zu < %zu",
-                      src_ip.c_str(), dhcp_pkt->getHeaderLen(), sizeof(pcpp::dhcp_header));
-        return;
-    }
     struct ifaddrs *ifa, *ifa_tmp;
     struct sockaddr_in target_addr = {0};
     uint32_t giaddr = dhcp_pkt->getDhcpHeader()->gatewayIpAddress;
@@ -1015,9 +1004,6 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
             }
             return;
         }
-        /* Prevent a preceding frame from priming header bytes that fall past
-         * the current frame's boundary (e.g. magic-cookie priming attack). */
-        memset(client_recv_buffer + buffer_sz, 0, sizeof(client_recv_buffer) - buffer_sz);
 
         /* Find ingress VLAN */
         sll = (struct sockaddr_ll *)msg.msg_name;
