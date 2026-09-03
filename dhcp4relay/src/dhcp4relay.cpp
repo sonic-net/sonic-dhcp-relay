@@ -1138,6 +1138,17 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
             continue;
         }
 
+        /* Reject a truncated DHCP layer before any getDhcpHeader()/getMessageType()
+         * access below dereferences fields past the received bytes. */
+        if (dhcp_pkt->getHeaderLen() < sizeof(pcpp::dhcp_header)) {
+            SWSS_LOG_WARN("[DHCPV4_RELAY] Dropping short DHCP packet from interface %s: len %zu < %zu",
+                          intf.c_str(), dhcp_pkt->getHeaderLen(), sizeof(pcpp::dhcp_header));
+            if (!vlan_str.empty()) {
+                dhcp_cntr_table.increment_counter(vlan_str, "RX", DHCPv4_MESSAGE_TYPE_MALFORMED);
+            }
+            continue;
+        }
+
         if (dhcp_pkt->getDhcpHeader()->opCode == BOOTPREQUEST) {
             if (vlan_str.empty()) {
                 continue;

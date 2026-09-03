@@ -10,6 +10,7 @@
 #include "gmock/gmock.h"
 #include "mock_relay.h"
 #include "mock_table.h"
+#include "../src/dhcp4_sender.h"
 #include <sys/syscall.h>
 
 #include <pcapplusplus/DhcpLayer.h>
@@ -63,6 +64,46 @@ bool InitConfigPipeForTest() {
         return false;
     }
     return true;
+}
+
+// DHCP options start after the 236-byte BOOTP header and 4-byte magic cookie.
+static constexpr size_t kDhcpOptionsOffset = 240;
+
+static const uint8_t *dhcp_buffer_find_option(const uint8_t *dhcp_hdr, uint32_t pkt_len,
+                                               uint8_t option_code, uint8_t *option_len) {
+    *option_len = 0;
+    if (pkt_len <= kDhcpOptionsOffset) {
+        return nullptr;
+    }
+    const uint8_t *opt = dhcp_hdr + kDhcpOptionsOffset;
+    const uint8_t *end = dhcp_hdr + pkt_len;
+    while (opt < end) {
+        if (*opt == pcpp::DHCPOPT_PAD) {
+            ++opt;
+            continue;
+        }
+        if (*opt == pcpp::DHCPOPT_END) {
+            break;
+        }
+        if (opt + 1 >= end) {
+            break;
+        }
+        const uint8_t len = opt[1];
+        if (*opt == option_code) {
+            *option_len = len;
+            return opt + 2;
+        }
+        if (opt + 2 + len > end) {
+            break;
+        }
+        opt += 2 + len;
+    }
+    return nullptr;
+}
+
+static bool dhcp_buffer_has_option82(const uint8_t *dhcp_hdr, uint32_t len) {
+    uint8_t opt_len = 0;
+    return dhcp_buffer_find_option(dhcp_hdr, len, pcpp::DHCPOPT_DHCP_AGENT_OPTIONS, &opt_len) != nullptr;
 }
 
 struct ifaddrs *CreateMockIfaddrs(const std::string &vlan_ip, const std::string &vlan_mask, const std::string &vlan_name,
@@ -989,11 +1030,14 @@ TEST(DHCPRelayTest, to_client) {
     config.link_address.sin_addr.s_addr = inet_addr("192.168.10.10");
     config.link_address_netmask.sin_addr.s_addr = inet_addr("255.255.255.0");
     config.vrf_selection_opt = "enable";
+    config.client_sock = 1;
     vlan_vrf_map["Vlan10"] = "Vrf01";
 
+    m_config.hostname = "cisco";
     m_config.host_mac_addr = "12:32:54:24:95:36";
     vlans["Vlan10"] = config;
     encode_relay_option(&dhcpLayer, &config);
+    EXPECT_NE(dhcpLayer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS).getDataSize(), 0U);
 
     struct ifaddrs *mock_ifaddrs = CreateMockIfaddrs("192.168.1.1", "255.255.255.0", "Vlan100", "192.168.1.2", "Ethernet4");
     EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_)).WillOnce(DoAll(testing::SetArgPointee<0>(mock_ifaddrs), Return(0)));
@@ -1004,6 +1048,8 @@ TEST(DHCPRelayTest, to_client) {
         EXPECT_EQ((dhcp_hdr->opCode), 1);
         EXPECT_EQ((dhcp_hdr->hops), 1);
         EXPECT_EQ((dhcp_hdr->gatewayIpAddress), inet_addr("192.168.1.1"));
+        EXPECT_TRUE(pad);
+        EXPECT_FALSE(dhcp_buffer_has_option82(reinterpret_cast<const uint8_t *>(hdr), len));
         return true;
     });
     to_client(&dhcpLayer, &vlans, "172.22.178.234");
@@ -1014,8 +1060,9 @@ TEST(DHCPRelayTest, from_client) {
     pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
     pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_DISCOVER, clientMac);
     dhcpLayer.getDhcpHeader()->hops = 0;
-    dhcpLayer.getDhcpHeader()->gatewayIpAddress = inet_addr("192.168.1.1");
+    dhcpLayer.getDhcpHeader()->gatewayIpAddress = 0;
     dhcpLayer.getDhcpHeader()->opCode = 0;
+    dhcpLayer.getDhcpHeader()->magicNumber = DHCP_MAGIC_NUMBER;
 
     interface_list.push_back("Ethernet12");
     phy_interface_alias_map["Ethernet12"] = "eth12";
@@ -1033,17 +1080,39 @@ TEST(DHCPRelayTest, from_client) {
     config.link_address.sin_addr.s_addr = inet_addr("192.168.10.10");
     config.link_address_netmask.sin_addr.s_addr = inet_addr("255.255.255.0");
     config.vrf_selection_opt = "enable";
+    config.vrf_sock = 1;
     vlan_vrf_map["Vlan10"] = "Vrf01";
 
+    m_config.hostname = "cisco";
     m_config.host_mac_addr = "12:32:54:24:95:36";
-    encode_relay_option(&dhcpLayer, &config);
+    EXPECT_EQ(dhcpLayer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS).getDataSize(), 0U);
 
     EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).WillOnce([]
 		    (int sock, uint8_t* hdr, struct sockaddr_in target, uint32_t len, in_addr src_ip, bool use_src_ip, bool pad) {
         pcpp::dhcp_header* dhcp_hdr = (pcpp::dhcp_header*)hdr;
         EXPECT_EQ((dhcp_hdr->opCode), 0);
         EXPECT_EQ((dhcp_hdr->hops), 1);
-        EXPECT_EQ((dhcp_hdr->gatewayIpAddress), inet_addr("192.168.1.1"));
+        EXPECT_EQ((dhcp_hdr->gatewayIpAddress), inet_addr("192.168.10.10"));
+        EXPECT_TRUE(pad);
+
+        uint8_t agent_option_size = 0;
+        const uint8_t *options_ptr = dhcp_buffer_find_option(
+            reinterpret_cast<const uint8_t *>(hdr), len,
+            pcpp::DHCPOPT_DHCP_AGENT_OPTIONS, &agent_option_size);
+        EXPECT_NE(options_ptr, nullptr);
+        EXPECT_NE(agent_option_size, 0U);
+        if (options_ptr == nullptr) {
+            return false;
+        }
+        uint8_t circuit_id_len = 0;
+        auto circuit_id_ptr = decode_tlv(options_ptr, OPTION82_SUBOPT_CIRCUIT_ID,
+                                         circuit_id_len, agent_option_size);
+        EXPECT_NE(circuit_id_ptr, nullptr);
+        if (circuit_id_ptr == nullptr) {
+            return false;
+        }
+        std::string circuit_id(reinterpret_cast<const char *>(circuit_id_ptr), circuit_id_len);
+        EXPECT_EQ(circuit_id, "cisco:eth12:Vlan10");
         return true;
     });
     from_client(&dhcpLayer, config);
@@ -1215,6 +1284,41 @@ TEST(DHCPRelayTest, from_client_relay_of_relay_discard) {
     EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).Times(0);
     from_client(&dhcpLayer, config);
 }
+
+TEST(DHCPRelayTest, bootp_pad_extends_short_packet) {
+    uint8_t src[50] = {};
+    src[0] = 0x01; /* BOOTREQUEST */
+    src[49] = 0x7f;
+    uint8_t out[BOOTP_MIN_LEN];
+    memset(out, 0xff, sizeof(out));
+    uint32_t len = sizeof(src);
+    bootp_pad(out, src, &len, true);
+    EXPECT_EQ(len, (uint32_t)BOOTP_MIN_LEN);
+    EXPECT_EQ(out[0], 0x01);
+    EXPECT_EQ(out[49], 0x7f);
+    EXPECT_EQ(out[50], 0x00);
+    EXPECT_EQ(out[BOOTP_MIN_LEN - 1], 0x00);
+}
+
+TEST(DHCPRelayTest, bootp_pad_no_op_when_already_min_len) {
+    uint8_t src[BOOTP_MIN_LEN] = {};
+    src[0] = 0x02; /* BOOTREPLY */
+    uint8_t out[BOOTP_MIN_LEN] = {};
+    uint32_t len = BOOTP_MIN_LEN;
+    bootp_pad(out, src, &len, true);
+    EXPECT_EQ(len, (uint32_t)BOOTP_MIN_LEN);
+    /* out was not written — src was not copied */
+    EXPECT_EQ(out[0], 0x00);
+}
+
+TEST(DHCPRelayTest, bootp_pad_disabled_when_pad_false) {
+    uint8_t src[50] = {};
+    uint8_t out[BOOTP_MIN_LEN] = {};
+    uint32_t len = sizeof(src);
+    bootp_pad(out, src, &len, false);
+    EXPECT_EQ(len, (uint32_t)sizeof(src)); /* unchanged */
+}
+
 TEST(DHCPRelayTest, encode_relay_option_long_circuit_id) {
     interface_list.clear();
     phy_interface_alias_map.clear();
