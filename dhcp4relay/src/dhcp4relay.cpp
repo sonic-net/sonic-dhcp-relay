@@ -602,6 +602,52 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
     return;
 }
 
+static bool has_dhcp_option(const pcpp::DhcpLayer *dhcp_pkt,
+                            pcpp::DhcpOptionTypes option_type) {
+    const pcpp::dhcp_header *dhcp_header = dhcp_pkt->getDhcpHeader();
+    if (dhcp_header == nullptr || dhcp_header->magicNumber != DHCP_MAGIC_NUMBER) {
+        return false;
+    }
+
+    size_t remaining = dhcp_pkt->getHeaderLen();
+    if (remaining <= sizeof(pcpp::dhcp_header)) {
+        return false;
+    }
+
+    const uint8_t *option = reinterpret_cast<const uint8_t *>(dhcp_header) +
+                            sizeof(pcpp::dhcp_header);
+    remaining -= sizeof(pcpp::dhcp_header);
+
+    while (remaining > 0) {
+        const uint8_t option_code = *option++;
+        --remaining;
+
+        if (option_code == static_cast<uint8_t>(pcpp::DHCPOPT_PAD)) {
+            continue;
+        }
+        if (option_code == static_cast<uint8_t>(pcpp::DHCPOPT_END)) {
+            return false;
+        }
+        if (remaining == 0) {
+            return false;
+        }
+
+        const uint8_t option_len = *option++;
+        --remaining;
+        if (option_len > remaining) {
+            return false;
+        }
+        if (option_code == static_cast<uint8_t>(option_type)) {
+            return true;
+        }
+
+        option += option_len;
+        remaining -= option_len;
+    }
+
+    return false;
+}
+
 /**
  * @code                 void from_client(pcpp::DhcpLayer* dhcp_pkt, relay_config *config)
  *
@@ -645,7 +691,10 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
            forward - Forward the packet unchanged (no Option 82 modification).
            discard - Discard the incoming packet (default).
          */
-        if (config.agent_relay_mode == "append") {
+        if (!has_dhcp_option(dhcp_pkt, pcpp::DHCPOPT_DHCP_AGENT_OPTIONS)) {
+            SWSS_LOG_DEBUG("[DHCPV4_RELAY] Forwarding chained packet without Option 82 on %s",
+                    config.vlan.c_str());
+        } else if (config.agent_relay_mode == "append") {
             encode_relay_option(dhcp_pkt, &config);
         } else if (config.agent_relay_mode == "replace") {
             dhcp_pkt->removeOption(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
