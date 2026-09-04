@@ -49,6 +49,7 @@
 #define DHCP_SUB_OPT_TLV_HEADER_LEN 2
 
 /* DHCP option value is length-prefixed with a 1-byte field, so max 255 bytes. */
+#define DHCP_OPTION_TLV_HEADER_LEN 2
 #define DHCP_OPTION_VALUE_MAX_LEN 255
 /*
  * VRF names in SONiC are Linux network interfaces (IFNAMSIZ = 16, null-terminated),

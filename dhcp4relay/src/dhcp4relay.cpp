@@ -479,12 +479,19 @@ std::string get_mac_address(const std::string &ifname) {
     return mac;
 }
 
-void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
+static bool is_vss_required(const relay_config &config, const std::string &client_vrf) {
+    return ((config.vrf_selection_opt == "enable") && (client_vrf != "default") &&
+            (config.vrf != client_vrf));
+}
+
+/* Return whether the local relay agent information option was added. */
+bool encode_relay_option82(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
     uint8_t buf[DHCP_OPTION_VALUE_MAX_LEN] = {0};
     uint8_t buf_offset = 0;
     std::string bm_mac;
 
-    auto vrf = vlan_vrf_map[config->vlan.c_str()];
+    auto client_vrf = vlan_vrf_map[config->vlan];
+    const bool vss_required = is_vss_required(*config, client_vrf);
 
     /* Get interface alias */
     std::string intf_alias;
@@ -504,14 +511,14 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
     if (circuit_id.length() > UINT8_MAX) {
         SWSS_LOG_ERROR("[DHCPV4_RELAY] circuit-id length %zu exceeds maximum on %s, dropping option 82",
                        circuit_id.length(), config->vlan.c_str());
-        return;
+        return false;
     }
     auto offset = encode_tlv(buf, OPTION82_SUBOPT_CIRCUIT_ID, (uint8_t)circuit_id.length(),
                              (uint8_t *)circuit_id.c_str(), sizeof(buf));
     if (!offset) {
         SWSS_LOG_ERROR("[DHCPV4_RELAY] circuit-id length %zu exceeds buffer on %s, dropping option 82",
                        circuit_id.length(), config->vlan.c_str());
-        return;
+        return false;
     }
     buf_offset += offset;
 
@@ -534,7 +541,7 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
     if (!offset) {
         SWSS_LOG_ERROR("[DHCPV4_RELAY] remote-id does not fit after circuit-id on %s, dropping option 82",
                        config->vlan.c_str());
-        return;
+        return false;
     }
     buf_offset += offset;
 
@@ -548,7 +555,7 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
         if (!offset) {
             SWSS_LOG_ERROR("[DHCPV4_RELAY] link-selection does not fit on %s, dropping option 82",
                            config->vlan.c_str());
-            return;
+            return false;
         }
         buf_offset += offset;
     }
@@ -561,7 +568,7 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
         if (!offset) {
             SWSS_LOG_ERROR("[DHCPV4_RELAY] server-override does not fit on %s, dropping option 82",
                            config->vlan.c_str());
-            return;
+            return false;
         }
         buf_offset += offset;
     }
@@ -569,37 +576,64 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
     /* Encode VSS sub-option 151 if client is not default VRF */
     /* | 151 | vrf_len | 0 | vrf_name | */
     /* Enable VSS only if client and server are in two different VRF's */
-    if ((config->vrf_selection_opt == "enable") && (vrf != "default") &&
-        (config->vrf != vrf)) {
-        if (vrf.length() > OPTION82_VSS_VRF_MAX_LEN) {
+    if (vss_required) {
+        if (client_vrf.length() > OPTION82_VSS_VRF_MAX_LEN) {
             SWSS_LOG_WARN("[DHCPV4_RELAY] VRF name '%s' exceeds %d bytes, skipping VSS sub-option",
-                          vrf.c_str(), OPTION82_VSS_VRF_MAX_LEN);
+                          client_vrf.c_str(), OPTION82_VSS_VRF_MAX_LEN);
+            return false;
         } else {
             uint8_t vss_buf[OPTION82_VSS_VRF_MAX_LEN + 1] = {0};
-            memcpy(vss_buf + 1, vrf.c_str(), vrf.length());
+            memcpy(vss_buf + 1, client_vrf.c_str(), client_vrf.length());
             offset = encode_tlv((buf + buf_offset), OPTION82_SUBOPT_VIRTUAL_SUBNET,
-                                (uint8_t)(vrf.length() + 1), vss_buf, sizeof(buf) - buf_offset);
+                                (uint8_t)(client_vrf.length() + 1), vss_buf,
+                                sizeof(buf) - buf_offset);
             if (!offset) {
                 SWSS_LOG_ERROR("[DHCPV4_RELAY] VSS sub-option does not fit on %s, dropping option 82",
                                config->vlan.c_str());
-                return;
+                return false;
             }
             buf_offset += offset;
         }
     }
 
+    const size_t projected_packet_size =
+        dhcp_pkt->getHeaderLen() + DHCP_OPTION_TLV_HEADER_LEN + buf_offset;
     /* We shouldn't append relay information if packet size is exceeding MTU size */
-    if ((dhcp_pkt->getHeaderLen() + buf_offset) > MAX_DHCP_PKT_SIZE) {
-        SWSS_LOG_ERROR("[DHCPV4_RELAY] %ld packet size is exceeding allowed size %d"
-               " from interface %s",
-               (dhcp_pkt->getHeaderLen() + buf_offset),
-               MAX_DHCP_PKT_SIZE, config->vlan.c_str());
-        return;
+    if (projected_packet_size > MAX_DHCP_PKT_SIZE) {
+        /*
+         * RFC 3046 Section 2.1 requires forwarding without Option 82 when
+         * relay information does not fit. That rule predates RFC 6607. When
+         * this relay is responsible for VSS, omitting Suboption 151 can make
+         * the server select the global/default address space instead of the
+         * client's VPN. giaddr carries no VRF identity and can overlap across
+         * VRFs, so a VSS-required request is not coherent without its VSS.
+         */
+        if (vss_required) {
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Required VSS relay information makes"
+                   " packet size %zu exceed allowed size %d on interface %s;"
+                   " local relay information was not added",
+                   projected_packet_size,
+                   MAX_DHCP_PKT_SIZE, config->vlan.c_str());
+        } else {
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] %zu packet size is exceeding allowed size %d"
+                   " from interface %s; local relay information was not added",
+                   projected_packet_size,
+                   MAX_DHCP_PKT_SIZE, config->vlan.c_str());
+        }
+
+        return false;
     }
 
-    dhcp_pkt->addOption(pcpp::DhcpOptionBuilder(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS,
-                                                buf, buf_offset));
-    return;
+    auto relay_option =
+        dhcp_pkt->addOption(pcpp::DhcpOptionBuilder(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS,
+                                                    buf, buf_offset));
+    if (relay_option.isNull()) {
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to add local relay information"
+                       " on interface %s", config->vlan.c_str());
+        return false;
+    }
+
+    return true;
 }
 
 /**
@@ -613,6 +647,9 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
  * @return none
  */
 void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
+    auto client_vrf = vlan_vrf_map[config.vlan];
+    const bool vss_required = is_vss_required(config, client_vrf);
+
     /* Update giaddr */
     if (!(dhcp_pkt->getDhcpHeader()->gatewayIpAddress)) {
         const bool is_dhcp =
@@ -635,7 +672,13 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
         }
         if (is_dhcp) {
             SWSS_LOG_WARN("[DHCPV4_RELAY] encode DHCP relay option");
-            encode_relay_option(dhcp_pkt, &config);
+            if (!encode_relay_option82(dhcp_pkt, &config) && vss_required) {
+                SWSS_LOG_ERROR("[DHCPV4_RELAY] Dropping packet on interface %s:"
+                               " required VSS relay information was not added",
+                               config.vlan.c_str());
+                dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
+                return;
+            }
         }
     } else {
         /* If the relay packet is from another relay, we should act based on
@@ -646,10 +689,22 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
            discard - Discard the incoming packet (default).
          */
         if (config.agent_relay_mode == "append") {
-            encode_relay_option(dhcp_pkt, &config);
+            if (!encode_relay_option82(dhcp_pkt, &config) && vss_required) {
+                SWSS_LOG_ERROR("[DHCPV4_RELAY] Dropping packet on interface %s:"
+                               " required VSS relay information was not added",
+                               config.vlan.c_str());
+                dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
+                return;
+            }
         } else if (config.agent_relay_mode == "replace") {
             dhcp_pkt->removeOption(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
-            encode_relay_option(dhcp_pkt, &config);
+            if (!encode_relay_option82(dhcp_pkt, &config) && vss_required) {
+                SWSS_LOG_ERROR("[DHCPV4_RELAY] Dropping packet on interface %s:"
+                               " required VSS relay information was not added",
+                               config.vlan.c_str());
+                dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
+                return;
+            }
         } else if (config.agent_relay_mode == "forward") {
             /* forward_untouched: pass through without modifying Option 82 */
         } else {
