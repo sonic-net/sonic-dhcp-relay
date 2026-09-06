@@ -17,6 +17,17 @@ bool dual_tor_sock = false;
 char loopback[IF_NAMESIZE] = "Loopback0";
 int mock_sock = 124;
 
+static const uint8_t callback_client_raw_solicit[] = {
+  0x33, 0x33, 0x00, 0x01, 0x00, 0x02, 0x08, 0x00, 0x27, 0xfe, 0x8f, 0x95, 0x86, 0xdd, 0x60, 0x00,
+  0x00, 0x00, 0x00, 0x3c, 0x11, 0x01, 0xfe, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0a, 0x00,
+  0x27, 0xff, 0xfe, 0xfe, 0x8f, 0x95, 0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x01, 0x00, 0x02, 0x02, 0x22, 0x02, 0x23, 0x00, 0x3c, 0xad, 0x08, 0x01, 0x10,
+  0x08, 0x74, 0x00, 0x01, 0x00, 0x0e, 0x00, 0x01, 0x00, 0x01, 0x1c, 0x39, 0xcf, 0x88, 0x08, 0x00,
+  0x27, 0xfe, 0x8f, 0x95, 0x00, 0x06, 0x00, 0x04, 0x00, 0x17, 0x00, 0x18, 0x00, 0x08, 0x00, 0x02,
+  0x00, 0x00, 0x00, 0x19, 0x00, 0x0c, 0x27, 0xfe, 0x8f, 0x95, 0x00, 0x00, 0x0e, 0x10, 0x00, 0x00,
+  0x15, 0x18
+};
+
 static struct sock_filter ether_relay_filter[] = {
 
     { 0x28, 0, 0, 0xfffff004 },
@@ -663,14 +674,64 @@ TEST(relay, dhcp6relay_stop) {
 
 TEST(relay, update_vlan_mapping) {
   std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+  vlan_map.clear();
   config_db->hset("VLAN_MEMBER|Vlan1000|Ethernet19", "tagging_mode", "untagged");
-  config_db->hset("VLAN_MEMBER|Vlan1000|Ethernet20", "tagging_mode", "untagged");
+  config_db->hset("VLAN_MEMBER|Vlan1000|PortChannel1001", "tagging_mode", "untagged");
   std::string vlan = "Vlan1000";
   update_vlan_mapping(vlan, config_db);
 
-  auto output = config_db->hget("VLAN_MEMBER|Vlan1000|Ethernet19", "tagging_mode");
-  std::string *ptr = output.get();
-  EXPECT_EQ(*ptr, "untagged");
+  auto ethernet = vlan_map.find("Ethernet19");
+  EXPECT_NE(ethernet, vlan_map.end());
+  if (ethernet != vlan_map.end()) {
+    EXPECT_EQ(ethernet->second, vlan);
+  }
+  auto portchannel = vlan_map.find("PortChannel1001");
+  EXPECT_NE(portchannel, vlan_map.end());
+  if (portchannel != vlan_map.end()) {
+    EXPECT_EQ(portchannel->second, vlan);
+  }
+
+  config_db->del("VLAN_MEMBER|Vlan1000|Ethernet19");
+  config_db->del("VLAN_MEMBER|Vlan1000|PortChannel1001");
+  vlan_map.clear();
+}
+
+TEST(relay, initialize_physical_interface_mappings) {
+  std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+  config_db->hset("PORT|Ethernet19", "admin_status", "up");
+  config_db->hset("PORT|Ethernet20", "admin_status", "up");
+  config_db->hset("PORT|Ethernet21", "admin_status", "up");
+  config_db->hset("PORTCHANNEL_MEMBER|PortChannel1001|Ethernet20", "NULL", "NULL");
+  config_db->hset("PORTCHANNEL_MEMBER|PortChannel1002|Ethernet21", "NULL", "NULL");
+  config_db->hset("PORTCHANNEL_MEMBER|PortChannel1003|Ethernet22", "NULL", "NULL");
+
+  initialize_physical_interface_mappings(config_db);
+
+  EXPECT_EQ(physical_interfaces.count("Ethernet19"), 1);
+  EXPECT_EQ(physical_interfaces.count("Ethernet20"), 1);
+  EXPECT_EQ(physical_interfaces.count("Ethernet21"), 1);
+  EXPECT_EQ(physical_interfaces.count("Ethernet22"), 0);
+  EXPECT_EQ(physical_interfaces.count("PortChannel1001"), 0);
+  auto ethernet20 = portchannel_map.find("Ethernet20");
+  EXPECT_NE(ethernet20, portchannel_map.end());
+  if (ethernet20 != portchannel_map.end()) {
+    EXPECT_EQ(ethernet20->second, "PortChannel1001");
+  }
+  auto ethernet21 = portchannel_map.find("Ethernet21");
+  EXPECT_NE(ethernet21, portchannel_map.end());
+  if (ethernet21 != portchannel_map.end()) {
+    EXPECT_EQ(ethernet21->second, "PortChannel1002");
+  }
+  EXPECT_EQ(portchannel_map.count("Ethernet22"), 0);
+
+  config_db->del("PORT|Ethernet19");
+  config_db->del("PORT|Ethernet20");
+  config_db->del("PORT|Ethernet21");
+  config_db->del("PORTCHANNEL_MEMBER|PortChannel1001|Ethernet20");
+  config_db->del("PORTCHANNEL_MEMBER|PortChannel1002|Ethernet21");
+  config_db->del("PORTCHANNEL_MEMBER|PortChannel1003|Ethernet22");
+  physical_interfaces.clear();
+  portchannel_map.clear();
 }
 
 TEST(relay, client_packet_handler) {
@@ -780,6 +841,107 @@ TEST(relay, server_callback) {
 
 MOCK_GLOBAL_FUNC2(if_indextoname, char*(unsigned int, char *));
 
+static void run_client_callback_once(const char *interface_name,
+                                     std::unordered_map<std::string, struct relay_config> *vlans) {
+  EXPECT_GLOBAL_CALL(recvfrom, recvfrom(_, _, _, _, _, _)).Times(2)
+                    .WillOnce(Invoke([](int, void *buffer, size_t, int, struct sockaddr *, socklen_t *) {
+                      memcpy(buffer, callback_client_raw_solicit, sizeof(callback_client_raw_solicit));
+                      return static_cast<ssize_t>(sizeof(callback_client_raw_solicit));
+                    }))
+                    .WillOnce(Return(0));
+  EXPECT_GLOBAL_CALL(if_indextoname, if_indextoname(_, _)).Times(1)
+                    .WillOnce(Invoke([interface_name](unsigned int, char *name) -> char * {
+                      strncpy(name, interface_name, IF_NAMESIZE);
+                      name[IF_NAMESIZE - 1] = '\0';
+                      return name;
+                    }));
+  client_callback(-1, 0, vlans);
+}
+
+TEST(relay, client_callback_portchannel_member) {
+  std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+  std::string vlan1000 = "Vlan1000";
+  std::string vlan2000 = "Vlan2000";
+  initialize_counter(state_db, vlan1000);
+
+  struct sockaddr_in6 server{};
+  inet_pton(AF_INET6, "fc02:2000::1", &server.sin6_addr);
+  server.sin6_family = AF_INET6;
+  server.sin6_port = htons(RELAY_PORT);
+
+  struct relay_config portchannel_config{};
+  portchannel_config.is_option_79 = true;
+  portchannel_config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x01;
+  portchannel_config.interface = vlan1000;
+  portchannel_config.state_db = state_db;
+  portchannel_config.gua_sock = 100;
+  portchannel_config.servers_sock.push_back(server);
+
+  struct relay_config direct_config = portchannel_config;
+  direct_config.interface = vlan2000;
+  direct_config.gua_sock = 200;
+
+  std::unordered_map<std::string, struct relay_config> vlans;
+  vlans[vlan1000] = portchannel_config;
+  vlans[vlan2000] = direct_config;
+  vlan_map.clear();
+  physical_interfaces.clear();
+  portchannel_map.clear();
+  vlan_map["PortChannel1001"] = vlan1000;
+  vlan_map["Ethernet2"] = vlan2000;
+  physical_interfaces.insert("Ethernet1");
+  physical_interfaces.insert("Ethernet2");
+  physical_interfaces.insert("Ethernet3");
+  portchannel_map["Ethernet1"] = "PortChannel1001";
+  portchannel_map["Ethernet2"] = "PortChannel1001";
+  portchannel_map["Ethernet3"] = "PortChannel1002";
+
+  dual_tor_sock = false;
+  sendUdpCount = 0;
+  run_client_callback_once("Ethernet1", &vlans);
+  EXPECT_EQ(sendUdpCount, 1);
+  EXPECT_EQ(last_used_sock, 100);
+  auto solicit = state_db->hget("DHCPv6_COUNTER_TABLE|Vlan1000", "Solicit");
+  auto relay_forward = state_db->hget("DHCPv6_COUNTER_TABLE|Vlan1000", "Relay-Forward");
+  EXPECT_NE(solicit, nullptr);
+  EXPECT_NE(relay_forward, nullptr);
+  if (solicit != nullptr) {
+    EXPECT_EQ(*solicit, "1");
+  }
+  if (relay_forward != nullptr) {
+    EXPECT_EQ(*relay_forward, "1");
+  }
+
+  run_client_callback_once("PortChannel1001", &vlans);
+  EXPECT_EQ(sendUdpCount, 1);
+  solicit = state_db->hget("DHCPv6_COUNTER_TABLE|Vlan1000", "Solicit");
+  relay_forward = state_db->hget("DHCPv6_COUNTER_TABLE|Vlan1000", "Relay-Forward");
+  EXPECT_NE(solicit, nullptr);
+  EXPECT_NE(relay_forward, nullptr);
+  if (solicit != nullptr) {
+    EXPECT_EQ(*solicit, "1");
+  }
+  if (relay_forward != nullptr) {
+    EXPECT_EQ(*relay_forward, "1");
+  }
+
+  initialize_counter(state_db, vlan2000);
+  sendUdpCount = 0;
+  run_client_callback_once("Ethernet2", &vlans);
+  EXPECT_EQ(sendUdpCount, 1);
+  EXPECT_EQ(last_used_sock, 200);
+
+  sendUdpCount = 0;
+  run_client_callback_once("Ethernet3", &vlans);
+  EXPECT_EQ(sendUdpCount, 0);
+
+  clear_counter(state_db);
+  vlan_map.clear();
+  physical_interfaces.clear();
+  portchannel_map.clear();
+  sendUdpCount = 0;
+}
+
 TEST(relay, client_callback) {
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   std::shared_ptr<swss::Table> mux_table = std::make_shared<swss::Table> (
@@ -811,6 +973,9 @@ TEST(relay, client_callback) {
 
   char ptr[20] = "vlan";
   vlans[vlan1000] = config;
+  vlan_map.clear();
+  physical_interfaces.clear();
+  portchannel_map.clear();
   vlan_map["Ethernet1"] = vlan1000;
   vlan_map["Ethernet2"] = vlan2000;
 
@@ -844,6 +1009,9 @@ TEST(relay, client_callback) {
   
   // normal msg but interface mapping missing
   ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
+  vlan_map.clear();
+  physical_interfaces.clear();
+  portchannel_map.clear();
 }
 
 TEST(relay, shutdown_relay) {

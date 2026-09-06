@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <unistd.h>
+#include <unordered_set>
 #include <event.h>
 #include <sstream>
 #include <event2/event.h>
@@ -69,6 +70,12 @@ std::map<int, std::string> counterMap = {
 
 /* interface to vlan mapping */
 std::unordered_map<std::string, std::string> vlan_map;
+
+/* physical interfaces available in CONFIG_DB at startup */
+std::unordered_set<std::string> physical_interfaces;
+
+/* physical interface to PortChannel mapping at startup */
+std::unordered_map<std::string, std::string> portchannel_map;
 
 /* ipv6 address to vlan name mapping */
 std::unordered_map<std::string, std::string> addr_vlan_map;
@@ -843,6 +850,34 @@ void relay_relay_forw(const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, re
 }
 
 /**
+ * @code                initialize_physical_interface_mappings(std::shared_ptr<swss::DBConnector> cfgdb);
+ *
+ * @brief               snapshot physical interfaces and PortChannel membership
+ *
+ * @param cfgdb         config db connection
+ *
+ * @return              none
+ */
+void initialize_physical_interface_mappings(std::shared_ptr<swss::DBConnector> cfgdb) {
+    auto port_keys = cfgdb->keys("PORT|*");
+    for (const auto &key : port_keys) {
+        auto found = key.find_last_of('|');
+        physical_interfaces.insert(key.substr(found + 1));
+    }
+
+    auto member_keys = cfgdb->keys("PORTCHANNEL_MEMBER|*");
+    for (const auto &key : member_keys) {
+        auto first = key.find_first_of('|');
+        auto last = key.find_last_of('|');
+        auto portchannel = key.substr(first + 1, last - first - 1);
+        auto member = key.substr(last + 1);
+        if (physical_interfaces.find(member) != physical_interfaces.end()) {
+            portchannel_map[member] = portchannel;
+        }
+    }
+}
+
+/**
  * @code                update_vlan_mapping(std::string vlan, std::shared_ptr<swss::DBConnector> cfgdb);
  *
  * @brief               build vlan member interface to vlan mapping table 
@@ -895,9 +930,20 @@ void client_callback(evutil_socket_t fd, short event, void *arg) {
         }
 
         std::string intf(interfaceName);
+        auto physical_interface = physical_interfaces.find(intf);
+        if (physical_interface == physical_interfaces.end() && intf.rfind("PortChannel", 0) == 0) {
+            continue;
+        }
+
         // For Vlans that lla is not ready, they wouldn't be added into vlan_map, hence it would be blocked here, no need to 
         // add is_lla_ready flag check in this callback func
         auto vlan = vlan_map.find(intf);
+        if (vlan == vlan_map.end() && physical_interface != physical_interfaces.end()) {
+            auto portchannel = portchannel_map.find(intf);
+            if (portchannel != portchannel_map.end()) {
+                vlan = vlan_map.find(portchannel->second);
+            }
+        }
         if (vlan == vlan_map.end()) {
             if (intf.find(CLIENT_IF_PREFIX) != std::string::npos) {
                 syslog(LOG_WARNING, "Invalid input interface %s\n", interfaceName);
@@ -1249,6 +1295,8 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
     std::shared_ptr<swss::Table> mStateDbMuxTablePtr = std::make_shared<swss::Table> (
         state_db.get(), "HW_MUX_CABLE_TABLE"
     );
+
+    initialize_physical_interface_mappings(config_db);
 
     auto filter = sock_open(&ether_relay_fprog);
     if (filter != -1) {
