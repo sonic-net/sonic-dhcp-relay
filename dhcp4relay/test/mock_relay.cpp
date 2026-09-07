@@ -312,9 +312,15 @@ TEST(prepareConfig, prepare_vrf_sockets) {
 
 TEST(prepareConfig, update_vlan_mapping) {
     swss::Table vlan_member_table(config_db.get(), "VLAN_MEMBER");
+    swss::Table portchannel_member_table(config_db.get(), "PORTCHANNEL_MEMBER");
     swss::Table vlan_interface_table(config_db.get(), "VLAN_INTERFACE");
+    vlan_map.clear();
+    portchannel_map.clear();
 
     std::string key = "Vlan200|Ethernet8";
+    std::string portchannel_key = "Vlan200|PortChannel1005";
+    std::string member_key = "PortChannel1005|Ethernet12";
+    std::string unrelated_member_key = "PortChannel1006|Ethernet16";
     std::vector<std::pair<std::string, std::string>> values = {
             {"tagging_mode", "untagged"},
     };
@@ -325,19 +331,49 @@ TEST(prepareConfig, update_vlan_mapping) {
     };
         
     vlan_member_table.set(key, values);
+    vlan_member_table.set(portchannel_key, values);
+    portchannel_member_table.set(member_key, values);
+    portchannel_member_table.set(unrelated_member_key, values);
     vlan_interface_table.set(vlan_key, vlan_values);
     
     // add case 
     update_vlan_mapping(vlan_key, true);
     
-    EXPECT_EQ(vlan_map["Ethernet8"], vlan_key);
-    EXPECT_EQ(vlan_vrf_map[vlan_key], "VrfRed");
-    
+    auto direct_vlan = vlan_map.find("Ethernet8");
+    ASSERT_NE(direct_vlan, vlan_map.end());
+    EXPECT_EQ(direct_vlan->second, vlan_key);
+    auto portchannel_vlan = vlan_map.find("PortChannel1005");
+    ASSERT_NE(portchannel_vlan, vlan_map.end());
+    EXPECT_EQ(portchannel_vlan->second, vlan_key);
+    auto member = portchannel_map.find("Ethernet12");
+    ASSERT_NE(member, portchannel_map.end());
+    EXPECT_EQ(member->second, "PortChannel1005");
+    EXPECT_EQ(portchannel_map.find("Ethernet16"), portchannel_map.end());
+    auto vlan_vrf = vlan_vrf_map.find(vlan_key);
+    ASSERT_NE(vlan_vrf, vlan_vrf_map.end());
+    EXPECT_EQ(vlan_vrf->second, "VrfRed");
+    EXPECT_EQ(get_vlan_from_interface("Ethernet8"), vlan_key);
+    EXPECT_EQ(get_vlan_from_interface("Ethernet12"), vlan_key);
+
+    vlan_map["Ethernet12"] = "Vlan300";
+    EXPECT_EQ(get_vlan_from_interface("Ethernet12"), "Vlan300");
+    vlan_map.erase("Ethernet12");
+
     //delete case
     update_vlan_mapping(vlan_key, false);
     
     EXPECT_EQ(vlan_map.find("Ethernet8"), vlan_map.end());
+    EXPECT_EQ(vlan_map.find("PortChannel1005"), vlan_map.end());
+    EXPECT_EQ(portchannel_map.find("Ethernet12"), portchannel_map.end());
     EXPECT_EQ(vlan_vrf_map.find(vlan_key), vlan_vrf_map.end());
+
+    vlan_member_table.del(key);
+    vlan_member_table.del(portchannel_key);
+    portchannel_member_table.del(member_key);
+    portchannel_member_table.del(unrelated_member_key);
+    vlan_interface_table.del(vlan_key);
+    vlan_map.clear();
+    portchannel_map.clear();
 }
 
 TEST(relayConfig, handle_vlan_events) {

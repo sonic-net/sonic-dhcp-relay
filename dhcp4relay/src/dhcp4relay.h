@@ -316,6 +316,17 @@ void shutdown_relay();
 void update_vlan_mapping(std::string vlan, bool is_add);
 
 /**
+ * @code                get_vlan_from_interface(const std::string &interface);
+ *
+ * @brief               resolve a packet interface directly to its VLAN or through its parent PortChannel
+ *
+ * @param interface     packet interface name
+ *
+ * @return              VLAN name, or an empty string when the interface is not under a relayed VLAN
+ */
+std::string get_vlan_from_interface(const std::string &interface);
+
+/**
  * @code                pkt_in_callback(evutil_socket_t fd, short event, void *arg);
  *
  * @brief               callback for libevent that is called everytime data is received at the filter socket

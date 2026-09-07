@@ -65,6 +65,9 @@ const struct sock_fprog ether_relay_fprog = {
 /* interface to vlan mapping */
 std::unordered_map<std::string, std::string> vlan_map;
 
+/* physical interface to PortChannel mapping */
+std::unordered_map<std::string, std::string> portchannel_map;
+
 /* VRF sock map is created to avoid multiple sockets for same VRF
    We can expect multiple servers on same VRF, we no need to open VRF sockets
    for each VRF instead we can make use of existing VRF socket opened.
@@ -966,14 +969,57 @@ void update_vlan_mapping(std::string vlan, bool is_add) {
     std::vector<std::string> keys;
     swss::Table vlan_member_table(config_db.get(), "VLAN_MEMBER");
     vlan_member_table.getKeys(keys);
+    auto vlan_prefix = vlan + "|";
 #else
     auto match_pattern = std::string("VLAN_MEMBER|") + vlan + std::string("|*");
     auto keys = config_db->keys(match_pattern);
 #endif
     for (auto &itr : keys) {
+#ifdef UNIT_TEST
+        if (itr.rfind(vlan_prefix, 0) != 0) {
+            continue;
+        }
+#endif
         auto found = itr.find_last_of('|');
         auto interface = itr.substr(found + 1);
         update_interface_vlan_mapping(interface, vlan, is_add);
+
+        if (interface.rfind(PORTCHANNEL_PREFIX, 0) != 0) {
+            continue;
+        }
+
+        if (!is_add) {
+            for (auto member = portchannel_map.begin(); member != portchannel_map.end(); ) {
+                if (member->second == interface) {
+                    member = portchannel_map.erase(member);
+                } else {
+                    ++member;
+                }
+            }
+            continue;
+        }
+
+#ifdef UNIT_TEST
+        std::vector<std::string> member_keys;
+        swss::Table portchannel_member_table(config_db.get(), "PORTCHANNEL_MEMBER");
+        portchannel_member_table.getKeys(member_keys);
+        auto member_prefix = interface + "|";
+#else
+        auto member_pattern = std::string("PORTCHANNEL_MEMBER|") + interface + std::string("|*");
+        auto member_keys = config_db->keys(member_pattern);
+#endif
+        for (auto &member_key : member_keys) {
+#ifdef UNIT_TEST
+            if (member_key.rfind(member_prefix, 0) != 0) {
+                continue;
+            }
+#endif
+            auto member_found = member_key.find_last_of('|');
+            auto member = member_key.substr(member_found + 1);
+            portchannel_map[member] = interface;
+            SWSS_LOG_INFO("[DHCPV4_RELAY] Add <%s, %s> into interface PortChannel map",
+                          member.c_str(), interface.c_str());
+        }
     }
 
     /* get VRF attached to the vlan from VLAN_INTERFACE table */
@@ -990,6 +1036,17 @@ void update_vlan_mapping(std::string vlan, bool is_add) {
     } else {
         vlan_vrf_map.erase(vlan);
     }
+}
+
+std::string get_vlan_from_interface(const std::string &interface) {
+    auto vlan = vlan_map.find(interface);
+    if (vlan != vlan_map.end()) {
+        return vlan->second;
+    }
+
+    auto parent = portchannel_map.find(interface);
+    return parent == portchannel_map.end()
+        ? "" : get_vlan_from_interface(parent->second);
 }
 
 uint16_t ipv4_checksum_cal(const uint8_t* ipv4_header, size_t header_len) {
@@ -1088,16 +1145,14 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
         std::string vlan_str;
         if (vlan_id == 0) {
             /* vlan_id can be 0 when we receive packet from the server */
-            auto vlan = vlan_map.find(intf);
-            if (vlan == vlan_map.end()) {
+            vlan_str = get_vlan_from_interface(intf);
+            if (vlan_str.empty()) {
                 if (intf.find(CLIENT_IF_PREFIX) != std::string::npos) {
                     SWSS_LOG_WARN("[DHCPV4_RELAY] Invalid input interface %s", interface_name);
                 } else if ((m_config.is_SmartSwitch) && (intf.rfind("dpu", 0) == 0) && !m_config.midplane_bridge.empty()) {
                     // if its SmartSwitch, we need to check for bridge_midplane interface
                     vlan_str = m_config.midplane_bridge;
                 }
-            } else {
-                vlan_str = vlan->second;
             }
         } else {
             vlan_str = "Vlan" + std::to_string(vlan_id);
