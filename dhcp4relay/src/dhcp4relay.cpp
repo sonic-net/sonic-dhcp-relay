@@ -667,6 +667,8 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
         const bool is_bootp =
             dhcp_pkt->getDhcpHeader()->magicNumber != DHCP_MAGIC_NUMBER;
 
+        /* Non-BOOTP packets can use the VLAN IP or the Loopback0 IP on
+         * dual-ToR; BOOTP always uses the VLAN IP. */
         if (!is_bootp && config.source_interface.length() > 0) {
             /* find the IP of the interface and update to giaddr */
             dhcp_pkt->getDhcpHeader()->gatewayIpAddress =
@@ -867,16 +869,15 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
     const bool is_bootp =
         dhcp_pkt->getDhcpHeader()->magicNumber != DHCP_MAGIC_NUMBER;
 
-    if (getifaddrs(&ifa) == -1) {
-        SWSS_LOG_WARN("[DHCPV4_RELAY] getifaddrs: Unable to get network interfaces, error: %s", strerror(errno));
-        return;
-    }
-
     /* Return if giaddr is empty */
     if (giaddr == 0) {
         SWSS_LOG_ERROR("[DHCPV4_RELAY] Message received with empty giaddr from server %s",
                src_ip.c_str());
-        freeifaddrs(ifa);
+        return;
+    }
+
+    if (getifaddrs(&ifa) == -1) {
+        SWSS_LOG_WARN("[DHCPV4_RELAY] getifaddrs: Unable to get network interfaces, error: %s", strerror(errno));
         return;
     }
 

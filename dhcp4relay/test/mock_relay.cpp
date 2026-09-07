@@ -1300,6 +1300,18 @@ TEST(DHCPRelayTest, to_client) {
     to_client(&dhcpLayer, &vlans, "172.22.178.234");
 }
 
+TEST(DHCPRelayTest, to_client_zero_giaddr_skips_interface_lookup) {
+    pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
+    pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_OFFER, clientMac);
+    dhcpLayer.getDhcpHeader()->gatewayIpAddress = 0;
+    std::unordered_map<std::string, relay_config> vlans;
+
+    EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_)).Times(0);
+    EXPECT_GLOBAL_CALL(freeifaddrs, freeifaddrs(_)).Times(0);
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).Times(0);
+    to_client(&dhcpLayer, &vlans, "172.22.178.234");
+}
+
 TEST(DHCPRelayTest, to_client_bootp_skips_vss_validation) {
     pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
     pcpp::DhcpLayer bootpLayer(pcpp::DHCP_OFFER, clientMac);
