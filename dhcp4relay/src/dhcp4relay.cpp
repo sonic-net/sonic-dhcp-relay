@@ -925,7 +925,7 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
 /**
  * @code                update_interface_vlan_mapping(std::string interface, std::string vlan, bool is_add);
  *
- * @brief               update interface to vlan mapping and DHCP counter table
+ * @brief               update interface to VLAN mapping and initialize counters on add
  *
  * @param interface     interface name string
  * @param vlan          vlan name string
@@ -939,9 +939,12 @@ void update_interface_vlan_mapping(std::string interface, std::string vlan, bool
         dhcp_cntr_table.initialize_interface(vlan);
         SWSS_LOG_INFO("[DHCPV4_RELAY] Add <%s, %s> into interface vlan map", interface.c_str(), vlan.c_str());
     } else {
-        vlan_map.erase(interface);
-        dhcp_cntr_table.remove_interface(vlan);
-        SWSS_LOG_INFO("[DHCPV4_RELAY] Remove <%s, %s> from interface vlan map", interface.c_str(), vlan.c_str());
+        auto current = vlan_map.find(interface);
+        if (current != vlan_map.end() && current->second == vlan) {
+            vlan_map.erase(current);
+            SWSS_LOG_INFO("[DHCPV4_RELAY] Remove <%s, %s> from interface vlan map",
+                          interface.c_str(), vlan.c_str());
+        }
     }
 }
 
@@ -964,9 +967,12 @@ static void update_interface_portchannel_mapping(std::string interface, std::str
         return;
     }
 
-    portchannel_map.erase(interface);
-    SWSS_LOG_INFO("[DHCPV4_RELAY] Remove <%s, %s> from interface PortChannel map",
-                  interface.c_str(), portchannel.c_str());
+    auto current = portchannel_map.find(interface);
+    if (current != portchannel_map.end() && current->second == portchannel) {
+        portchannel_map.erase(current);
+        SWSS_LOG_INFO("[DHCPV4_RELAY] Remove <%s, %s> from interface PortChannel map",
+                      interface.c_str(), portchannel.c_str());
+    }
 }
 
 /**
@@ -1022,16 +1028,6 @@ static void update_portchannel_members(std::string portchannel, bool is_add) {
 }
 
 /**
- * @code                update_vlan_mapping(std::string vlan, bool is_add);
- *
- * @brief               build vlan member interface to vlan mapping table
- *
- * @param vlan          vlan name string
- * @param add           add or delete entry
- *
- * @return              none
- */
-/**
  * @brief Updates the VLAN mapping for a given VLAN.
  *
  * This function retrieves all VLAN members for the specified VLAN from the configuration database
@@ -1041,6 +1037,22 @@ static void update_portchannel_members(std::string portchannel, bool is_add) {
  * @param is_add Determines if its ADD or DELETE operation.
  */
 void update_vlan_mapping(std::string vlan, bool is_add) {
+    if (!is_add) {
+        std::vector<std::string> interfaces;
+        for (const auto &mapping : vlan_map) {
+            if (mapping.second == vlan) {
+                interfaces.push_back(mapping.first);
+            }
+        }
+        for (const auto &interface : interfaces) {
+            update_interface_vlan_mapping(interface, vlan, false);
+            update_portchannel_members(interface, false);
+        }
+        dhcp_cntr_table.remove_interface(vlan);
+        vlan_vrf_map.erase(vlan);
+        return;
+    }
+
 #ifdef UNIT_TEST
     std::vector<std::string> keys;
     swss::Table vlan_member_table(config_db.get(), "VLAN_MEMBER");
@@ -1058,23 +1070,19 @@ void update_vlan_mapping(std::string vlan, bool is_add) {
 #endif
         auto found = itr.find_last_of('|');
         auto interface = itr.substr(found + 1);
-        update_interface_vlan_mapping(interface, vlan, is_add);
-        update_portchannel_members(interface, is_add);
+        update_interface_vlan_mapping(interface, vlan, true);
+        update_portchannel_members(interface, true);
     }
 
     /* get VRF attached to the vlan from VLAN_INTERFACE table */
-    if (is_add) {
-        std::string value;
-        std::shared_ptr<swss::Table> vlan_intf_tbl = std::make_shared<swss::Table>(config_db.get(), CFG_VLAN_INTF_TABLE_NAME);
-        vlan_intf_tbl->hget(vlan, VRF_NAME_FIELD, value);
-        if (value.size() <= 0) {
-            /* use default instance as vrf */
-            vlan_vrf_map[vlan] = "default";
-        } else {
-            vlan_vrf_map[vlan] = value;
-        }
+    std::string value;
+    std::shared_ptr<swss::Table> vlan_intf_tbl = std::make_shared<swss::Table>(config_db.get(), CFG_VLAN_INTF_TABLE_NAME);
+    vlan_intf_tbl->hget(vlan, VRF_NAME_FIELD, value);
+    if (value.size() <= 0) {
+        /* use default instance as vrf */
+        vlan_vrf_map[vlan] = "default";
     } else {
-        vlan_vrf_map.erase(vlan);
+        vlan_vrf_map[vlan] = value;
     }
 }
 
@@ -1544,13 +1552,22 @@ static void apply_config_event(const event_config &received_event,
                        return;
                    }
 
+                   auto current = vlan_map.find(msg->interface);
+                   bool current_mapping = current != vlan_map.end() && current->second == msg->vlan;
+                   if (!msg->is_add && !current_mapping) {
+                       delete msg;
+                       return;
+                   }
+
                    if ((*vlans)[msg->vlan].client_sock > 0) {
                        close((*vlans)[msg->vlan].client_sock);
                        (*vlans)[msg->vlan].client_sock = 0;
                    }
 
                    update_interface_vlan_mapping(msg->interface, msg->vlan, msg->is_add);
-                   update_portchannel_members(msg->interface, msg->is_add);
+                   if (msg->is_add || current_mapping) {
+                       update_portchannel_members(msg->interface, msg->is_add);
+                   }
                    /* Do not early-return on socket failure: msg is freed
                       immediately below; no code follows between here and delete. */
                    if (prepare_vlan_sockets((*vlans)[msg->vlan]) == -1) {
