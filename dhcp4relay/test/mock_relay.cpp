@@ -320,6 +320,7 @@ TEST(prepareConfig, update_vlan_mapping) {
     std::string key = "Vlan200|Ethernet8";
     std::string portchannel_key = "Vlan200|PortChannel1005";
     std::string member_key = "PortChannel1005|Ethernet12";
+    std::string invalid_member_key = "PortChannel1005|";
     std::string unrelated_member_key = "PortChannel1006|Ethernet16";
     std::vector<std::pair<std::string, std::string>> values = {
             {"tagging_mode", "untagged"},
@@ -333,6 +334,7 @@ TEST(prepareConfig, update_vlan_mapping) {
     vlan_member_table.set(key, values);
     vlan_member_table.set(portchannel_key, values);
     portchannel_member_table.set(member_key, values);
+    portchannel_member_table.set(invalid_member_key, values);
     portchannel_member_table.set(unrelated_member_key, values);
     vlan_interface_table.set(vlan_key, vlan_values);
     
@@ -348,6 +350,7 @@ TEST(prepareConfig, update_vlan_mapping) {
     auto member = portchannel_map.find("Ethernet12");
     ASSERT_NE(member, portchannel_map.end());
     EXPECT_EQ(member->second, "PortChannel1005");
+    EXPECT_EQ(portchannel_map.find(""), portchannel_map.end());
     EXPECT_EQ(portchannel_map.find("Ethernet16"), portchannel_map.end());
     auto vlan_vrf = vlan_vrf_map.find(vlan_key);
     ASSERT_NE(vlan_vrf, vlan_vrf_map.end());
@@ -370,6 +373,7 @@ TEST(prepareConfig, update_vlan_mapping) {
     vlan_member_table.del(key);
     vlan_member_table.del(portchannel_key);
     portchannel_member_table.del(member_key);
+    portchannel_member_table.del(invalid_member_key);
     portchannel_member_table.del(unrelated_member_key);
     vlan_interface_table.del(vlan_key);
     vlan_map.clear();
@@ -536,6 +540,10 @@ TEST(relayConfig, handle_interface_events_unknown_vlan) {
 
 TEST(relayConfig, handle_vlan_member_events) {
     struct ifaddrs *mock_ifaddrs = CreateMockIfaddrs("192.168.1.1", "255.255.255.0", "Vlan100", "192.168.1.2", "Ethernet4");
+    swss::Table portchannel_member_table(config_db.get(), "PORTCHANNEL_MEMBER");
+    std::vector<std::pair<std::string, std::string>> values = {
+            {"NULL", "NULL"},
+    };
     int pipe_fds[2];
     EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_))
         .WillRepeatedly(DoAll(testing::SetArgPointee<0>(mock_ifaddrs), Return(0)));
@@ -549,11 +557,14 @@ TEST(relayConfig, handle_vlan_member_events) {
     vlans["Vlan100"].vlan = "Vlan100";
     vlans["Vlan100"].client_sock = -1;
     vlans["Vlan100"].is_add = true;
+    vlan_map.clear();
+    portchannel_map.clear();
+    portchannel_member_table.set("PortChannel1005|Ethernet12", values);
 
     vlan_member_config *vlan_config = new vlan_member_config();
 
     vlan_config->is_add = true;
-    vlan_config->interface = "Ethernet12";
+    vlan_config->interface = "PortChannel1005";
     vlan_config->vlan = "Vlan100";
 
     event_config event;
@@ -564,14 +575,15 @@ TEST(relayConfig, handle_vlan_member_events) {
 
     config_event_callback(pipe_fds[0], 0, &vlans);
 
-    EXPECT_EQ(vlan_map["Ethernet12"], "Vlan100");
+    EXPECT_EQ(vlan_map["PortChannel1005"], "Vlan100");
+    EXPECT_EQ(portchannel_map["Ethernet12"], "PortChannel1005");
     EXPECT_GE(vlans["Vlan100"].client_sock, 0);
 
     vlan_member_config *vlan_config_del = new vlan_member_config();
 
     vlans["Vlan100"].client_sock = -1;
     vlan_config_del->is_add = false ;
-    vlan_config_del->interface = "Ethernet12";
+    vlan_config_del->interface = "PortChannel1005";
     vlan_config_del->vlan = "Vlan100";
 
     event.msg = static_cast<void *>(vlan_config_del);
@@ -580,12 +592,54 @@ TEST(relayConfig, handle_vlan_member_events) {
 
     config_event_callback(pipe_fds[0], 0, &vlans);
 
-    EXPECT_NE(vlan_map["Ethernet12"], "Vlan100");
+    EXPECT_EQ(vlan_map.find("PortChannel1005"), vlan_map.end());
+    EXPECT_EQ(portchannel_map.find("Ethernet12"), portchannel_map.end());
     EXPECT_GE(vlans["Vlan100"].client_sock, 0);
 
+    portchannel_member_table.del("PortChannel1005|Ethernet12");
+    vlan_map.clear();
+    portchannel_map.clear();
     close(pipe_fds[0]);
     close(pipe_fds[1]);
     FreeMockIfaddrs(mock_ifaddrs);
+}
+
+TEST(relayConfig, handle_portchannel_member_events) {
+    int pipe_fds[2];
+    EXPECT_GLOBAL_CALL(write, write(_, _, _))
+                     .Times(AtLeast(1))
+                     .WillRepeatedly(Invoke(RealWrite));
+    ASSERT_NE(pipe(pipe_fds), -1);
+
+    std::unordered_map<std::string, relay_config> vlans;
+    vlan_map["PortChannel1005"] = "Vlan100";
+    portchannel_map.clear();
+
+    event_config event;
+    event.type = DHCPv4_RELAY_PORTCHANNEL_MEMBER_UPDATE;
+    auto process_member = [&](const std::string &portchannel, bool is_add) {
+        portchannel_member_config *member = new portchannel_member_config();
+        member->is_add = is_add;
+        member->interface = "Ethernet12";
+        member->portchannel = portchannel;
+        event.msg = static_cast<void *>(member);
+        EXPECT_NE(write(pipe_fds[1], &event, sizeof(event)), -1);
+        config_event_callback(pipe_fds[0], 0, &vlans);
+    };
+
+    process_member("PortChannel1004", true);
+    EXPECT_EQ(portchannel_map.find("Ethernet12"), portchannel_map.end());
+
+    process_member("PortChannel1005", true);
+    EXPECT_EQ(portchannel_map["Ethernet12"], "PortChannel1005");
+
+    process_member("PortChannel1005", false);
+    EXPECT_EQ(portchannel_map.find("Ethernet12"), portchannel_map.end());
+
+    vlan_map.erase("PortChannel1005");
+    portchannel_map.clear();
+    close(pipe_fds[0]);
+    close(pipe_fds[1]);
 }
 
 TEST(relayConfig, handle_vlan_interface_events) {
@@ -766,6 +820,42 @@ TEST(DHCPMgrTest, initialize_config_listener) {
     dhcpMgr.stop_db_updates();
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     EXPECT_EQ(vlans_copy[vlan].max_hop_count, 16);
+}
+
+TEST(DHCPMgrTest, process_portchannel_member_events) {
+    DHCPMgr dhcpMgr;
+    ASSERT_NE(pipe(config_pipe), -1);
+    EXPECT_GLOBAL_CALL(write, write(_, _, _)).Times(2).WillRepeatedly(Invoke(RealWrite));
+
+    std::deque<swss::KeyOpFieldsValuesTuple> entries;
+    entries.emplace_back("PortChannel1005|Ethernet12", "SET",
+                         std::vector<swss::FieldValueTuple>{});
+    dhcpMgr.process_portchannel_member_notification(entries);
+
+    event_config event;
+    ASSERT_EQ(read(config_pipe[0], &event, sizeof(event)), static_cast<ssize_t>(sizeof(event)));
+    EXPECT_EQ(event.type, DHCPv4_RELAY_PORTCHANNEL_MEMBER_UPDATE);
+    portchannel_member_config *msg = static_cast<portchannel_member_config *>(event.msg);
+    ASSERT_NE(msg, nullptr);
+    EXPECT_EQ(msg->portchannel, "PortChannel1005");
+    EXPECT_EQ(msg->interface, "Ethernet12");
+    EXPECT_TRUE(msg->is_add);
+    delete msg;
+
+    entries.clear();
+    entries.emplace_back("PortChannel1005|Ethernet12", "DEL",
+                         std::vector<swss::FieldValueTuple>{});
+    dhcpMgr.process_portchannel_member_notification(entries);
+    ASSERT_EQ(read(config_pipe[0], &event, sizeof(event)), static_cast<ssize_t>(sizeof(event)));
+    msg = static_cast<portchannel_member_config *>(event.msg);
+    ASSERT_NE(msg, nullptr);
+    EXPECT_FALSE(msg->is_add);
+    delete msg;
+
+    close(config_pipe[0]);
+    close(config_pipe[1]);
+    config_pipe[0] = -1;
+    config_pipe[1] = -1;
 }
 
 TEST(DHCPMgrTest, process_vlan_events) {

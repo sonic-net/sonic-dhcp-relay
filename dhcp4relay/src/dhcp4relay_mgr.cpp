@@ -34,7 +34,8 @@ void DHCPMgr::initialize_config_listener() {
  * @brief Handles SWSS (Sonic Warehouse State Service) notifications for DHCPv4 relay manager.
  *
  * This method listens for configuration changes in various tables within the CONFIG_DB,
- * such as DHCPV4_RELAY, INTERFACE, LOOPBACK_INTERFACE, PORTCHANNEL_INTERFACE, and DEVICE_METADATA.
+ * such as DHCPV4_RELAY, INTERFACE, LOOPBACK_INTERFACE, PORTCHANNEL_INTERFACE,
+ * VLAN_MEMBER, PORTCHANNEL_MEMBER, and DEVICE_METADATA.
  * It uses a select loop to wait for notifications from these tables and processes them accordingly.
  *
  * The function continues to run until the `stop_thread` flag is set. For each notification,
@@ -44,6 +45,7 @@ void DHCPMgr::initialize_config_listener() {
  * Tables monitored:
  * - DHCPV4_RELAY: Triggers relay notification processing.
  * - INTERFACE, LOOPBACK_INTERFACE, PORTCHANNEL_INTERFACE: Triggers interface notification processing.
+ * - VLAN_MEMBER, PORTCHANNEL_MEMBER: Triggers client-interface membership processing.
  * - DEVICE_METADATA: Triggers device metadata notification processing.
  *
  * @note This function is intended to be run in a dedicated thread.
@@ -57,6 +59,7 @@ void DHCPMgr::handle_swss_notification() {
     swss::SubscriberStateTable config_db_portchannel_table(config_db_ptr.get(), "PORTCHANNEL_INTERFACE");
     swss::SubscriberStateTable config_db_device_metadata_table(config_db_ptr.get(), "DEVICE_METADATA");
     swss::SubscriberStateTable config_db_vlan_member_table(config_db_ptr.get(), "VLAN_MEMBER");
+    swss::SubscriberStateTable config_db_portchannel_member_table(config_db_ptr.get(), "PORTCHANNEL_MEMBER");
     swss::SubscriberStateTable config_db_feature_table(config_db_ptr.get(), "FEATURE");
     swss::SubscriberStateTable config_db_vlan_table(config_db_ptr.get(), "VLAN");
     config_db_dhcp_server_ipv4_ptr = std::make_shared<swss::SubscriberStateTable>(config_db_ptr.get(), "DHCP_SERVER_IPV4");
@@ -73,6 +76,7 @@ void DHCPMgr::handle_swss_notification() {
     swss_select.addSelectable(&config_db_portchannel_table);
     swss_select.addSelectable(&config_db_device_metadata_table);
     swss_select.addSelectable(&config_db_vlan_member_table);
+    swss_select.addSelectable(&config_db_portchannel_member_table);
     swss_select.addSelectable(&config_db_feature_table);
     swss_select.addSelectable(&config_db_vlan_table);
     swss_select.addSelectable(config_db_dhcp_server_ipv4_ptr.get());
@@ -168,6 +172,9 @@ void DHCPMgr::handle_swss_notification() {
         } else if (selectable == static_cast<swss::Selectable *>(&config_db_vlan_member_table)) {
             config_db_vlan_member_table.pops(entries);
             process_vlan_member_notification(entries);
+        } else if (selectable == static_cast<swss::Selectable *>(&config_db_portchannel_member_table)) {
+            config_db_portchannel_member_table.pops(entries);
+            process_portchannel_member_notification(entries);
         } else if (selectable == static_cast<swss::Selectable *>(&state_db_interface_table)) {
             state_db_interface_table.pops(entries);
             process_vlan_interface_notification(entries);
@@ -667,6 +674,35 @@ void DHCPMgr::process_vlan_member_notification(std::deque<swss::KeyOpFieldsValue
             delete msg;
         }
      }
+}
+
+void DHCPMgr::process_portchannel_member_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries) {
+    for (auto &entry : entries) {
+        std::string key = kfvKey(entry);
+        std::string operation = kfvOp(entry);
+        size_t pos = key.find('|');
+
+        portchannel_member_config *msg = nullptr;
+        try {
+            msg = new portchannel_member_config();
+        } catch (const std::bad_alloc &e) {
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
+            return;
+        }
+
+        msg->portchannel = key.substr(0, pos);
+        msg->interface = key.substr(pos + 1);
+        msg->is_add = operation == "SET";
+
+        event_config event;
+        event.type = DHCPv4_RELAY_PORTCHANNEL_MEMBER_UPDATE;
+        event.msg = static_cast<void *>(msg);
+        if (write(config_pipe[1], &event, sizeof(event)) == -1) {
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to send PortChannel member update for <%s, %s>",
+                           msg->portchannel.c_str(), msg->interface.c_str());
+            delete msg;
+        }
+    }
 }
 
 void DHCPMgr::process_vlan_interface_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries) {
