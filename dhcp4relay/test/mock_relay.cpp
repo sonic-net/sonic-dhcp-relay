@@ -1413,13 +1413,13 @@ static relay_config make_from_client_giaddr_config(bool use_source_interface) {
     return config;
 }
 
-static void verify_from_client_giaddr(bool is_dhcp, bool use_source_interface,
+static void verify_from_client_giaddr(bool is_bootp, bool use_source_interface,
                                       const char *expected_giaddr) {
     pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
     pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_DISCOVER, clientMac);
     dhcpLayer.getDhcpHeader()->gatewayIpAddress = 0;
     dhcpLayer.getDhcpHeader()->magicNumber =
-        is_dhcp ? DHCP_MAGIC_NUMBER : 0;
+        is_bootp ? 0 : DHCP_MAGIC_NUMBER;
 
     relay_config config = make_from_client_giaddr_config(use_source_interface);
     const uint32_t expected_giaddr_addr = inet_addr(expected_giaddr);
@@ -1437,27 +1437,27 @@ static void verify_from_client_giaddr(bool is_dhcp, bool use_source_interface,
 
     auto agent_option =
         dhcpLayer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
-    if (is_dhcp) {
-        EXPECT_NE(agent_option.getValue(), nullptr);
-    } else {
+    if (is_bootp) {
         EXPECT_EQ(agent_option.getValue(), nullptr);
+    } else {
+        EXPECT_NE(agent_option.getValue(), nullptr);
     }
 }
 
 TEST(DHCPRelayTest, from_client_single_tor_dhcp_uses_vlan_giaddr) {
-    verify_from_client_giaddr(true, false, "192.168.10.10");
-}
-
-TEST(DHCPRelayTest, from_client_single_tor_bootp_uses_vlan_giaddr) {
     verify_from_client_giaddr(false, false, "192.168.10.10");
 }
 
+TEST(DHCPRelayTest, from_client_single_tor_bootp_uses_vlan_giaddr) {
+    verify_from_client_giaddr(true, false, "192.168.10.10");
+}
+
 TEST(DHCPRelayTest, from_client_dual_tor_dhcp_uses_source_interface_giaddr) {
-    verify_from_client_giaddr(true, true, "10.1.0.32");
+    verify_from_client_giaddr(false, true, "10.1.0.32");
 }
 
 TEST(DHCPRelayTest, from_client_dual_tor_bootp_uses_vlan_giaddr) {
-    verify_from_client_giaddr(false, true, "192.168.10.10");
+    verify_from_client_giaddr(true, true, "192.168.10.10");
 }
 
 /* Helper: build a relay-of-relay packet (giaddr already set) with a pre-existing Option 82. */

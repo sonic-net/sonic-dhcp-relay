@@ -664,10 +664,10 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
 
     /* Update giaddr */
     if (!(dhcp_pkt->getDhcpHeader()->gatewayIpAddress)) {
-        const bool is_dhcp =
-            dhcp_pkt->getDhcpHeader()->magicNumber == DHCP_MAGIC_NUMBER;
+        const bool is_bootp =
+            dhcp_pkt->getDhcpHeader()->magicNumber != DHCP_MAGIC_NUMBER;
 
-        if (is_dhcp && config.source_interface.length() > 0) {
+        if (!is_bootp && config.source_interface.length() > 0) {
             /* find the IP of the interface and update to giaddr */
             dhcp_pkt->getDhcpHeader()->gatewayIpAddress =
                 config.src_intf_sel_addr.sin_addr.s_addr;
@@ -682,7 +682,7 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
             dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
             return;
         }
-        if (is_dhcp) {
+        if (!is_bootp) {
             SWSS_LOG_WARN("[DHCPV4_RELAY] encode DHCP relay option");
             if (!encode_relay_option82(dhcp_pkt, &config) && vss_required) {
                 SWSS_LOG_ERROR("[DHCPV4_RELAY] Dropping packet on interface %s:"
@@ -864,6 +864,8 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
     uint32_t broadcast_addr = DHCP_BROADCAST_IPADDR;
     bool pad = false;
     std::unordered_map<std::string, relay_config>::iterator config_itr = vlans->end();
+    const bool is_bootp =
+        dhcp_pkt->getDhcpHeader()->magicNumber != DHCP_MAGIC_NUMBER;
 
     if (getifaddrs(&ifa) == -1) {
         SWSS_LOG_WARN("[DHCPV4_RELAY] getifaddrs: Unable to get network interfaces, error: %s", strerror(errno));
@@ -953,7 +955,7 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
     dhcp_cntr_table.increment_counter(config.vlan, "RX", (int)dhcp_pkt->getMessageType());
     /* TODO: Also check it is matching remote ID*/
 
-    if (is_dhcp &&
+    if (!is_bootp &&
         !validate_vss_reply((const uint8_t *)options_ptr, agent_option_size,
                             config, src_ip)) {
         dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
