@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <iostream>
 #include <signal.h>
 #include <event2/event.h>
@@ -31,7 +32,7 @@ MOCK_GLOBAL_FUNC1(freeifaddrs, void(struct ifaddrs *));
 MOCK_GLOBAL_FUNC3(write, ssize_t(int, const void*, size_t));
 MOCK_GLOBAL_FUNC7(send_udp, bool(int, uint8_t *, struct sockaddr_in, uint32_t, in_addr, bool, bool));
 
-void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config);
+bool encode_relay_option82(pcpp::DhcpLayer *dhcp_pkt, relay_config *config);
 void to_client(pcpp::DhcpLayer* dhcp_pkt, std::unordered_map<std::string, relay_config > *vlans,
                 std::string src_ip);
 void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config);
@@ -842,7 +843,7 @@ TEST(DHCPMgrTest, dhcp_server_ip_deletion) {
     EXPECT_TRUE(vlans_copy.empty());
 }
 
-TEST(DHCPRelayTest, encode_relay_option) {
+TEST(DHCPRelayTest, encode_relay_option82) {
     std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
     pcpp::EthLayer ethLayer(pcpp::MacAddress("00:13:72:25:fa:cd"), pcpp::MacAddress("00:e0:b1:49:39:02"));
 
@@ -874,7 +875,7 @@ TEST(DHCPRelayTest, encode_relay_option) {
     m_config.hostname = "cisco";
     m_config.host_mac_addr = "12:32:54:24:95:36";
 
-    encode_relay_option(&dhcpLayer, &config);
+    EXPECT_TRUE(encode_relay_option82(&dhcpLayer, &config));
 
     auto agent_option = dhcpLayer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
     auto options_ptr = agent_option.getValue();
@@ -923,7 +924,7 @@ TEST(DHCPRelayTest, encode_relay_option) {
     EXPECT_EQ(memcmp(vss_buf, vrf_ptr, 6), 0);
 }
 
-TEST(DHCPRelayTest, encode_relay_option_server_client_same_vrf) {
+TEST(DHCPRelayTest, encode_relay_option82_server_client_same_vrf) {
     std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
     pcpp::EthLayer ethLayer(pcpp::MacAddress("00:13:72:25:fa:cd"), pcpp::MacAddress("00:e0:b1:49:39:02"));
 
@@ -956,7 +957,7 @@ TEST(DHCPRelayTest, encode_relay_option_server_client_same_vrf) {
     m_config.hostname = "cisco";
     m_config.host_mac_addr = "12:32:54:24:95:36";
 
-    encode_relay_option(&dhcpLayer, &config);
+    EXPECT_TRUE(encode_relay_option82(&dhcpLayer, &config));
 
     auto agent_option = dhcpLayer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
     auto options_ptr = agent_option.getValue();
@@ -1001,6 +1002,156 @@ TEST(DHCPRelayTest, encode_relay_option_server_client_same_vrf) {
     EXPECT_EQ((uintptr_t)vrf_ptr, NULL);
 }
 
+static relay_config make_option_overflow_config(bool vss_required) {
+    if (std::find(interface_list.begin(), interface_list.end(), "Ethernet12") ==
+        interface_list.end()) {
+        interface_list.push_back("Ethernet12");
+    }
+    phy_interface_alias_map["Ethernet12"] = "eth12";
+
+    relay_config config = {};
+    config.phy_interface = "Ethernet12";
+    config.vlan = "Vlan10";
+    config.vrf = vss_required ? "Vrf02" : "Vrf01";
+    config.vrf_selection_opt = "enable";
+    config.link_address.sin_addr.s_addr = inet_addr("192.168.10.10");
+    config.link_address_netmask.sin_addr.s_addr = inet_addr("255.255.255.0");
+
+    struct sockaddr_in addr = {0};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = inet_addr("192.168.20.100");
+    config.servers_sock = {addr};
+    config.servers = {"192.168.20.100"};
+
+    vlan_vrf_map["Vlan10"] = "Vrf01";
+    m_config.hostname = "sonic";
+    m_config.host_mac_addr = "12:32:54:24:95:36";
+    m_config.midplane_bridge.clear();
+    m_config.is_dualTor = false;
+    m_config.is_SmartSwitch = false;
+    m_config.deployment_id = 0;
+    feature_dhcp_server_enabled = false;
+    return config;
+}
+
+static void pad_dhcp_packet_for_option_overflow(pcpp::DhcpLayer &dhcp_layer) {
+    uint8_t full_option[255] = {0};
+    uint8_t tail_option[180] = {0};
+
+    for (int index = 0; index < 4; index++) {
+        auto option = dhcp_layer.addOption(
+            pcpp::DhcpOptionBuilder(pcpp::DHCPOPT_VENDOR_ENCAPSULATED_OPTIONS,
+                                    full_option, sizeof(full_option)));
+        ASSERT_FALSE(option.isNull());
+    }
+
+    auto option = dhcp_layer.addOption(
+        pcpp::DhcpOptionBuilder(pcpp::DHCPOPT_VENDOR_ENCAPSULATED_OPTIONS,
+                                tail_option, sizeof(tail_option)));
+    ASSERT_FALSE(option.isNull());
+    ASSERT_LT(dhcp_layer.getHeaderLen(), MAX_DHCP_PKT_SIZE);
+}
+
+static void pad_dhcp_packet_to_header_len(pcpp::DhcpLayer &dhcp_layer,
+                                          size_t target_header_len) {
+    uint8_t option_data[255] = {0};
+    ASSERT_LT(dhcp_layer.getHeaderLen(), target_header_len);
+
+    while (dhcp_layer.getHeaderLen() + sizeof(option_data) +
+               DHCP_OPTION_TLV_HEADER_LEN <=
+           target_header_len) {
+        auto option = dhcp_layer.addOption(
+            pcpp::DhcpOptionBuilder(pcpp::DHCPOPT_VENDOR_ENCAPSULATED_OPTIONS,
+                                    option_data, sizeof(option_data)));
+        ASSERT_FALSE(option.isNull());
+    }
+
+    const size_t remaining = target_header_len - dhcp_layer.getHeaderLen();
+    if (remaining > 0) {
+        ASSERT_GE(remaining, DHCP_OPTION_TLV_HEADER_LEN);
+        const size_t payload_len = remaining - DHCP_OPTION_TLV_HEADER_LEN;
+        ASSERT_LE(payload_len, sizeof(option_data));
+        auto option = dhcp_layer.addOption(
+            pcpp::DhcpOptionBuilder(pcpp::DHCPOPT_VENDOR_ENCAPSULATED_OPTIONS,
+                                    option_data, payload_len));
+        ASSERT_FALSE(option.isNull());
+    }
+    ASSERT_EQ(dhcp_layer.getHeaderLen(), target_header_len);
+}
+
+TEST(DHCPRelayTest, encode_relay_option82_counts_option_header_in_size_check) {
+    pcpp::MacAddress client_mac(std::string("00:0e:86:11:c0:75"));
+    relay_config config = make_option_overflow_config(false);
+
+    pcpp::DhcpLayer probe_layer(pcpp::DHCP_DISCOVER, client_mac);
+    ASSERT_TRUE(encode_relay_option82(&probe_layer, &config));
+    auto relay_option =
+        probe_layer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
+    ASSERT_FALSE(relay_option.isNull());
+    const size_t relay_option_payload_len = relay_option.getDataSize();
+
+    pcpp::DhcpLayer dhcp_layer(pcpp::DHCP_DISCOVER, client_mac);
+    pad_dhcp_packet_to_header_len(
+        dhcp_layer, MAX_DHCP_PKT_SIZE - relay_option_payload_len);
+
+    EXPECT_FALSE(encode_relay_option82(&dhcp_layer, &config));
+    EXPECT_TRUE(
+        dhcp_layer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS).isNull());
+}
+
+TEST(DHCPRelayTest, encode_relay_option82_reports_vss_required_no_space) {
+    pcpp::MacAddress client_mac(std::string("00:0e:86:11:c0:75"));
+    pcpp::DhcpLayer dhcp_layer(pcpp::DHCP_DISCOVER, client_mac);
+    relay_config config = make_option_overflow_config(true);
+    pad_dhcp_packet_for_option_overflow(dhcp_layer);
+
+    EXPECT_FALSE(encode_relay_option82(&dhcp_layer, &config));
+    EXPECT_TRUE(
+        dhcp_layer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS).isNull());
+}
+
+TEST(DHCPRelayTest, encode_relay_option82_reports_non_vss_no_space_omission) {
+    pcpp::MacAddress client_mac(std::string("00:0e:86:11:c0:75"));
+    pcpp::DhcpLayer dhcp_layer(pcpp::DHCP_DISCOVER, client_mac);
+    relay_config config = make_option_overflow_config(false);
+    pad_dhcp_packet_for_option_overflow(dhcp_layer);
+
+    EXPECT_FALSE(encode_relay_option82(&dhcp_layer, &config));
+    EXPECT_TRUE(
+        dhcp_layer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS).isNull());
+}
+
+TEST(DHCPRelayTest, from_client_drops_when_required_vss_does_not_fit) {
+    pcpp::MacAddress client_mac(std::string("00:0e:86:11:c0:75"));
+    pcpp::DhcpLayer dhcp_layer(pcpp::DHCP_DISCOVER, client_mac);
+    dhcp_layer.getDhcpHeader()->gatewayIpAddress = 0;
+    dhcp_layer.getDhcpHeader()->magicNumber = DHCP_MAGIC_NUMBER;
+    relay_config config = make_option_overflow_config(true);
+    pad_dhcp_packet_for_option_overflow(dhcp_layer);
+
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).Times(0);
+    from_client(&dhcp_layer, config);
+
+    EXPECT_EQ(dhcp_layer.getDhcpHeader()->hops, 0);
+}
+
+TEST(DHCPRelayTest, from_client_forwards_non_vss_when_option_does_not_fit) {
+    pcpp::MacAddress client_mac(std::string("00:0e:86:11:c0:75"));
+    pcpp::DhcpLayer dhcp_layer(pcpp::DHCP_DISCOVER, client_mac);
+    dhcp_layer.getDhcpHeader()->gatewayIpAddress = 0;
+    dhcp_layer.getDhcpHeader()->magicNumber = DHCP_MAGIC_NUMBER;
+    relay_config config = make_option_overflow_config(false);
+    pad_dhcp_packet_for_option_overflow(dhcp_layer);
+
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _))
+        .WillOnce(Return(true));
+    from_client(&dhcp_layer, config);
+
+    EXPECT_EQ(dhcp_layer.getDhcpHeader()->hops, 1);
+    EXPECT_TRUE(
+        dhcp_layer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS).isNull());
+}
+
 TEST(DHCPRelayTest, to_client) {
     pcpp::EthLayer ethLayer(pcpp::MacAddress("00:13:72:25:fa:cd"), pcpp::MacAddress("00:e0:b1:49:39:02"));
     std::unordered_map<std::string, relay_config> vlans;
@@ -1036,7 +1187,7 @@ TEST(DHCPRelayTest, to_client) {
     m_config.hostname = "cisco";
     m_config.host_mac_addr = "12:32:54:24:95:36";
     vlans["Vlan10"] = config;
-    encode_relay_option(&dhcpLayer, &config);
+    encode_relay_option82(&dhcpLayer, &config);
     EXPECT_NE(dhcpLayer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS).getDataSize(), 0U);
 
     struct ifaddrs *mock_ifaddrs = CreateMockIfaddrs("192.168.1.1", "255.255.255.0", "Vlan100", "192.168.1.2", "Ethernet4");
@@ -1219,7 +1370,7 @@ TEST(DHCPRelayTest, from_client_relay_of_relay_append) {
     dhcpLayer.getDhcpHeader()->hops = 0;
     /* Non-zero giaddr signals relay-of-relay path */
     dhcpLayer.getDhcpHeader()->gatewayIpAddress = inet_addr("192.168.1.1");
-    encode_relay_option(&dhcpLayer, &config);
+    encode_relay_option82(&dhcpLayer, &config);
 
     EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).WillOnce([]
             (int, uint8_t* hdr, struct sockaddr_in, uint32_t, in_addr, bool, bool) {
@@ -1239,7 +1390,7 @@ TEST(DHCPRelayTest, from_client_relay_of_relay_replace) {
     pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_DISCOVER, clientMac);
     dhcpLayer.getDhcpHeader()->hops = 0;
     dhcpLayer.getDhcpHeader()->gatewayIpAddress = inet_addr("192.168.1.1");
-    encode_relay_option(&dhcpLayer, &config);
+    encode_relay_option82(&dhcpLayer, &config);
 
     EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).WillOnce([]
             (int, uint8_t* hdr, struct sockaddr_in, uint32_t, in_addr, bool, bool) {
@@ -1259,7 +1410,7 @@ TEST(DHCPRelayTest, from_client_relay_of_relay_forward) {
     pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_DISCOVER, clientMac);
     dhcpLayer.getDhcpHeader()->hops = 0;
     dhcpLayer.getDhcpHeader()->gatewayIpAddress = inet_addr("192.168.1.1");
-    encode_relay_option(&dhcpLayer, &config);
+    encode_relay_option82(&dhcpLayer, &config);
 
     EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).WillOnce([]
             (int, uint8_t* hdr, struct sockaddr_in, uint32_t, in_addr, bool, bool) {
@@ -1279,7 +1430,7 @@ TEST(DHCPRelayTest, from_client_relay_of_relay_discard) {
     pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_DISCOVER, clientMac);
     dhcpLayer.getDhcpHeader()->hops = 0;
     dhcpLayer.getDhcpHeader()->gatewayIpAddress = inet_addr("192.168.1.1");
-    encode_relay_option(&dhcpLayer, &config);
+    encode_relay_option82(&dhcpLayer, &config);
 
     EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).Times(0);
     from_client(&dhcpLayer, config);
@@ -1319,7 +1470,7 @@ TEST(DHCPRelayTest, bootp_pad_disabled_when_pad_false) {
     EXPECT_EQ(len, (uint32_t)sizeof(src)); /* unchanged */
 }
 
-TEST(DHCPRelayTest, encode_relay_option_long_circuit_id) {
+TEST(DHCPRelayTest, encode_relay_option82_long_circuit_id) {
     interface_list.clear();
     phy_interface_alias_map.clear();
     vlan_vrf_map.clear();
@@ -1342,57 +1493,30 @@ TEST(DHCPRelayTest, encode_relay_option_long_circuit_id) {
     m_config.hostname = std::string(225, 'a');
     m_config.host_mac_addr = "12:32:54:24:95:36";
 
-    encode_relay_option(&dhcpLayer, &config);
+    encode_relay_option82(&dhcpLayer, &config);
 
     auto agent_option = dhcpLayer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
     EXPECT_TRUE(agent_option.isNull()) << "option 82 must not be added when circuit-id exceeds available buffer space";
 }
 
-TEST(DHCPRelayTest, encode_relay_option_long_vrf_name) {
-    interface_list.clear();
-    phy_interface_alias_map.clear();
-    vlan_vrf_map.clear();
-    m_config = {};
+TEST(DHCPRelayTest, from_client_drops_oversized_required_vrf) {
+    pcpp::MacAddress client_mac("00:0e:86:11:c0:75");
+    pcpp::DhcpLayer dhcp_layer(pcpp::DHCP_DISCOVER, client_mac);
+    dhcp_layer.getDhcpHeader()->gatewayIpAddress = 0;
+    dhcp_layer.getDhcpHeader()->magicNumber = DHCP_MAGIC_NUMBER;
+    relay_config config = make_option_overflow_config(true);
+    vlan_vrf_map["Vlan10"] =
+        std::string(OPTION82_VSS_VRF_MAX_LEN + 1, 'v');
 
-    pcpp::MacAddress clientMac("00:0e:86:11:c0:75");
-    pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_DISCOVER, clientMac);
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).Times(0);
+    from_client(&dhcp_layer, config);
 
-    interface_list.push_back("Ethernet12");
-    phy_interface_alias_map["Ethernet12"] = "eth12";
-
-    relay_config config = {};
-    config.phy_interface = "Ethernet12";
-    config.vlan = "Vlan10";
-    config.vrf_selection_opt = "enable";
-    config.vrf = "Vrf00";
-    vlan_vrf_map["Vlan10"] = std::string(32, 'v');  // 32-char VRF name overflows vss_buf[32]
-
-    m_config.hostname = "host";
-    m_config.host_mac_addr = "12:32:54:24:95:36";
-
-    encode_relay_option(&dhcpLayer, &config);
-
-    auto agent_option = dhcpLayer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
-    ASSERT_FALSE(agent_option.isNull()) << "option 82 must still be present";
-
-    // VSS sub-option (151) must be absent; circuit-id (1) and remote-id (2) must be present
-    const uint8_t *data = agent_option.getValue();
-    size_t len = agent_option.getDataSize();
-    bool has_circuit_id = false, has_remote_id = false, has_vss = false;
-    for (size_t i = 0; i + 1 < len; ) {
-        uint8_t type = data[i];
-        uint8_t slen = data[i + 1];
-        if (type == 1) has_circuit_id = true;
-        if (type == 2) has_remote_id = true;
-        if (type == 151) has_vss = true;
-        i += 2 + slen;
-    }
-    EXPECT_TRUE(has_circuit_id);
-    EXPECT_TRUE(has_remote_id);
-    EXPECT_FALSE(has_vss) << "VSS sub-option must be skipped for oversized VRF name";
+    EXPECT_EQ(dhcp_layer.getDhcpHeader()->hops, 0);
+    EXPECT_TRUE(
+        dhcp_layer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS).isNull());
 }
 
-TEST(DHCPRelayTest, encode_relay_option_short_mac) {
+TEST(DHCPRelayTest, encode_relay_option82_short_mac) {
     interface_list.clear();
     phy_interface_alias_map.clear();
     vlan_vrf_map.clear();
@@ -1412,7 +1536,7 @@ TEST(DHCPRelayTest, encode_relay_option_short_mac) {
     m_config.hostname = "host";
     m_config.host_mac_addr = "ab:cd";  // shorter than MAC_ADDR_STR_LEN (17)
 
-    encode_relay_option(&dhcpLayer, &config);
+    encode_relay_option82(&dhcpLayer, &config);
 
     auto agent_option = dhcpLayer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
     ASSERT_FALSE(agent_option.isNull());
