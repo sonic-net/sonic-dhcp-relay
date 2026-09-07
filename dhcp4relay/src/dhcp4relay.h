@@ -69,6 +69,7 @@ extern int config_pipe[2];
 #define OPTION82_SUBOPT_LINK_SELECTION 5
 #define OPTION82_SUBOPT_SERVER_OVERRIDE 11
 #define OPTION82_SUBOPT_VIRTUAL_SUBNET 151
+#define OPTION82_SUBOPT_VIRTUAL_SUBNET_CONTROL 152
 
 #define DHCP_ETHERNET_HDR_LEN 14
 #define DHCP_IP_HDR_LEN 20
@@ -331,3 +332,7 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg);
 void config_event_callback(evutil_socket_t fd, short event, void *arg);
 size_t encode_tlv(uint8_t *buf, uint8_t t, uint8_t l, const uint8_t *v, size_t remaining);
 uint8_t *decode_tlv(const uint8_t *buf, uint8_t t, uint8_t &l, uint32_t options_total_size);
+#ifdef UNIT_TEST
+bool validate_vss_reply(const uint8_t *options_ptr, uint32_t options_size,
+                        const relay_config &config, const std::string &src_ip);
+#endif

@@ -452,7 +452,6 @@ int prepare_vlan_sockets(relay_config &config) {
     return 0;
 }
 
-
 /*
  * Writes one TLV sub-option into buf if remaining space allows.
  * Returns bytes written (type + length + value), or 0 on overflow.
@@ -463,7 +462,9 @@ size_t encode_tlv(uint8_t *buf, uint8_t t, uint8_t l, const uint8_t *v, size_t r
         return 0;
     buf[0] = t;
     buf[DHCP_SUB_OPT_TLV_LENGTH_OFFSET] = l;
-    memcpy(buf + DHCP_SUB_OPT_TLV_HEADER_LEN, v, l);
+    if (l > 0) {
+        memcpy(buf + DHCP_SUB_OPT_TLV_HEADER_LEN, v, l);
+    }
     return needed;
 }
 
@@ -589,6 +590,17 @@ bool encode_relay_option82(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
                                 sizeof(buf) - buf_offset);
             if (!offset) {
                 SWSS_LOG_ERROR("[DHCPV4_RELAY] VSS sub-option does not fit on %s, dropping option 82",
+                               config->vlan.c_str());
+                return false;
+            }
+            buf_offset += offset;
+
+            /* RFC 6607 requires VSS-Control whenever VSS is included. */
+            offset = encode_tlv(
+                buf + buf_offset, OPTION82_SUBOPT_VIRTUAL_SUBNET_CONTROL,
+                0, nullptr, sizeof(buf) - buf_offset);
+            if (!offset) {
+                SWSS_LOG_ERROR("[DHCPV4_RELAY] VSS-Control does not fit on %s, dropping option 82",
                                config->vlan.c_str());
                 return false;
             }
@@ -756,8 +768,10 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
 
 uint8_t *decode_tlv(const uint8_t *buf, uint8_t t, uint8_t &l, uint32_t options_total_size) {
     uint8_t *temp = (uint8_t *)buf;
+    uint8_t *result = nullptr;
     uint32_t offset = 0;
     uint8_t len = 0;
+    uint8_t result_len = 0;
 
     while (temp && ((offset + DHCP_SUB_OPT_TLV_HEADER_LEN) <= options_total_size)) {
         len = *(temp + DHCP_SUB_OPT_TLV_LENGTH_OFFSET);
@@ -769,16 +783,63 @@ uint8_t *decode_tlv(const uint8_t *buf, uint8_t t, uint8_t &l, uint32_t options_
             l = 0;
             return NULL;
         }
-        if (t == *temp) {
+        if (t == *temp && result == nullptr) {
             SWSS_LOG_INFO("[DHCPV4_INFO] Decoding relay agent sub-option %d of len %d", t, len);
-            l = len;
-            return (temp + DHCP_SUB_OPT_TLV_HEADER_LEN);
+            result = temp + DHCP_SUB_OPT_TLV_HEADER_LEN;
+            result_len = len;
         }
         offset +=  (len + DHCP_SUB_OPT_TLV_HEADER_LEN);
         temp += (len + DHCP_SUB_OPT_TLV_HEADER_LEN);
     }
-    l = 0;
-    return NULL;
+    if (offset != options_total_size) {
+        SWSS_LOG_ERROR("[DHCPV4_INFO] Failed to decode truncated relay agent sub-option header");
+        l = 0;
+        return NULL;
+    }
+    l = result_len;
+    return result;
+}
+
+bool validate_vss_reply(const uint8_t *options_ptr, uint32_t options_size,
+                        const relay_config &config, const std::string &src_ip) {
+    auto client_vrf_itr = vlan_vrf_map.find(config.vlan);
+    if ((client_vrf_itr == vlan_vrf_map.end()) ||
+        !is_vss_required(config, client_vrf_itr->second)) {
+        return true;
+    }
+
+    /* #146 guarantees locally VSS-required requests carry VSS 151+152. */
+    if (options_ptr == nullptr) {
+        SWSS_LOG_WARN("[DHCPV4_RELAY] Dropping server reply for %s from %s: "
+                      "missing relay agent information required for VSS",
+                      config.vlan.c_str(), src_ip.c_str());
+        return false;
+    }
+
+    uint8_t vss_control_len = 0;
+    auto vss_control_ptr = decode_tlv(options_ptr, OPTION82_SUBOPT_VIRTUAL_SUBNET_CONTROL,
+                                      vss_control_len, options_size);
+    if (vss_control_ptr != nullptr) {
+        SWSS_LOG_WARN("[DHCPV4_RELAY] Dropping server reply for %s from %s: "
+                      "server did not process VSS sub-option",
+                      config.vlan.c_str(), src_ip.c_str());
+        return false;
+    }
+
+    uint8_t vss_len = 0;
+    auto vss_ptr = decode_tlv(options_ptr, OPTION82_SUBOPT_VIRTUAL_SUBNET,
+                              vss_len, options_size);
+    const auto &client_vrf = client_vrf_itr->second;
+    if (vss_ptr == nullptr || vss_len != client_vrf.length() + 1 ||
+        vss_ptr[0] != 0 ||
+        memcmp(vss_ptr + 1, client_vrf.data(), client_vrf.length()) != 0) {
+        SWSS_LOG_WARN("[DHCPV4_RELAY] Dropping server reply for %s from %s: "
+                      "missing or mismatched VSS sub-option",
+                      config.vlan.c_str(), src_ip.c_str());
+        return false;
+    }
+
+    return true;
 }
 
 /**
@@ -794,6 +855,9 @@ uint8_t *decode_tlv(const uint8_t *buf, uint8_t t, uint8_t &l, uint32_t options_
  */
 void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_config> *vlans,
                std::string src_ip) {
+    /* SAI traps DHCP replies for L3 broadcast or a local router IP. Replies
+     * for a preserved forwarded giaddr stay in the hardware forwarding path
+     * and do not reach this code path. */
     struct ifaddrs *ifa, *ifa_tmp;
     struct sockaddr_in target_addr = {0};
     uint32_t giaddr = dhcp_pkt->getDhcpHeader()->gatewayIpAddress;
@@ -888,6 +952,13 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
 
     dhcp_cntr_table.increment_counter(config.vlan, "RX", (int)dhcp_pkt->getMessageType());
     /* TODO: Also check it is matching remote ID*/
+
+    if (is_dhcp &&
+        !validate_vss_reply((const uint8_t *)options_ptr, agent_option_size,
+                            config, src_ip)) {
+        dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
+        return;
+    }
 
     memcpy(&target_addr.sin_addr, &broadcast_addr, sizeof(struct in_addr));
     target_addr.sin_family = AF_INET;

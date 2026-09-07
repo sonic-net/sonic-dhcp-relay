@@ -171,6 +171,24 @@ TEST(EncodeDecodeTLV, EncodeAndDecode) {
     EXPECT_EQ(decoded_value[0], 0x11);
     EXPECT_EQ(decoded_value[1], 0x22);
     EXPECT_EQ(decoded_value[2], 0x33);
+
+    uint8_t empty_buffer[2] = {};
+    encoded_length = encode_tlv(empty_buffer, OPTION82_SUBOPT_VIRTUAL_SUBNET_CONTROL,
+                                0, nullptr, sizeof(empty_buffer));
+    EXPECT_EQ(encoded_length, 2);
+    EXPECT_EQ(empty_buffer[0], OPTION82_SUBOPT_VIRTUAL_SUBNET_CONTROL);
+    EXPECT_EQ(empty_buffer[1], 0);
+
+    decoded_value = decode_tlv(empty_buffer, OPTION82_SUBOPT_VIRTUAL_SUBNET_CONTROL,
+                               length, sizeof(empty_buffer));
+    ASSERT_NE(decoded_value, nullptr);
+    EXPECT_EQ(length, 0);
+
+    uint8_t truncated_buffer[2] = {OPTION82_SUBOPT_VIRTUAL_SUBNET, 1};
+    decoded_value = decode_tlv(truncated_buffer, OPTION82_SUBOPT_VIRTUAL_SUBNET,
+                               length, sizeof(truncated_buffer));
+    EXPECT_EQ(decoded_value, nullptr);
+    EXPECT_EQ(length, 0);
 }
 
 /* A sub-option whose length runs one byte past options_total_size must be
@@ -922,6 +940,13 @@ TEST(DHCPRelayTest, encode_relay_option82) {
     memcpy((vss_buf + 1), (uint8_t*)vlan_vrf_map["Vlan10"].c_str(), (uint8_t)vlan_vrf_map["Vlan10"].length());
 
     EXPECT_EQ(memcmp(vss_buf, vrf_ptr, 6), 0);
+
+    uint8_t vss_control_len = 1;
+    auto vss_control_ptr = decode_tlv((const uint8_t *)options_ptr,
+                                      OPTION82_SUBOPT_VIRTUAL_SUBNET_CONTROL,
+                                      vss_control_len, agent_option_size);
+    ASSERT_NE(vss_control_ptr, nullptr);
+    EXPECT_EQ(vss_control_len, 0);
 }
 
 TEST(DHCPRelayTest, encode_relay_option82_server_client_same_vrf) {
@@ -1000,6 +1025,73 @@ TEST(DHCPRelayTest, encode_relay_option82_server_client_same_vrf) {
                            vrf_len, agent_option_size);
 
     EXPECT_EQ((uintptr_t)vrf_ptr, NULL);
+
+    uint8_t vss_control_len = 0;
+    auto vss_control_ptr = decode_tlv((const uint8_t *)options_ptr,
+                                      OPTION82_SUBOPT_VIRTUAL_SUBNET_CONTROL,
+                                      vss_control_len, agent_option_size);
+    EXPECT_EQ((uintptr_t)vss_control_ptr, NULL);
+}
+
+template <size_t N>
+static uint32_t build_vss_reply_options(uint8_t (&options)[N],
+                                        const std::string &vrf,
+                                        bool include_vss,
+                                        bool include_vss_control) {
+    uint32_t offset = 0;
+    if (include_vss) {
+        uint8_t vss_data[OPTION82_VSS_VRF_MAX_LEN + 1] = {};
+        memcpy(vss_data + 1, vrf.data(), vrf.length());
+        offset += encode_tlv(options + offset, OPTION82_SUBOPT_VIRTUAL_SUBNET,
+                             static_cast<uint8_t>(vrf.length() + 1), vss_data,
+                             N - offset);
+    }
+    if (include_vss_control) {
+        offset += encode_tlv(options + offset, OPTION82_SUBOPT_VIRTUAL_SUBNET_CONTROL,
+                             0, nullptr, N - offset);
+    }
+    return offset;
+}
+
+TEST(DHCPRelayTest, validate_vss_reply) {
+    relay_config config = {};
+    config.vlan = "Vlan10";
+    config.vrf = "Vrf03";
+    config.vrf_selection_opt = "enable";
+    vlan_vrf_map["Vlan10"] = "Vrf01";
+
+    struct vss_case {
+        const char *vrf;
+        bool include_vss;
+        bool include_control;
+        bool valid;
+    };
+    const vss_case cases[] = {
+        {"Vrf01", true, false, true},
+        {"Vrf01", true, true, false},
+        {"Vrf02", true, false, false},
+        {"Vrf01", false, false, false},
+    };
+    for (const auto &test : cases) {
+        uint8_t options[32] = {};
+        auto size = build_vss_reply_options(
+            options, test.vrf, test.include_vss, test.include_control);
+        EXPECT_EQ(validate_vss_reply(options, size, config, "192.0.2.1"),
+                  test.valid);
+    }
+
+    uint8_t options[32] = {};
+    auto options_size = build_vss_reply_options(options, "Vrf01", true, false);
+    options[options_size++] = OPTION82_SUBOPT_VIRTUAL_SUBNET_CONTROL;
+    options[options_size++] = 1;
+    EXPECT_FALSE(validate_vss_reply(options, options_size, config, "192.0.2.1"));
+
+    EXPECT_FALSE(validate_vss_reply(nullptr, 0, config, "192.0.2.1"));
+
+    uint8_t circuit_id = 1;
+    options_size = encode_tlv(options, OPTION82_SUBOPT_CIRCUIT_ID, 1,
+                              &circuit_id, sizeof(options));
+    EXPECT_FALSE(validate_vss_reply(options, options_size, config, "192.0.2.1"));
 }
 
 static relay_config make_option_overflow_config(bool vss_required) {
@@ -1176,6 +1268,8 @@ TEST(DHCPRelayTest, to_client) {
     relay_config config = {};
     config.phy_interface = "Ethernet12";
     config.vlan = "Vlan10";
+    config.vrf = "Vrf01";
+    config.client_sock = 1;
     config.link_selection_opt = "enable";
     config.server_id_override_opt = "enable";
     config.link_address.sin_addr.s_addr = inet_addr("192.168.10.10");
@@ -1204,6 +1298,33 @@ TEST(DHCPRelayTest, to_client) {
         return true;
     });
     to_client(&dhcpLayer, &vlans, "172.22.178.234");
+}
+
+TEST(DHCPRelayTest, to_client_bootp_skips_vss_validation) {
+    pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
+    pcpp::DhcpLayer bootpLayer(pcpp::DHCP_OFFER, clientMac);
+    bootpLayer.getDhcpHeader()->magicNumber = 0;
+    bootpLayer.getDhcpHeader()->gatewayIpAddress = inet_addr("192.168.1.1");
+
+    relay_config config = {};
+    config.vlan = "Vlan10";
+    config.vrf = "Vrf02";
+    config.vrf_selection_opt = "enable";
+    config.client_sock = 1;
+    vlan_vrf_map["Vlan10"] = "Vrf01";
+    std::unordered_map<std::string, relay_config> vlans = {{"Vlan10", config}};
+
+    struct ifaddrs *mock_ifaddrs =
+        CreateMockIfaddrs("192.168.1.1", "255.255.255.0", "Vlan10",
+                          "192.168.1.2", "Ethernet4");
+    EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_))
+        .WillOnce(DoAll(testing::SetArgPointee<0>(mock_ifaddrs), Return(0)));
+    EXPECT_GLOBAL_CALL(freeifaddrs, freeifaddrs(_)).Times(1);
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _))
+        .WillOnce(Return(true));
+
+    to_client(&bootpLayer, &vlans, "172.22.178.234");
+    FreeMockIfaddrs(mock_ifaddrs);
 }
 
 TEST(DHCPRelayTest, from_client) {
@@ -1420,6 +1541,63 @@ TEST(DHCPRelayTest, from_client_relay_of_relay_forward) {
         return true;
     });
     from_client(&dhcpLayer, config);
+}
+
+TEST(DHCPRelayTest, from_client_relay_of_relay_forward_with_vss_forwards_unchanged) {
+    relay_config config = make_relay_of_relay_config("forward");
+
+    pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
+    pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_DISCOVER, clientMac);
+    dhcpLayer.getDhcpHeader()->hops = 0;
+    dhcpLayer.getDhcpHeader()->gatewayIpAddress = inet_addr("192.168.1.1");
+    encode_relay_option82(&dhcpLayer, &config);
+    auto original_option =
+        dhcpLayer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
+    ASSERT_FALSE(original_option.isNull());
+    std::vector<uint8_t> original_option_data(
+        original_option.getValue(),
+        original_option.getValue() + original_option.getDataSize());
+
+    config.vrf_selection_opt = "enable";
+    config.vrf = "Vrf02";
+
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _))
+        .WillOnce(Return(true));
+    from_client(&dhcpLayer, config);
+
+    auto forwarded_option =
+        dhcpLayer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
+    ASSERT_EQ(forwarded_option.getDataSize(), original_option_data.size());
+    EXPECT_EQ(memcmp(forwarded_option.getValue(), original_option_data.data(),
+                     original_option_data.size()), 0);
+}
+
+TEST(DHCPRelayTest, from_client_first_hop_adds_vss_with_forward_configured) {
+    relay_config config = make_option_overflow_config(true);
+    config.agent_relay_mode = "forward";
+
+    pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
+    pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_DISCOVER, clientMac);
+    dhcpLayer.getDhcpHeader()->gatewayIpAddress = 0;
+    dhcpLayer.getDhcpHeader()->magicNumber = DHCP_MAGIC_NUMBER;
+
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _))
+        .WillOnce(Return(true));
+    from_client(&dhcpLayer, config);
+
+    auto relay_option =
+        dhcpLayer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
+    ASSERT_FALSE(relay_option.isNull());
+
+    uint8_t vss_len = 0;
+    EXPECT_NE(decode_tlv(relay_option.getValue(),
+                         OPTION82_SUBOPT_VIRTUAL_SUBNET, vss_len,
+                         relay_option.getDataSize()), nullptr);
+    uint8_t control_len = 1;
+    EXPECT_NE(decode_tlv(relay_option.getValue(),
+                         OPTION82_SUBOPT_VIRTUAL_SUBNET_CONTROL, control_len,
+                         relay_option.getDataSize()), nullptr);
+    EXPECT_EQ(control_len, 0);
 }
 
 /* agent_relay_mode=discard: packet must be dropped, send_udp must NOT be called. */
