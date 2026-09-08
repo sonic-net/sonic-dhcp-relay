@@ -3,6 +3,7 @@
 #include <event2/bufferevent.h>
 #include <event2/event.h>
 #include <fcntl.h>
+#include <mutex>
 #include <poll.h>
 #include <pcapplusplus/DhcpLayer.h>
 #include <pcapplusplus/EthLayer.h>
@@ -23,9 +24,10 @@
 struct event_base *base;
 struct event *ev_sigint;
 struct event *ev_sigterm;
-extern bool feature_dhcp_server_enabled;
+extern std::atomic<bool> feature_dhcp_server_enabled;
 extern std::string global_dhcp_server_ip;
 extern metadata_config m_config;
+extern std::mutex m_config_mutex;
 
 static uint8_t client_recv_buffer[BUFFER_SIZE];
 int config_pipe[2];
@@ -260,12 +262,15 @@ void prepare_relay_interface_config(relay_config &interface_config) {
         return;
     }
 
-    if (m_config.is_dualTor) {
-        /* If DualTor is enabled, we set source interface to "Loopback0"
-           and link_selection option will be enabled during encoding if is_dualTor is enabled */
-        interface_config.source_interface = "Loopback0";
-        SWSS_LOG_INFO("[DHCPV4_INFO][DualTor] %s: link_selection_opt is enabled and source interface is set to %s",
-               interface_config.vlan.c_str(), interface_config.source_interface.c_str());
+    {
+        std::lock_guard<std::mutex> lk(m_config_mutex);
+        if (m_config.is_dualTor) {
+            /* If DualTor is enabled, we set source interface to "Loopback0"
+               and link_selection option will be enabled during encoding if is_dualTor is enabled */
+            interface_config.source_interface = "Loopback0";
+            SWSS_LOG_INFO("[DHCPV4_INFO][DualTor] %s: link_selection_opt is enabled and source interface is set to %s",
+                   interface_config.vlan.c_str(), interface_config.source_interface.c_str());
+        }
     }
 
     if (interface_config.source_interface.length() > 0) {
@@ -452,12 +457,19 @@ int prepare_vlan_sockets(relay_config &config) {
     return 0;
 }
 
-uint8_t encode_tlv(uint8_t *buf, uint8_t t, uint8_t l, uint8_t *v) {
-    *buf = t;
-    *(buf + DHCP_SUB_OPT_TLV_LENGTH_OFFSET) = l;
-    memcpy((buf + DHCP_SUB_OPT_TLV_HEADER_LEN), v, l);
 
-    return (l + DHCP_SUB_OPT_TLV_HEADER_LEN);
+/*
+ * Writes one TLV sub-option into buf if remaining space allows.
+ * Returns bytes written (type + length + value), or 0 on overflow.
+ */
+size_t encode_tlv(uint8_t *buf, uint8_t t, uint8_t l, const uint8_t *v, size_t remaining) {
+    size_t needed = (size_t)l + DHCP_SUB_OPT_TLV_HEADER_LEN;
+    if (needed > remaining)
+        return 0;
+    buf[0] = t;
+    buf[DHCP_SUB_OPT_TLV_LENGTH_OFFSET] = l;
+    memcpy(buf + DHCP_SUB_OPT_TLV_HEADER_LEN, v, l);
+    return needed;
 }
 
 std::string get_mac_address(const std::string &ifname) {
@@ -472,12 +484,26 @@ std::string get_mac_address(const std::string &ifname) {
     return mac;
 }
 
-void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
-    uint8_t buf[256] = {0};
+static bool is_vss_required(const relay_config &config, const std::string &client_vrf) {
+    return ((config.vrf_selection_opt == "enable") && (client_vrf != "default") &&
+            (config.vrf != client_vrf));
+}
+
+/* Return whether the local relay agent information option was added. */
+bool encode_relay_option82(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
+    uint8_t buf[DHCP_OPTION_VALUE_MAX_LEN] = {0};
     uint8_t buf_offset = 0;
     std::string bm_mac;
 
-    auto vrf = vlan_vrf_map[config->vlan.c_str()];
+    auto client_vrf = vlan_vrf_map[config->vlan];
+    const bool vss_required = is_vss_required(*config, client_vrf);
+
+    /* Snapshot m_config once to avoid races with the config thread. */
+    metadata_config snap;
+    {
+        std::lock_guard<std::mutex> lk(m_config_mutex);
+        snap = m_config;
+    }
 
     /* Get interface alias */
     std::string intf_alias;
@@ -489,75 +515,137 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
     /* | 1 | 4 | hostname:interface_alias:vlan | */
     std::string circuit_id;
     if (feature_dhcp_server_enabled) {
-        circuit_id = m_config.hostname + ":" + intf_alias;
+        circuit_id = snap.hostname + ":" + intf_alias;
     } else {
-        circuit_id = m_config.hostname + ":" + intf_alias + ":" + config->vlan;
+        circuit_id = snap.hostname + ":" + intf_alias + ":" + config->vlan;
     }
-    auto offset = encode_tlv(buf, OPTION82_SUBOPT_CIRCUIT_ID, circuit_id.length(),
-                             (uint8_t *)circuit_id.c_str());
+
+    if (circuit_id.length() > UINT8_MAX) {
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] circuit-id length %zu exceeds maximum on %s, dropping option 82",
+                       circuit_id.length(), config->vlan.c_str());
+        return false;
+    }
+    auto offset = encode_tlv(buf, OPTION82_SUBOPT_CIRCUIT_ID, (uint8_t)circuit_id.length(),
+                             (uint8_t *)circuit_id.c_str(), sizeof(buf));
+    if (!offset) {
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] circuit-id length %zu exceeds buffer on %s, dropping option 82",
+                       circuit_id.length(), config->vlan.c_str());
+        return false;
+    }
     buf_offset += offset;
 
-    if (!m_config.midplane_bridge.empty()) {
-        bm_mac = get_mac_address(m_config.midplane_bridge);
+    if (!snap.midplane_bridge.empty()) {
+        bm_mac = get_mac_address(snap.midplane_bridge);
     }
 
-    /* Encode remote ID sub-option */
+    /* Encode remote ID sub-option (required, like circuit-id) */
     /* | 2 | 6 | my_mac| */
     /* if its SmartSwitch we need to fetch mac of bridge-midplane */
-    if ((m_config.is_SmartSwitch) && (!bm_mac.empty())) {
+    if ((snap.is_SmartSwitch) && (!bm_mac.empty())) {
+        uint8_t len = (uint8_t)std::min((size_t)MAC_ADDR_STR_LEN, bm_mac.length());
         offset = encode_tlv((buf + buf_offset), OPTION82_SUBOPT_REMOTE_ID,
-                            MAC_ADDR_STR_LEN, (uint8_t *)(bm_mac.c_str()));
-        buf_offset += offset;
+                            len, (uint8_t *)(bm_mac.c_str()), sizeof(buf) - buf_offset);
     } else {
+        uint8_t len = (uint8_t)std::min((size_t)MAC_ADDR_STR_LEN, snap.host_mac_addr.length());
         offset = encode_tlv((buf + buf_offset), OPTION82_SUBOPT_REMOTE_ID,
-                            MAC_ADDR_STR_LEN, (uint8_t *)(m_config.host_mac_addr.c_str()));
-        buf_offset += offset;
+                            len, (uint8_t *)(snap.host_mac_addr.c_str()), sizeof(buf) - buf_offset);
     }
+    if (!offset) {
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] remote-id does not fit after circuit-id on %s, dropping option 82",
+                       config->vlan.c_str());
+        return false;
+    }
+    buf_offset += offset;
 
     /* TODO: this sub-option should be set if source interface selection is enabled */
     /* | 5 | 4 | ipv4 | */
-    if (m_config.is_dualTor || config->link_selection_opt == "enable") {
+    if (snap.is_dualTor || config->link_selection_opt == "enable") {
         /* RFC 3527 specifies an address contained in the client subnet; match ISC's VLAN address. */
         uint32_t link_sel_ip = config->link_address.sin_addr.s_addr;
         offset = encode_tlv((buf + buf_offset), OPTION82_SUBOPT_LINK_SELECTION, sizeof(uint32_t),
-                            (uint8_t *)&link_sel_ip);
+                            (uint8_t *)&link_sel_ip, sizeof(buf) - buf_offset);
+        if (!offset) {
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] link-selection does not fit on %s, dropping option 82",
+                           config->vlan.c_str());
+            return false;
+        }
         buf_offset += offset;
     }
 
     /* | 11 | 4 | ipv4 | */
     if (config->server_id_override_opt == "enable") {
-        offset = encode_tlv((buf + buf_offset), OPTION82_SUBOPT_SERVER_OVERRIDE, sizeof(uint32_t),
-                            (uint8_t *)(&(config->link_address.sin_addr.s_addr)));
+        offset = encode_tlv((buf + buf_offset), OPTION82_SUBOPT_SERVER_OVERRIDE,
+                            sizeof(uint32_t), (uint8_t *)(&(config->link_address.sin_addr.s_addr)),
+                            sizeof(buf) - buf_offset);
+        if (!offset) {
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] server-override does not fit on %s, dropping option 82",
+                           config->vlan.c_str());
+            return false;
+        }
         buf_offset += offset;
     }
 
     /* Encode VSS sub-option 151 if client is not default VRF */
     /* | 151 | vrf_len | 0 | vrf_name | */
-    uint8_t vss_buf[32] = {0};
     /* Enable VSS only if client and server are in two different VRF's */
-    if ((config->vrf_selection_opt == "enable") && (vrf != "default") &&
-        (config->vrf != vrf)) {
-        uint8_t zero_encode = 0;
-        memcpy(vss_buf, &zero_encode, sizeof(uint8_t));
-        memcpy((vss_buf + 1), (uint8_t *)vrf.c_str(), (uint8_t)vrf.length());
-
-        offset = encode_tlv((buf + buf_offset), OPTION82_SUBOPT_VIRTUAL_SUBNET,
-                            (uint8_t)(vrf.length() + 1), vss_buf);
-        buf_offset += offset;
+    if (vss_required) {
+        if (client_vrf.length() > OPTION82_VSS_VRF_MAX_LEN) {
+            SWSS_LOG_WARN("[DHCPV4_RELAY] VRF name '%s' exceeds %d bytes, skipping VSS sub-option",
+                          client_vrf.c_str(), OPTION82_VSS_VRF_MAX_LEN);
+            return false;
+        } else {
+            uint8_t vss_buf[OPTION82_VSS_VRF_MAX_LEN + 1] = {0};
+            memcpy(vss_buf + 1, client_vrf.c_str(), client_vrf.length());
+            offset = encode_tlv((buf + buf_offset), OPTION82_SUBOPT_VIRTUAL_SUBNET,
+                                (uint8_t)(client_vrf.length() + 1), vss_buf,
+                                sizeof(buf) - buf_offset);
+            if (!offset) {
+                SWSS_LOG_ERROR("[DHCPV4_RELAY] VSS sub-option does not fit on %s, dropping option 82",
+                               config->vlan.c_str());
+                return false;
+            }
+            buf_offset += offset;
+        }
     }
 
+    const size_t projected_packet_size =
+        dhcp_pkt->getHeaderLen() + DHCP_OPTION_TLV_HEADER_LEN + buf_offset;
     /* We shouldn't append relay information if packet size is exceeding MTU size */
-    if ((dhcp_pkt->getHeaderLen() + buf_offset) > MAX_DHCP_PKT_SIZE) {
-        SWSS_LOG_ERROR("[DHCPV4_RELAY] %ld packet size is exceeding allowed size %d"
-               " from interface %s",
-               (dhcp_pkt->getHeaderLen() + buf_offset),
-               MAX_DHCP_PKT_SIZE, config->vlan.c_str());
-        return;
+    if (projected_packet_size > MAX_DHCP_PKT_SIZE) {
+        /*
+         * RFC 3046 Section 2.1 requires forwarding without Option 82 when
+         * relay information does not fit. That rule predates RFC 6607. When
+         * this relay is responsible for VSS, omitting Suboption 151 can make
+         * the server select the global/default address space instead of the
+         * client's VPN. giaddr carries no VRF identity and can overlap across
+         * VRFs, so a VSS-required request is not coherent without its VSS.
+         */
+        if (vss_required) {
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Required VSS relay information makes"
+                   " packet size %zu exceed allowed size %d on interface %s;"
+                   " local relay information was not added",
+                   projected_packet_size,
+                   MAX_DHCP_PKT_SIZE, config->vlan.c_str());
+        } else {
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] %zu packet size is exceeding allowed size %d"
+                   " from interface %s; local relay information was not added",
+                   projected_packet_size,
+                   MAX_DHCP_PKT_SIZE, config->vlan.c_str());
+        }
+
+        return false;
     }
 
-    dhcp_pkt->addOption(pcpp::DhcpOptionBuilder(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS,
-                                                buf, buf_offset));
-    return;
+    auto relay_option =
+        dhcp_pkt->addOption(pcpp::DhcpOptionBuilder(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS,
+                                                    buf, buf_offset));
+    if (relay_option.isNull()) {
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to add local relay information"
+                       " on interface %s", config->vlan.c_str());
+        return false;
+    }
+
+    return true;
 }
 
 /**
@@ -571,6 +659,9 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
  * @return none
  */
 void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
+    auto client_vrf = vlan_vrf_map[config.vlan];
+    const bool vss_required = is_vss_required(config, client_vrf);
+
     /* Update giaddr */
     if (!(dhcp_pkt->getDhcpHeader()->gatewayIpAddress)) {
         const bool is_dhcp =
@@ -593,7 +684,13 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
         }
         if (is_dhcp) {
             SWSS_LOG_WARN("[DHCPV4_RELAY] encode DHCP relay option");
-            encode_relay_option(dhcp_pkt, &config);
+            if (!encode_relay_option82(dhcp_pkt, &config) && vss_required) {
+                SWSS_LOG_ERROR("[DHCPV4_RELAY] Dropping packet on interface %s:"
+                               " required VSS relay information was not added",
+                               config.vlan.c_str());
+                dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
+                return;
+            }
         }
     } else {
         /* If the relay packet is from another relay, we should act based on
@@ -604,10 +701,22 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
            discard - Discard the incoming packet (default).
          */
         if (config.agent_relay_mode == "append") {
-            encode_relay_option(dhcp_pkt, &config);
+            if (!encode_relay_option82(dhcp_pkt, &config) && vss_required) {
+                SWSS_LOG_ERROR("[DHCPV4_RELAY] Dropping packet on interface %s:"
+                               " required VSS relay information was not added",
+                               config.vlan.c_str());
+                dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
+                return;
+            }
         } else if (config.agent_relay_mode == "replace") {
             dhcp_pkt->removeOption(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
-            encode_relay_option(dhcp_pkt, &config);
+            if (!encode_relay_option82(dhcp_pkt, &config) && vss_required) {
+                SWSS_LOG_ERROR("[DHCPV4_RELAY] Dropping packet on interface %s:"
+                               " required VSS relay information was not added",
+                               config.vlan.c_str());
+                dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
+                return;
+            }
         } else if (config.agent_relay_mode == "forward") {
             /* forward_untouched: pass through without modifying Option 82 */
         } else {
@@ -636,9 +745,12 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
     // Backward compatibility for deployment_id 8. If deployment_id is 8, use client interface IP as source IP
     bool use_intf_ip_as_src_ip = false;
     in_addr src_ip = {0};
-    if (m_config.deployment_id == 8) {
-        use_intf_ip_as_src_ip = true;
-        src_ip.s_addr = config.link_address.sin_addr.s_addr;
+    {
+        std::lock_guard<std::mutex> lk(m_config_mutex);
+        if (m_config.deployment_id == 8) {
+            use_intf_ip_as_src_ip = true;
+            src_ip.s_addr = config.link_address.sin_addr.s_addr;
+        }
     }
 
     for (auto server : config.servers_sock) {
@@ -664,7 +776,7 @@ uint8_t *decode_tlv(const uint8_t *buf, uint8_t t, uint8_t &l, uint32_t options_
 
     while (temp && ((offset + DHCP_SUB_OPT_TLV_HEADER_LEN) <= options_total_size)) {
         len = *(temp + DHCP_SUB_OPT_TLV_LENGTH_OFFSET);
-        if ((offset + DHCP_SUB_OPT_TLV_LENGTH_OFFSET + len) > options_total_size) {
+        if ((offset + DHCP_SUB_OPT_TLV_HEADER_LEN + len) > options_total_size) {
             /* Malformed packet */
             SWSS_LOG_ERROR("[DHCPV4_INFO] Failed to decode relay agent sub-option %d"
                        " exceeded total option len %d offset %d sub-option len %d",
@@ -998,15 +1110,22 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
         }
 
         std::string vlan_str;
+        bool snap_is_SmartSwitch;
+        std::string snap_midplane_bridge;
+        {
+            std::lock_guard<std::mutex> lk(m_config_mutex);
+            snap_is_SmartSwitch = m_config.is_SmartSwitch;
+            snap_midplane_bridge = m_config.midplane_bridge;
+        }
         if (vlan_id == 0) {
             /* vlan_id can be 0 when we receive packet from the server */
             auto vlan = vlan_map.find(intf);
             if (vlan == vlan_map.end()) {
                 if (intf.find(CLIENT_IF_PREFIX) != std::string::npos) {
                     SWSS_LOG_WARN("[DHCPV4_RELAY] Invalid input interface %s", interface_name);
-                } else if ((m_config.is_SmartSwitch) && (intf.rfind("dpu", 0) == 0) && !m_config.midplane_bridge.empty()) {
+                } else if (snap_is_SmartSwitch && (intf.rfind("dpu", 0) == 0) && !snap_midplane_bridge.empty()) {
                     // if its SmartSwitch, we need to check for bridge_midplane interface
-                    vlan_str = m_config.midplane_bridge;
+                    vlan_str = snap_midplane_bridge;
                 }
             } else {
                 vlan_str = vlan->second;
@@ -1077,6 +1196,17 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
         pcpp::DhcpLayer *dhcp_pkt = raw_pkt.getLayerOfType<pcpp::DhcpLayer>();
         if (dhcp_pkt == nullptr) {
             SWSS_LOG_WARN("[DHCPV4_RELAY] Invalid DHCP packet from interface  %s", intf.c_str());
+            if (!vlan_str.empty()) {
+                dhcp_cntr_table.increment_counter(vlan_str, "RX", DHCPv4_MESSAGE_TYPE_MALFORMED);
+            }
+            continue;
+        }
+
+        /* Reject a truncated DHCP layer before any getDhcpHeader()/getMessageType()
+         * access below dereferences fields past the received bytes. */
+        if (dhcp_pkt->getHeaderLen() < sizeof(pcpp::dhcp_header)) {
+            SWSS_LOG_WARN("[DHCPV4_RELAY] Dropping short DHCP packet from interface %s: len %zu < %zu",
+                          intf.c_str(), dhcp_pkt->getHeaderLen(), sizeof(pcpp::dhcp_header));
             if (!vlan_str.empty()) {
                 dhcp_cntr_table.increment_counter(vlan_str, "RX", DHCPv4_MESSAGE_TYPE_MALFORMED);
             }
@@ -1411,11 +1541,16 @@ static void apply_config_event(const event_config &received_event,
                    delete_all_relay_configs(vlans);
         } else if (received_event.type == DHCPv4_SERVER_IP_UPDATE) {
                 SWSS_LOG_INFO("[DHCPV4_RELAY]  dhcp_server IP update in state DB event received");
+                std::string server_ip;
+                {
+                    std::lock_guard<std::mutex> lk(m_config_mutex);
+                    server_ip = global_dhcp_server_ip;
+                }
                 for (auto it = vlans->begin(); it != vlans->end(); ++it) {
                      relay_config &config = it->second;
                      config.servers.clear();
                      config.servers_sock.clear();
-                     config.servers.push_back(global_dhcp_server_ip);
+                     config.servers.push_back(server_ip);
                      prepare_relay_server_config(config);
                 }
         } else if (received_event.type == DHCPv4_RELAY_DUAL_TOR_UPDATE) {
