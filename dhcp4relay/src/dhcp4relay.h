@@ -346,7 +346,7 @@ bool intf_is_standby(const std::string &ifname);
  * @brief Process a validated client BOOTP request unless its ingress is standby.
  */
 void process_client_packet(pcpp::DhcpLayer *dhcp_pkt, const std::string &intf,
-                           const std::string &vlan,
+                           const std::string &vlan, int vlan_id,
                            std::unordered_map<std::string, relay_config> *vlans);
 
 /**

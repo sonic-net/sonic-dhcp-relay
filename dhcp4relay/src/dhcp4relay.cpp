@@ -1070,7 +1070,7 @@ uint16_t ipv4_checksum_cal(const uint8_t* ipv4_header, size_t header_len) {
 }
 
 void process_client_packet(pcpp::DhcpLayer *dhcp_pkt, const std::string &intf,
-                           const std::string &vlan,
+                           const std::string &vlan, int vlan_id,
                            std::unordered_map<std::string, relay_config> *vlans) {
     if (vlan.empty() || intf_is_standby(intf)) {
         return;
@@ -1078,8 +1078,8 @@ void process_client_packet(pcpp::DhcpLayer *dhcp_pkt, const std::string &intf,
 
     auto config_itr = vlans->find(vlan);
     if (config_itr == vlans->end()) {
-        SWSS_LOG_INFO("[DHCPV4_RELAY] Relay config not found for %s (interface %s)",
-                      vlan.c_str(), intf.c_str());
+        SWSS_LOG_INFO("[DHCPV4_RELAY] Relay config not found for %s (interface %s, vlan_id %d)",
+                      vlan.c_str(), intf.c_str(), vlan_id);
         dhcp_cntr_table.increment_counter(vlan, "RX", DHCPv4_MESSAGE_TYPE_DROP);
         return;
     }
@@ -1264,7 +1264,7 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
         }
 
         if (dhcp_pkt->getDhcpHeader()->opCode == BOOTPREQUEST) {
-            process_client_packet(dhcp_pkt, intf, vlan_str, vlans);
+            process_client_packet(dhcp_pkt, intf, vlan_str, vlan_id, vlans);
         } else if (dhcp_pkt->getDhcpHeader()->opCode == BOOTPREPLY) {
             to_client(dhcp_pkt, vlans, src_ip);
         } else {

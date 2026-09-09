@@ -392,7 +392,7 @@ TEST(MuxState, standby_request_has_no_forwarding_or_counter_side_effects) {
     update_mux_port_state({"Ethernet20", "standby", true});
 
     EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).Times(0);
-    process_client_packet(&dhcp_layer, "Ethernet20", vlan, &vlans);
+    process_client_packet(&dhcp_layer, "Ethernet20", vlan, 0, &vlans);
 
     auto counters_after = dhcp_cntr_table.get_counters_data().at(vlan);
     EXPECT_EQ(counters_after.RX, counters_before.RX);
