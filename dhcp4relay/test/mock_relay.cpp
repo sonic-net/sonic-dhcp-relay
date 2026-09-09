@@ -867,7 +867,7 @@ TEST(DHCPMgrTest, dhcp_server_feature_enable) {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     
     EXPECT_EQ(global_dhcp_server_ip, "240.127.1.2");
-    feature_dhcp_server_enabled = false;
+    feature_dhcp_server_enabled.store(false);
     global_dhcp_server_ip.clear();
 }
 
@@ -883,13 +883,13 @@ TEST(DHCPMgrTest, dhcp_server_feature_disable) {
     std::vector<std::pair<std::string, std::string>> disable_dhcp_server = {
             {"state", "disabled"},
     };
-    feature_dhcp_server_enabled = true;
+    feature_dhcp_server_enabled.store(true);
     feature_table.set("dhcp_server", disable_dhcp_server);
 
     std::this_thread::sleep_for(std::chrono::seconds(1));
     dhcpMgr.stop_db_updates();;
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    feature_dhcp_server_enabled = false;
+    feature_dhcp_server_enabled.store(false);
 }
 
 TEST(DHCPMgrTest, dhcp_server_ip_modification) {
