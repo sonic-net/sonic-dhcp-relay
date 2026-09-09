@@ -18,7 +18,7 @@ extern std::unordered_map<std::string, VrfSocketInfo> vrf_sock_map;
 extern std::unordered_map<std::string, std::string> phy_interface_alias_map;
 extern std::vector<std::string> interface_list;
 extern metadata_config m_config;
-extern bool feature_dhcp_server_enabled;
+extern std::atomic<bool> feature_dhcp_server_enabled;
 extern std::unordered_map<std::string, relay_config> vlans_copy;
 extern std::string global_dhcp_server_ip;
 extern std::shared_ptr<swss::DBConnector> config_db;
