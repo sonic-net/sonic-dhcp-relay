@@ -10,6 +10,7 @@
 #include "gmock/gmock.h"
 #include "mock_relay.h"
 #include "mock_table.h"
+#include "../src/dhcp4_sender.h"
 #include <sys/syscall.h>
 
 #include <pcapplusplus/DhcpLayer.h>
@@ -1154,4 +1155,38 @@ TEST(DHCPRelayTest, from_client_relay_of_relay_discard) {
 
     EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).Times(0);
     from_client(&dhcpLayer, config);
+}
+
+TEST(DHCPRelayTest, bootp_pad_extends_short_packet) {
+    uint8_t src[50] = {};
+    src[0] = 0x01; /* BOOTREQUEST */
+    src[49] = 0x7f;
+    uint8_t out[BOOTP_MIN_LEN];
+    memset(out, 0xff, sizeof(out));
+    uint32_t len = sizeof(src);
+    bootp_pad(out, src, &len, true);
+    EXPECT_EQ(len, (uint32_t)BOOTP_MIN_LEN);
+    EXPECT_EQ(out[0], 0x01);
+    EXPECT_EQ(out[49], 0x7f);
+    EXPECT_EQ(out[50], 0x00);
+    EXPECT_EQ(out[BOOTP_MIN_LEN - 1], 0x00);
+}
+
+TEST(DHCPRelayTest, bootp_pad_no_op_when_already_min_len) {
+    uint8_t src[BOOTP_MIN_LEN] = {};
+    src[0] = 0x02; /* BOOTREPLY */
+    uint8_t out[BOOTP_MIN_LEN] = {};
+    uint32_t len = BOOTP_MIN_LEN;
+    bootp_pad(out, src, &len, true);
+    EXPECT_EQ(len, (uint32_t)BOOTP_MIN_LEN);
+    /* out was not written — src was not copied */
+    EXPECT_EQ(out[0], 0x00);
+}
+
+TEST(DHCPRelayTest, bootp_pad_disabled_when_pad_false) {
+    uint8_t src[50] = {};
+    uint8_t out[BOOTP_MIN_LEN] = {};
+    uint32_t len = sizeof(src);
+    bootp_pad(out, src, &len, false);
+    EXPECT_EQ(len, (uint32_t)sizeof(src)); /* unchanged */
 }
