@@ -287,6 +287,7 @@ TEST(addrIsPrimary, unknown_ip_returns_true) {
 }
 
 TEST(MuxState, explicit_standby_only) {
+    set_dual_tor_enabled(true);
     update_mux_port_state({"Ethernet4", "standby", true});
     EXPECT_TRUE(intf_is_standby("Ethernet4"));
     EXPECT_FALSE(intf_is_standby("Ethernet8"));
@@ -300,6 +301,19 @@ TEST(MuxState, explicit_standby_only) {
 
     update_mux_port_state({"Ethernet4", "", false});
     EXPECT_FALSE(intf_is_standby("Ethernet4"));
+    set_dual_tor_enabled(false);
+}
+
+TEST(MuxState, standby_filter_requires_dualtor) {
+    update_mux_port_state({"Ethernet4", "standby", true});
+    set_dual_tor_enabled(false);
+    EXPECT_FALSE(intf_is_standby("Ethernet4"));
+
+    set_dual_tor_enabled(true);
+    EXPECT_TRUE(intf_is_standby("Ethernet4"));
+
+    set_dual_tor_enabled(false);
+    update_mux_port_state({"Ethernet4", "", false});
 }
 
 TEST(MuxState, manager_updates_main_thread_cache) {
@@ -308,6 +322,7 @@ TEST(MuxState, manager_updates_main_thread_cache) {
         .Times(3)
         .WillRepeatedly(Invoke(RealWrite));
 
+    set_dual_tor_enabled(true);
     DHCPMgr dhcp_mgr;
     std::unordered_map<std::string, relay_config> vlans;
     std::deque<swss::KeyOpFieldsValuesTuple> entries;
@@ -330,23 +345,24 @@ TEST(MuxState, manager_updates_main_thread_cache) {
     dhcp_mgr.process_mux_cable_notification(entries);
     config_event_callback(config_pipe[0], 0, &vlans);
     EXPECT_FALSE(intf_is_standby("Ethernet12"));
+    set_dual_tor_enabled(false);
 }
 
-TEST(MuxState, manager_invalidates_set_without_state) {
+TEST(MuxState, manager_ignores_set_without_state) {
     ASSERT_TRUE(InitConfigPipeForTest());
     EXPECT_GLOBAL_CALL(write, write(_, _, _))
-        .Times(1)
-        .WillOnce(Invoke(RealWrite));
+        .Times(0);
 
+    set_dual_tor_enabled(true);
     DHCPMgr dhcp_mgr;
-    std::unordered_map<std::string, relay_config> vlans;
     std::deque<swss::KeyOpFieldsValuesTuple> entries;
     update_mux_port_state({"Ethernet16", "standby", true});
     entries.emplace_back("Ethernet16", "SET",
                          std::vector<swss::FieldValueTuple>{{"health", "healthy"}});
     dhcp_mgr.process_mux_cable_notification(entries);
-    config_event_callback(config_pipe[0], 0, &vlans);
-    EXPECT_FALSE(intf_is_standby("Ethernet16"));
+    EXPECT_TRUE(intf_is_standby("Ethernet16"));
+    set_dual_tor_enabled(false);
+    update_mux_port_state({"Ethernet16", "", false});
 }
 
 TEST(MuxState, dual_tor_reenable_refreshes_cleared_cache) {
@@ -377,6 +393,7 @@ TEST(MuxState, dual_tor_reenable_refreshes_cleared_cache) {
     config_event_callback(config_pipe[0], 0, &vlans);
     EXPECT_TRUE(intf_is_standby("Ethernet24"));
 
+    set_dual_tor_enabled(false);
     testing_db::reset();
     refresh_mux_port_state();
 }
@@ -389,6 +406,7 @@ TEST(MuxState, standby_request_has_no_forwarding_or_counter_side_effects) {
     pcpp::MacAddress client_mac("00:0e:86:11:c0:75");
     pcpp::DhcpLayer dhcp_layer(pcpp::DHCP_DISCOVER, client_mac);
     std::unordered_map<std::string, relay_config> vlans = {{vlan, relay_config{}}};
+    set_dual_tor_enabled(true);
     update_mux_port_state({"Ethernet20", "standby", true});
 
     EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).Times(0);
@@ -398,6 +416,7 @@ TEST(MuxState, standby_request_has_no_forwarding_or_counter_side_effects) {
     EXPECT_EQ(counters_after.RX, counters_before.RX);
     EXPECT_EQ(counters_after.TX, counters_before.TX);
 
+    set_dual_tor_enabled(false);
     update_mux_port_state({"Ethernet20", "", false});
     dhcp_cntr_table.remove_interface(vlan);
 }

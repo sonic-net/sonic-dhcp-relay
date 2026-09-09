@@ -86,15 +86,19 @@ void DHCPMgr::handle_swss_notification() {
     swss_select.addSelectable(&state_db_mux_cable_table);
 
     /*
-     * Push the initial mux and DHCPV4_RELAY snapshots down config_pipe, then
-     * a DHCPv4_RELAY_SYNC_BARRIER as the last event. pops() returns
-     * synchronously because SubscriberStateTable cached the existing
-     * keys at construction time. The main thread predrains both snapshots
-     * before arming pkt_in_callback, preventing an empty mux cache from
-     * briefly relaying standby traffic during startup.
+     * Push the initial DEVICE_METADATA, mux, and DHCPV4_RELAY snapshots down
+     * config_pipe, then a DHCPv4_RELAY_SYNC_BARRIER as the last event. pops()
+     * returns synchronously because SubscriberStateTable cached the existing
+     * keys at construction time. Metadata goes first so DualToR is known
+     * before mux filtering is applied. The main thread predrains the
+     * snapshots before arming pkt_in_callback.
      */
     {
         std::deque<swss::KeyOpFieldsValuesTuple> initial_entries;
+        config_db_device_metadata_table.pops(initial_entries);
+        process_device_metadata_notification(initial_entries);
+
+        initial_entries.clear();
         state_db_mux_cable_table.pops(initial_entries);
         process_mux_cable_notification(initial_entries);
 
@@ -211,7 +215,7 @@ void DHCPMgr::process_mux_cable_notification(std::deque<swss::KeyOpFieldsValuesT
                 }
             }
             if (mux_msg->state.empty()) {
-                mux_msg->is_add = false;
+                continue;
             }
         }
 

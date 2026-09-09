@@ -84,8 +84,13 @@ std::unordered_map<std::string, std::string> vlan_vrf_map;
 /* This map will have interface name to interface alias map */
 std::unordered_map<std::string, std::string> phy_interface_alias_map;
 
-/* Main-thread-owned hardware mux state by physical interface. */
+/* Main-thread-owned DualToR flag and hardware mux state by physical interface. */
+bool dual_tor_enabled = false;
 std::unordered_map<std::string, std::string> mux_port_state;
+
+void set_dual_tor_enabled(bool enabled) {
+    dual_tor_enabled = enabled;
+}
 
 void update_mux_port_state(const mux_state_config &config) {
     if (config.is_add) {
@@ -96,6 +101,9 @@ void update_mux_port_state(const mux_state_config &config) {
 }
 
 bool intf_is_standby(const std::string &ifname) {
+    if (!dual_tor_enabled) {
+        return false;
+    }
     auto state = mux_port_state.find(ifname);
     return state != mux_port_state.end() && state->second == "standby";
 }
@@ -1598,10 +1606,12 @@ static void apply_config_event(const event_config &received_event,
             relay_config *relay_msg = static_cast<relay_config *>(received_event.msg);
             if (relay_msg) {
                 if (relay_msg->is_add) {
+                    set_dual_tor_enabled(true);
                     refresh_mux_port_state();
                     SWSS_LOG_INFO("[DHCPV4_RELAY][DualTor] Adding link-selection and source-interface as Loopback0 for existing vlans");
                 } else {
                     SWSS_LOG_INFO("[DHCPV4_RELAY][DualTor] Deleting/Restoring link-selection and source-interface configs for existing vlans");
+                    set_dual_tor_enabled(false);
                     mux_port_state.clear();
                 }
 

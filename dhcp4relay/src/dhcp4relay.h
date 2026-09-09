@@ -338,7 +338,12 @@ void update_mux_port_state(const mux_state_config &config);
 void refresh_mux_port_state();
 
 /**
- * @brief Return true only when the physical interface is explicitly standby.
+ * @brief Enable or clear DualToR-scoped standby filtering on the main thread.
+ */
+void set_dual_tor_enabled(bool enabled);
+
+/**
+ * @brief Return true only in DualToR mode when the physical interface is standby.
  */
 bool intf_is_standby(const std::string &ifname);
 
