@@ -211,7 +211,7 @@ void DHCPMgr::process_mux_cable_notification(std::deque<swss::KeyOpFieldsValuesT
                 }
             }
             if (mux_msg->state.empty()) {
-                continue;
+                mux_msg->is_add = false;
             }
         }
 

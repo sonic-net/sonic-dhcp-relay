@@ -117,6 +117,28 @@ std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnecto
 
 std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector>("STATE_DB", 0);
 
+void refresh_mux_port_state() {
+    swss::Table mux_table(state_db.get(), "HW_MUX_CABLE_TABLE");
+    std::vector<std::string> interfaces;
+    std::unordered_map<std::string, std::string> refreshed_state;
+
+    mux_table.getKeys(interfaces);
+    for (const auto &interface : interfaces) {
+        std::vector<swss::FieldValueTuple> fields;
+        if (!mux_table.get(interface, fields)) {
+            continue;
+        }
+        for (const auto &field : fields) {
+            if (fvField(field) == "state" && !fvValue(field).empty()) {
+                refreshed_state[interface] = fvValue(field);
+                break;
+            }
+        }
+    }
+
+    mux_port_state.swap(refreshed_state);
+}
+
 /**
  * @code                sock_open(const struct sock_fprog *fprog);
  *
@@ -1576,6 +1598,7 @@ static void apply_config_event(const event_config &received_event,
             relay_config *relay_msg = static_cast<relay_config *>(received_event.msg);
             if (relay_msg) {
                 if (relay_msg->is_add) {
+                    refresh_mux_port_state();
                     SWSS_LOG_INFO("[DHCPV4_RELAY][DualTor] Adding link-selection and source-interface as Loopback0 for existing vlans");
                 } else {
                     SWSS_LOG_INFO("[DHCPV4_RELAY][DualTor] Deleting/Restoring link-selection and source-interface configs for existing vlans");

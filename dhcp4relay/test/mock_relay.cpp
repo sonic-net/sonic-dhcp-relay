@@ -332,16 +332,53 @@ TEST(MuxState, manager_updates_main_thread_cache) {
     EXPECT_FALSE(intf_is_standby("Ethernet12"));
 }
 
-TEST(MuxState, manager_ignores_set_without_state) {
+TEST(MuxState, manager_invalidates_set_without_state) {
     ASSERT_TRUE(InitConfigPipeForTest());
-    EXPECT_GLOBAL_CALL(write, write(_, _, _)).Times(0);
+    EXPECT_GLOBAL_CALL(write, write(_, _, _))
+        .Times(1)
+        .WillOnce(Invoke(RealWrite));
 
     DHCPMgr dhcp_mgr;
+    std::unordered_map<std::string, relay_config> vlans;
     std::deque<swss::KeyOpFieldsValuesTuple> entries;
+    update_mux_port_state({"Ethernet16", "standby", true});
     entries.emplace_back("Ethernet16", "SET",
                          std::vector<swss::FieldValueTuple>{{"health", "healthy"}});
     dhcp_mgr.process_mux_cable_notification(entries);
+    config_event_callback(config_pipe[0], 0, &vlans);
     EXPECT_FALSE(intf_is_standby("Ethernet16"));
+}
+
+TEST(MuxState, dual_tor_reenable_refreshes_cleared_cache) {
+    ASSERT_TRUE(InitConfigPipeForTest());
+    EXPECT_GLOBAL_CALL(write, write(_, _, _))
+        .Times(2)
+        .WillRepeatedly(Invoke(RealWrite));
+
+    auto mux_state_db = std::make_shared<swss::DBConnector>("STATE_DB", 0);
+    swss::Table mux_table(mux_state_db.get(), "HW_MUX_CABLE_TABLE");
+    mux_table.set("Ethernet24", {{"state", "standby"}});
+    update_mux_port_state({"Ethernet24", "standby", true});
+    std::unordered_map<std::string, relay_config> vlans;
+
+    event_config disable_event{
+        DHCPv4_RELAY_DUAL_TOR_UPDATE, new relay_config{}};
+    static_cast<relay_config *>(disable_event.msg)->is_add = false;
+    ASSERT_EQ(write(config_pipe[1], &disable_event, sizeof(disable_event)),
+              static_cast<ssize_t>(sizeof(disable_event)));
+    config_event_callback(config_pipe[0], 0, &vlans);
+    EXPECT_FALSE(intf_is_standby("Ethernet24"));
+
+    event_config enable_event{
+        DHCPv4_RELAY_DUAL_TOR_UPDATE, new relay_config{}};
+    static_cast<relay_config *>(enable_event.msg)->is_add = true;
+    ASSERT_EQ(write(config_pipe[1], &enable_event, sizeof(enable_event)),
+              static_cast<ssize_t>(sizeof(enable_event)));
+    config_event_callback(config_pipe[0], 0, &vlans);
+    EXPECT_TRUE(intf_is_standby("Ethernet24"));
+
+    testing_db::reset();
+    refresh_mux_port_state();
 }
 
 TEST(MuxState, standby_request_has_no_forwarding_or_counter_side_effects) {

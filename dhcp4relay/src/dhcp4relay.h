@@ -333,6 +333,11 @@ void update_vlan_mapping(std::string vlan, bool is_add);
 void update_mux_port_state(const mux_state_config &config);
 
 /**
+ * @brief Replace the mux cache with the current STATE_DB snapshot.
+ */
+void refresh_mux_port_state();
+
+/**
  * @brief Return true only when the physical interface is explicitly standby.
  */
 bool intf_is_standby(const std::string &ifname);
