@@ -143,6 +143,7 @@ typedef enum {
     DHCPv4_RELAY_CONFIG_UPDATE,
     DHCPv4_RELAY_INTERFACE_UPDATE,
     DHCPv4_RELAY_VLAN_MEMBER_UPDATE,
+    DHCPv4_RELAY_PORTCHANNEL_MEMBER_UPDATE,
     DHCPv4_RELAY_VLAN_INTERFACE_UPDATE,
     DHCPv4_SERVER_RELAY_CONFIG_UPDATE,
     DHCPv4_SERVER_FEATURE_UPDATE,
@@ -169,6 +170,12 @@ struct event_config {
 
 struct vlan_member_config {
     std::string vlan;
+    std::string interface;
+    bool is_add;
+};
+
+struct portchannel_member_config {
+    std::string portchannel;
     std::string interface;
     bool is_add;
 };
@@ -326,6 +333,17 @@ void shutdown_relay();
  * @return              none
  */
 void update_vlan_mapping(std::string vlan, bool is_add);
+
+/**
+ * @code                get_vlan_from_interface(const std::string &interface);
+ *
+ * @brief               resolve a packet interface directly to its VLAN or through its parent PortChannel
+ *
+ * @param interface     packet interface name
+ *
+ * @return              VLAN name, or an empty string when the interface is not under a relayed VLAN
+ */
+std::string get_vlan_from_interface(const std::string &interface);
 
 /**
  * @brief Update the main-thread-owned mux state for one physical interface.
