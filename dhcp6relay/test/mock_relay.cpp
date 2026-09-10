@@ -17,6 +17,18 @@ bool dual_tor_sock = false;
 char loopback[IF_NAMESIZE] = "Loopback0";
 int mock_sock = 124;
 
+// Isolate process-wide mode while preserving the existing relay.* test names.
+class relay : public ::testing::Test {
+protected:
+  void SetUp() override {
+    dual_tor_sock = false;
+  }
+
+  void TearDown() override {
+    dual_tor_sock = false;
+  }
+};
+
 static uint8_t client_raw_solicit[] = {
   0x33, 0x33, 0x00, 0x01, 0x00, 0x02, 0x08, 0x00, 0x27, 0xfe, 0x8f, 0x95, 0x86, 0xdd, 0x60, 0x00,
   0x00, 0x00, 0x00, 0x3c, 0x11, 0x01, 0xfe, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0a, 0x00,
@@ -241,6 +253,7 @@ TEST(prepareConfig, prepare_relay_config)
   int filter = 1;
   struct relay_config config{};
   config.is_option_79 = true;
+  config.link_address.sin6_family = AF_INET6;
   config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x01;
 
   struct ip6_hdr ip_hdr;
@@ -318,6 +331,7 @@ TEST(prepareConfig, prepare_vlan_sockets)
   config.interface = "Vlan1000";
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   config.state_db = state_db;
+  config.config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
 
   int gua_sock = -1, lla_sock = -1;
   prepare_vlan_sockets(gua_sock, lla_sock, config);
@@ -388,7 +402,7 @@ TEST(counter, clear_counter)
   EXPECT_FALSE(state_db->hexists("DHCPv6_COUNTER_TABLE|Vlan1000", "Relay-Reply"));
 }
 
-TEST(relay, relay_client) 
+TEST_F(relay, relay_client)
 {
   uint8_t msg[] = {
       0x01, 0x2f, 0xf4, 0xc8, 0x00, 0x01, 0x00, 0x0e,
@@ -456,7 +470,7 @@ TEST(relay, relay_client)
   }
 }
 
-TEST(relay, relay_relay_forw) {
+TEST_F(relay, relay_relay_forw) {
   uint8_t msg[] = {
       0x0c, 0x00, 0x20, 0x01, 0x0d, 0xb8, 0x01, 0x5a,
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -529,7 +543,7 @@ TEST(relay, relay_relay_forw) {
   sendUdpCount = 0;
 }
 
-TEST(relay, relay_relay_reply) 
+TEST_F(relay, relay_relay_reply)
 {
   int mock_sock = 123;
 
@@ -556,6 +570,7 @@ TEST(relay, relay_relay_reply)
 
   struct relay_config config{};
   config.is_option_79 = true;
+  config.link_address.sin6_family = AF_INET6;
 
   config.link_address.sin6_addr.__in6_u.__u6_addr8[15] = 0x01;
 
@@ -639,7 +654,7 @@ TEST(relay, relay_relay_reply)
   sendUdpCount = 0;
 }
 
-TEST(relay, signal_init) {
+TEST_F(relay, signal_init) {
   signal_init();
   EXPECT_NE((uintptr_t)ev_sigint, NULL);
   EXPECT_NE((uintptr_t)ev_sigterm, NULL);
@@ -648,7 +663,7 @@ TEST(relay, signal_init) {
 MOCK_GLOBAL_FUNC1(event_base_dispatch, int(struct event_base *));
 MOCK_GLOBAL_FUNC2(event_add, int(struct event *, const struct timeval *));
 
-TEST(relay, signal_start) {
+TEST_F(relay, signal_start) {
   EXPECT_GLOBAL_CALL(event_add, event_add(_, NULL)).Times(5)
                     .WillOnce(Return(-1))
                     .WillOnce(Return(0)).WillOnce(Return(-1))
@@ -661,18 +676,18 @@ TEST(relay, signal_start) {
 
 MOCK_GLOBAL_FUNC2(event_base_loopexit, int(struct event_base *, const struct timeval *));
 
-TEST(relay, signal_callback) {
+TEST_F(relay, signal_callback) {
   ASSERT_NO_THROW(signal_callback(1, 1, &base));
   EXPECT_GLOBAL_CALL(event_base_loopexit, event_base_loopexit(_, _));
   signal_callback(SIGTERM, 1, &base);
 }
 
-TEST(relay, dhcp6relay_stop) {
+TEST_F(relay, dhcp6relay_stop) {
   EXPECT_GLOBAL_CALL(event_base_loopexit, event_base_loopexit(_, _));
   ASSERT_NO_THROW(dhcp6relay_stop());
 }
 
-TEST(relay, update_vlan_mapping) {
+TEST_F(relay, update_vlan_mapping) {
   std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
   vlan_map.clear();
   portchannel_map.clear();
@@ -709,7 +724,7 @@ TEST(relay, update_vlan_mapping) {
   portchannel_map.clear();
 }
 
-TEST(relay, client_packet_handler) {
+TEST_F(relay, client_packet_handler) {
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   std::string vlan_name = "Vlan1000";
   initialize_counter(state_db, vlan_name);
@@ -789,7 +804,7 @@ TEST(relay, client_packet_handler) {
 
 MOCK_GLOBAL_FUNC6(recvfrom, ssize_t(int, void *, size_t, int, struct sockaddr *, socklen_t *));
 
-TEST(relay, server_callback) {
+TEST_F(relay, server_callback) {
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   std::string ifname = "Vlan1000";
   initialize_counter(state_db, ifname);
@@ -820,7 +835,7 @@ TEST(relay, server_callback) {
 
 MOCK_GLOBAL_FUNC2(if_indextoname, char*(unsigned int, char *));
 
-TEST(relay, client_callback_portchannel_member) {
+TEST_F(relay, client_callback_portchannel_member) {
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   std::string vlan = "Vlan1000";
   initialize_counter(state_db, vlan);
@@ -874,7 +889,7 @@ TEST(relay, client_callback_portchannel_member) {
   sendUdpCount = 0;
 }
 
-TEST(relay, client_callback) {
+TEST_F(relay, client_callback) {
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   std::shared_ptr<swss::Table> mux_table = std::make_shared<swss::Table> (
         state_db.get(), "HW_MUX_CABLE_TABLE"
@@ -950,7 +965,7 @@ TEST(relay, client_callback) {
   interface_list.clear();
 }
 
-TEST(relay, shutdown_relay) {
+TEST_F(relay, shutdown_relay) {
   signal_init();
   EXPECT_NE((uintptr_t)ev_sigint, NULL);
   EXPECT_NE((uintptr_t)ev_sigterm, NULL);
@@ -1156,7 +1171,7 @@ TEST(dhcpv6_msg, UnmarshalBinary) {
   EXPECT_EQ(dhcpv6.m_msg_hdr.msg_type, 1);
 }
 
-TEST(relay, loop_relay) {
+TEST_F(relay, loop_relay) {
   std::unordered_map<std::string, relay_config> vlans_in_loop;
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   struct relay_config config{
@@ -1170,7 +1185,7 @@ TEST(relay, loop_relay) {
   EXPECT_ANY_THROW(loop_relay(vlans_in_loop));
 }
 
-TEST(relay, get_relay_int_from_relay_msg) {
+TEST_F(relay, get_relay_int_from_relay_msg) {
   std::string lla_str = "fc02:1000::1";
   std::string vlan_str = "Vlan1000";
   uint8_t relay_reply_with_opt18[] = {
@@ -1221,7 +1236,7 @@ TEST(relay, get_relay_int_from_relay_msg) {
   EXPECT_EQ((uintptr_t)value, NULL);
 }
 
-TEST(relay, server_callback_dualtor) {
+TEST_F(relay, server_callback_dualtor) {
   std::unordered_map<std::string, relay_config> vlans_in_loop;
   std::string ifname = "Vlan1000";
   struct relay_config config{};
