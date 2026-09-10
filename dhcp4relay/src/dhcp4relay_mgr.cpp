@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <memory>
 #include <sstream>
 constexpr auto DEFAULT_TIMEOUT_MSEC = 1000;
 
@@ -68,6 +69,7 @@ void DHCPMgr::handle_swss_notification() {
     swss::SubscriberStateTable config_db_port_table(config_db_ptr.get(), "PORT");
     swss::SubscriberStateTable config_db_dpu_table(config_db_ptr.get(), "DPUS");
     swss::SubscriberStateTable state_db_interface_table(state_db_ptr.get(), "INTERFACE_TABLE");
+    swss::SubscriberStateTable state_db_mux_cable_table(state_db_ptr.get(), "HW_MUX_CABLE_TABLE");
 
     std::deque<swss::KeyOpFieldsValuesTuple> entries;
     swss::Select swss_select;
@@ -85,18 +87,26 @@ void DHCPMgr::handle_swss_notification() {
     swss_select.addSelectable(&config_db_port_table);
     swss_select.addSelectable(&config_db_dpu_table);
     swss_select.addSelectable(&state_db_interface_table);
+    swss_select.addSelectable(&state_db_mux_cable_table);
 
     /*
-     * Push the initial DHCPV4_RELAY snapshot down config_pipe, then
-     * a DHCPv4_RELAY_SYNC_BARRIER as the last event. pops() returns
-     * synchronously because SubscriberStateTable cached the existing
-     * keys at construction time. The main thread predrains the pipe
-     * up to the barrier before arming pkt_in_callback; without this,
-     * packets arriving during startup hit an empty vlans map and
-     * produce a per-packet 'Config not found for vlan' ERR.
+     * Push the initial DEVICE_METADATA, mux, and DHCPV4_RELAY snapshots down
+     * config_pipe, then a DHCPv4_RELAY_SYNC_BARRIER as the last event. pops()
+     * returns synchronously because SubscriberStateTable cached the existing
+     * keys at construction time. Metadata goes first so DualToR is known
+     * before mux filtering is applied. The main thread predrains the
+     * snapshots before arming pkt_in_callback.
      */
     {
         std::deque<swss::KeyOpFieldsValuesTuple> initial_entries;
+        config_db_device_metadata_table.pops(initial_entries);
+        process_device_metadata_notification(initial_entries);
+
+        initial_entries.clear();
+        state_db_mux_cable_table.pops(initial_entries);
+        process_mux_cable_notification(initial_entries);
+
+        initial_entries.clear();
         config_db_relaymgr_table_ptr->pops(initial_entries);
         if (!initial_entries.empty()) {
             SWSS_LOG_INFO("[DHCPV4_RELAY] Loading initial DHCPV4_RELAY snapshot: %zu entries",
@@ -191,7 +201,40 @@ void DHCPMgr::handle_swss_notification() {
 	} else if (selectable == static_cast<swss::Selectable *>(&config_db_dpu_table)) {
             config_db_dpu_table.pops(entries);
             process_port_notification(entries);
+	} else if (selectable == static_cast<swss::Selectable *>(&state_db_mux_cable_table)) {
+            state_db_mux_cable_table.pops(entries);
+            process_mux_cable_notification(entries);
 	}
+    }
+}
+
+void DHCPMgr::process_mux_cable_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries) {
+    for (auto &entry : entries) {
+        auto mux_msg = std::make_unique<mux_state_config>();
+        mux_msg->interface = kfvKey(entry);
+        mux_msg->is_add = kfvOp(entry) != "DEL";
+
+        if (mux_msg->is_add) {
+            for (auto &field : kfvFieldsValues(entry)) {
+                if (fvField(field) == "state") {
+                    mux_msg->state = fvValue(field);
+                    break;
+                }
+            }
+            if (mux_msg->state.empty()) {
+                continue;
+            }
+        }
+
+        event_config event{};
+        event.type = DHCPv4_RELAY_MUX_STATE_UPDATE;
+        event.msg = mux_msg.get();
+        if (write(config_pipe[1], &event, sizeof(event)) != static_cast<ssize_t>(sizeof(event))) {
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to write mux state update to config pipe: %s",
+                           strerror(errno));
+            continue;
+        }
+        mux_msg.release();
     }
 }
 

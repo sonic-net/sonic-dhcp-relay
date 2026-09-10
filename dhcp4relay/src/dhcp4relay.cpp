@@ -87,6 +87,30 @@ std::unordered_map<std::string, std::string> vlan_vrf_map;
 /* This map will have interface name to interface alias map */
 std::unordered_map<std::string, std::string> phy_interface_alias_map;
 
+/* Main-thread-owned DualToR flag and hardware mux state by physical interface. */
+bool dual_tor_enabled = false;
+std::unordered_map<std::string, std::string> mux_port_state;
+
+void set_dual_tor_enabled(bool enabled) {
+    dual_tor_enabled = enabled;
+}
+
+void update_mux_port_state(const mux_state_config &config) {
+    if (config.is_add) {
+        mux_port_state[config.interface] = config.state;
+    } else {
+        mux_port_state.erase(config.interface);
+    }
+}
+
+bool intf_is_standby(const std::string &ifname) {
+    if (!dual_tor_enabled) {
+        return false;
+    }
+    auto state = mux_port_state.find(ifname);
+    return state != mux_port_state.end() && state->second == "standby";
+}
+
 /* DHCP Relay Counter Table Instance */
 DHCPCounter_table dhcp_cntr_table;
 
@@ -103,6 +127,28 @@ using namespace swss;
 std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector>("CONFIG_DB", 0);
 
 std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector>("STATE_DB", 0);
+
+void refresh_mux_port_state() {
+    swss::Table mux_table(state_db.get(), "HW_MUX_CABLE_TABLE");
+    std::vector<std::string> interfaces;
+    std::unordered_map<std::string, std::string> refreshed_state;
+
+    mux_table.getKeys(interfaces);
+    for (const auto &interface : interfaces) {
+        std::vector<swss::FieldValueTuple> fields;
+        if (!mux_table.get(interface, fields)) {
+            continue;
+        }
+        for (const auto &field : fields) {
+            if (fvField(field) == "state" && !fvValue(field).empty()) {
+                refreshed_state[interface] = fvValue(field);
+                break;
+            }
+        }
+    }
+
+    mux_port_state.swap(refreshed_state);
+}
 
 /**
  * @code                sock_open(const struct sock_fprog *fprog);
@@ -1136,6 +1182,27 @@ uint16_t ipv4_checksum_cal(const uint8_t* ipv4_header, size_t header_len) {
     return ((uint16_t)~sum);
 }
 
+void process_client_packet(pcpp::DhcpLayer *dhcp_pkt, const std::string &intf,
+                           const std::string &vlan, int vlan_id,
+                           std::unordered_map<std::string, relay_config> *vlans) {
+    if (vlan.empty() || intf_is_standby(intf)) {
+        return;
+    }
+
+    auto config_itr = vlans->find(vlan);
+    if (config_itr == vlans->end()) {
+        SWSS_LOG_INFO("[DHCPV4_RELAY] Relay config not found for %s (interface %s, vlan_id %d)",
+                      vlan.c_str(), intf.c_str(), vlan_id);
+        dhcp_cntr_table.increment_counter(vlan, "RX", DHCPv4_MESSAGE_TYPE_DROP);
+        return;
+    }
+
+    config_itr->second.phy_interface = intf;
+    dhcp_cntr_table.increment_counter(config_itr->second.vlan, "RX",
+                                      static_cast<int>(dhcp_pkt->getMessageType()));
+    from_client(dhcp_pkt, config_itr->second);
+}
+
 /**
  * @code                pkt_in_callback(evutil_socket_t fd, short event, void *arg);
  *
@@ -1308,22 +1375,7 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
         }
 
         if (dhcp_pkt->getDhcpHeader()->opCode == BOOTPREQUEST) {
-            if (vlan_str.empty()) {
-                continue;
-            }
-
-            auto config_itr = vlans->find(vlan_str);
-            if (config_itr == vlans->end()) {
-                SWSS_LOG_INFO("[DHCPV4_RELAY] Relay config not found for %s (interface %s, vlan_id %d)",
-                       vlan_str.c_str(), intf.c_str(), vlan_id);
-                dhcp_cntr_table.increment_counter(vlan_str, "RX", DHCPv4_MESSAGE_TYPE_DROP);
-                continue;
-            }
-            auto config = config_itr->second;
-            config_itr->second.phy_interface = intf;
-
-            dhcp_cntr_table.increment_counter(config.vlan, "RX", (int)dhcp_pkt->getMessageType());
-            from_client(dhcp_pkt, config_itr->second);
+            process_client_packet(dhcp_pkt, intf, vlan_str, vlan_id, vlans);
         } else if (dhcp_pkt->getDhcpHeader()->opCode == BOOTPREPLY) {
             to_client(dhcp_pkt, vlans, src_ip);
         } else {
@@ -1665,13 +1717,23 @@ static void apply_config_event(const event_config &received_event,
                      config.servers.push_back(server_ip);
                      prepare_relay_server_config(config);
                 }
+        } else if (received_event.type == DHCPv4_RELAY_MUX_STATE_UPDATE) {
+            mux_state_config *mux_msg = static_cast<mux_state_config *>(received_event.msg);
+            if (mux_msg) {
+                update_mux_port_state(*mux_msg);
+                delete mux_msg;
+            }
         } else if (received_event.type == DHCPv4_RELAY_DUAL_TOR_UPDATE) {
             relay_config *relay_msg = static_cast<relay_config *>(received_event.msg);
             if (relay_msg) {
                 if (relay_msg->is_add) {
+                    set_dual_tor_enabled(true);
+                    refresh_mux_port_state();
                     SWSS_LOG_INFO("[DHCPV4_RELAY][DualTor] Adding link-selection and source-interface as Loopback0 for existing vlans");
                 } else {
                     SWSS_LOG_INFO("[DHCPV4_RELAY][DualTor] Deleting/Restoring link-selection and source-interface configs for existing vlans");
+                    set_dual_tor_enabled(false);
+                    mux_port_state.clear();
                 }
 
                 for (auto& vlan : *vlans) {
