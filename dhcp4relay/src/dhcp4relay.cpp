@@ -1526,6 +1526,7 @@ static void apply_config_event(const event_config &received_event,
                     (*vlans)[relay_msg->vlan].server_id_override_opt = relay_msg->server_id_override_opt;
                     (*vlans)[relay_msg->vlan].vrf_selection_opt = relay_msg->vrf_selection_opt;
                     (*vlans)[relay_msg->vlan].agent_relay_mode = relay_msg->agent_relay_mode;
+                    (*vlans)[relay_msg->vlan].max_hop_count = relay_msg->max_hop_count;
                 } else {
                     if (vlans->find(relay_msg->vlan) != vlans->end()) {
                         /* In case of vlan deletion, close all the sockets.*/

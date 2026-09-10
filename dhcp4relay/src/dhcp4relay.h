@@ -23,7 +23,7 @@
 
 #define RELAY_PORT 67
 #define CLIENT_PORT 68
-#define HOP_LIMIT 4
+#define DEFAULT_MAX_HOP_COUNT 4
 #define DHCPv4_OPTION_LIMIT 255
 #define RAWSOCKET_RECV_SIZE 1048576
 #define CLIENT_IF_PREFIX "Ethernet"
@@ -126,7 +126,7 @@ struct relay_config {
     std::string server_id_override_opt;
     std::string vrf_selection_opt;
     std::string agent_relay_mode;
-    uint8_t max_hop_count = MAX_HOP_COUNT;
+    uint8_t max_hop_count = DEFAULT_MAX_HOP_COUNT;
     std::vector<std::string> servers;
     std::vector<sockaddr_in> servers_sock;
     bool is_interface_id;

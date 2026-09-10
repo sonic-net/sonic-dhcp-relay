@@ -469,6 +469,7 @@ TEST(relayConfig, handle_vlan_events) {
     config->source_interface = "Ethernet8";
     config->servers = {"192.168.1.1","10.0.0.1"};
     config->vrf = "default";
+    config->max_hop_count = 2;
     event.type = DHCPv4_RELAY_CONFIG_UPDATE;
     event.msg = static_cast<void *>(config);
     
@@ -480,6 +481,7 @@ TEST(relayConfig, handle_vlan_events) {
     config_event_callback(pipe_fds[0], 0, &vlans);
 
     ASSERT_TRUE(vlans.find("Vlan200") != vlans.end());
+    EXPECT_EQ(vlans["Vlan200"].max_hop_count, 2);
 
     ASSERT_EQ(vlans["Vlan200"].servers_sock.size(), 2);
 
@@ -517,6 +519,44 @@ TEST(relayConfig, handle_vlan_events) {
     close(pipe_fds[0]);
     close(pipe_fds[1]);
     FreeMockIfaddrs(mock_ifaddrs);
+}
+
+TEST(relayConfig, max_hop_count_config_event_propagates_updates) {
+    EXPECT_EQ(relay_config{}.max_hop_count, DEFAULT_MAX_HOP_COUNT);
+    EXPECT_EQ(MAX_HOP_COUNT, 16);
+
+    int pipe_fds[2];
+    ASSERT_NE(pipe(pipe_fds), -1);
+    EXPECT_GLOBAL_CALL(write, write(_, _, _))
+        .Times(2)
+        .WillRepeatedly(Invoke(RealWrite));
+
+    std::unordered_map<std::string, relay_config> vlans;
+    vlans["Vlan100"].vlan = "Vlan100";
+
+    event_config event;
+    event.type = DHCPv4_RELAY_CONFIG_UPDATE;
+
+    relay_config *config = new relay_config();
+    config->vlan = "Vlan100";
+    config->is_add = true;
+    config->max_hop_count = 2;
+    event.msg = static_cast<void *>(config);
+    ASSERT_NE(write(pipe_fds[1], &event, sizeof(event)), -1);
+    config_event_callback(pipe_fds[0], 0, &vlans);
+    EXPECT_EQ(vlans["Vlan100"].max_hop_count, 2);
+
+    config = new relay_config();
+    config->vlan = "Vlan100";
+    config->is_add = true;
+    config->max_hop_count = 8;
+    event.msg = static_cast<void *>(config);
+    ASSERT_NE(write(pipe_fds[1], &event, sizeof(event)), -1);
+    config_event_callback(pipe_fds[0], 0, &vlans);
+    EXPECT_EQ(vlans["Vlan100"].max_hop_count, 8);
+
+    close(pipe_fds[0]);
+    close(pipe_fds[1]);
 }
 
 TEST(relayConfig, handle_interface_events) {
