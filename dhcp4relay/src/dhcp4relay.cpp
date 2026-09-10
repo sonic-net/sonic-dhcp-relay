@@ -801,7 +801,8 @@ uint8_t *decode_tlv(const uint8_t *buf, uint8_t t, uint8_t &l, uint32_t options_
 
 /**
  * @code                void to_client(pcpp::DhcpLayer* dhcp_pkt, std::unordered_map<std::string,
-                                        relay_config > *vlans, std::string src_ip);
+                                        relay_config > *vlans, std::string src_ip,
+                                        const std::string &ingress_intf);
  *
  * @brief               API will send DHCP relay message to client.
  *
@@ -832,11 +833,14 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
         return;
     }
 
-    /* Reject server replies arriving on a client-facing VLAN member interface */
-    if (vlan_map.count(ingress_intf)) {
+    /* Reject server replies arriving on a client-facing VLAN member interface.
+     * Resolve physical PortChannel members through the mapping maintained by
+     * the PortChannel membership handlers. */
+    auto ingress_vlan = get_vlan_from_interface(ingress_intf);
+    if (!ingress_vlan.empty()) {
         SWSS_LOG_WARN("[DHCPV4_RELAY] Dropping server reply from %s:"
-                      " arrived on client-facing interface %s",
-                      src_ip.c_str(), ingress_intf.c_str());
+                      " arrived on client-facing interface %s (%s)",
+                      src_ip.c_str(), ingress_intf.c_str(), ingress_vlan.c_str());
         freeifaddrs(ifa);
         return;
     }

@@ -1449,6 +1449,35 @@ TEST(DHCPRelayTest, to_client_ingress_on_client_vlan) {
     FreeMockIfaddrs(mock_ifaddrs);
 }
 
+TEST(DHCPRelayTest, to_client_ingress_on_client_portchannel_member) {
+    std::unordered_map<std::string, relay_config> vlans;
+
+    pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
+    pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_OFFER, clientMac);
+    dhcpLayer.getDhcpHeader()->hops = 1;
+    dhcpLayer.getDhcpHeader()->gatewayIpAddress = inet_addr("192.168.1.1");
+    dhcpLayer.getDhcpHeader()->opCode = 1;
+
+    relay_config config = {};
+    config.vlan = "Vlan10";
+    config.client_sock = 1;
+    vlan_vrf_map["Vlan10"] = "default";
+    vlans["Vlan10"] = config;
+    /* Simulate Ethernet12 as a member of a client-facing PortChannel. */
+    vlan_map["PortChannel1005"] = "Vlan10";
+    portchannel_map["Ethernet12"] = "PortChannel1005";
+
+    struct ifaddrs *mock_ifaddrs = CreateMockIfaddrs("192.168.1.1", "255.255.255.0", "Vlan10", "192.168.1.2", "Ethernet4");
+    EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_)).WillOnce(DoAll(
+        testing::SetArgPointee<0>(mock_ifaddrs), Return(0)));
+    EXPECT_GLOBAL_CALL(freeifaddrs, freeifaddrs(_)).Times(1);
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).Times(0);
+    to_client(&dhcpLayer, &vlans, "10.0.0.1", "Ethernet12");
+    vlan_map.erase("PortChannel1005");
+    portchannel_map.erase("Ethernet12");
+    FreeMockIfaddrs(mock_ifaddrs);
+}
+
 TEST(DHCPRelayTest, from_client) {
 
     pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
