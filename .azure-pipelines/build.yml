@@ -120,10 +120,13 @@ jobs:
     artifact: sonic-dhcp-relay.${{ parameters.arch }}
     displayName: "Archive dhcp-relay debian packages"
   - task: PublishTestResults@2
+    condition: succeededOrFailed()
     inputs:
       testResultsFiles: |
-        build-test/dhcp6relay-test-test-result.xml
-        build-test/dhcp4relay-test-test-result.xml
+        dhcp6relay/build-test/dhcp6relay-test-test-result.xml
+        dhcp4relay/build-test/dhcp4relay-test-test-result.xml
+      failTaskOnFailedTests: true
+      failTaskOnMissingResultsFile: true
   - ${{ if and(eq(parameters.arch, 'amd64'), parameters.codeCoverage) }}:
     - task: PublishCodeCoverageResults@1
       inputs:
