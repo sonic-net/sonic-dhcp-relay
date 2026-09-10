@@ -1478,6 +1478,33 @@ TEST(DHCPRelayTest, to_client_ingress_on_client_portchannel_member) {
     FreeMockIfaddrs(mock_ifaddrs);
 }
 
+TEST(DHCPRelayTest, to_client_ingress_on_server_l3_interface) {
+    std::unordered_map<std::string, relay_config> vlans;
+
+    pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
+    pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_OFFER, clientMac);
+    dhcpLayer.getDhcpHeader()->hops = 1;
+    dhcpLayer.getDhcpHeader()->gatewayIpAddress = inet_addr("192.168.1.1");
+    dhcpLayer.getDhcpHeader()->opCode = 1;
+
+    relay_config config = {};
+    config.vlan = "Vlan10";
+    config.client_sock = 1;
+    vlan_vrf_map["Vlan10"] = "default";
+    vlans["Vlan10"] = config;
+    /* Vlan10 is an L3/SVI ingress, not a VLAN member in either map. */
+    vlan_map.erase("Vlan10");
+    portchannel_map.erase("Vlan10");
+
+    struct ifaddrs *mock_ifaddrs = CreateMockIfaddrs("192.168.1.1", "255.255.255.0", "Vlan10", "192.168.1.2", "Ethernet4");
+    EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_)).WillOnce(DoAll(
+        testing::SetArgPointee<0>(mock_ifaddrs), Return(0)));
+    EXPECT_GLOBAL_CALL(freeifaddrs, freeifaddrs(_)).Times(1);
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).WillOnce(Return(true));
+    to_client(&dhcpLayer, &vlans, "10.0.0.1", "Vlan10");
+    FreeMockIfaddrs(mock_ifaddrs);
+}
+
 TEST(DHCPRelayTest, from_client) {
 
     pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
