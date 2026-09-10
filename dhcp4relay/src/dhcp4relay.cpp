@@ -651,6 +651,37 @@ bool encode_relay_option82(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
     return true;
 }
 
+enum class LocalAddressCheck {
+    ERROR,
+    NOT_LOCAL,
+    LOCAL
+};
+
+static LocalAddressCheck check_local_ipv4_address(uint32_t address) {
+    struct ifaddrs *ifaddrs_list = nullptr;
+    if (getifaddrs(&ifaddrs_list) == -1) {
+        SWSS_LOG_ERROR("[DHCPV4_RELAY] Unable to enumerate local IPv4 addresses: %s",
+                strerror(errno));
+        return LocalAddressCheck::ERROR;
+    }
+
+    LocalAddressCheck result = LocalAddressCheck::NOT_LOCAL;
+    for (struct ifaddrs *ifa = ifaddrs_list; ifa != nullptr; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == nullptr || ifa->ifa_addr->sa_family != AF_INET) {
+            continue;
+        }
+
+        auto *local_address = reinterpret_cast<struct sockaddr_in *>(ifa->ifa_addr);
+        if (local_address->sin_addr.s_addr == address) {
+            result = LocalAddressCheck::LOCAL;
+            break;
+        }
+    }
+
+    freeifaddrs(ifaddrs_list);
+    return result;
+}
+
 /**
  * @code                 void from_client(pcpp::DhcpLayer* dhcp_pkt, relay_config *config)
  *
@@ -696,6 +727,26 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
             }
         }
     } else {
+        const uint32_t giaddr = dhcp_pkt->getDhcpHeader()->gatewayIpAddress;
+        const LocalAddressCheck address_check = check_local_ipv4_address(giaddr);
+        if (address_check == LocalAddressCheck::ERROR) {
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Dropping chained packet because local giaddr validation failed on %s",
+                    config.vlan.c_str());
+            dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
+            return;
+        }
+        if (address_check == LocalAddressCheck::LOCAL) {
+            char giaddr_string[INET_ADDRSTRLEN] = {};
+            struct in_addr giaddr_address = {giaddr};
+            const char *formatted_giaddr =
+                inet_ntop(AF_INET, &giaddr_address, giaddr_string, sizeof(giaddr_string));
+            SWSS_LOG_NOTICE("[DHCPV4_RELAY] Dropping chained packet with local giaddr %s on %s",
+                    formatted_giaddr == nullptr ? "<invalid>" : formatted_giaddr,
+                    config.vlan.c_str());
+            dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
+            return;
+        }
+
         /* If the relay packet is from another relay, we should act based on
            configuration of agent_relay_mode.
            append  - Forward the packet with appending our own relay option.
