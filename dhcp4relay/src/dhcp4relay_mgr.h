@@ -30,6 +30,7 @@ class DHCPMgr {
     void process_interface_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
     void process_device_metadata_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
     void process_vlan_member_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
+    void process_portchannel_member_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
     void process_vlan_interface_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
     void process_feature_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries,
 		                      swss::Select &select, std::shared_ptr<swss::DBConnector> config_db_ptr,
