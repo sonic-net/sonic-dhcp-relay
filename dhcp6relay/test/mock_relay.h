@@ -12,4 +12,6 @@ extern struct event_base *base;
 extern struct event *ev_sigint;
 extern struct event *ev_sigterm;
 extern std::unordered_map<std::string, std::string> vlan_map;
+extern std::unordered_map<std::string, std::string> portchannel_map;
+extern std::vector<std::string> interface_list;
 extern std::unordered_map<std::string, std::string> addr_vlan_map;

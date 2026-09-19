@@ -48,6 +48,15 @@
 #define DHCP_SUB_OPT_TLV_LENGTH_OFFSET 1
 #define DHCP_SUB_OPT_TLV_HEADER_LEN 2
 
+/* DHCP option value is length-prefixed with a 1-byte field, so max 255 bytes. */
+#define DHCP_OPTION_TLV_HEADER_LEN 2
+#define DHCP_OPTION_VALUE_MAX_LEN 255
+/*
+ * VRF names in SONiC are Linux network interfaces (IFNAMSIZ = 16, null-terminated),
+ * so the max usable length is IF_NAMESIZE - 1 = 15.
+ */
+#define OPTION82_VSS_VRF_MAX_LEN (IF_NAMESIZE - 1)
+
 #define lengthof(A) (sizeof(A) / sizeof(A)[0])
 
 extern char vrf_single[IF_NAMESIZE];
@@ -129,6 +138,7 @@ typedef enum {
     DHCPv4_RELAY_CONFIG_UPDATE,
     DHCPv4_RELAY_INTERFACE_UPDATE,
     DHCPv4_RELAY_VLAN_MEMBER_UPDATE,
+    DHCPv4_RELAY_PORTCHANNEL_MEMBER_UPDATE,
     DHCPv4_RELAY_VLAN_INTERFACE_UPDATE,
     DHCPv4_SERVER_RELAY_CONFIG_UPDATE,
     DHCPv4_SERVER_FEATURE_UPDATE,
@@ -154,6 +164,12 @@ struct event_config {
 
 struct vlan_member_config {
     std::string vlan;
+    std::string interface;
+    bool is_add;
+};
+
+struct portchannel_member_config {
+    std::string portchannel;
     std::string interface;
     bool is_add;
 };
@@ -307,6 +323,17 @@ void shutdown_relay();
 void update_vlan_mapping(std::string vlan, bool is_add);
 
 /**
+ * @code                get_vlan_from_interface(const std::string &interface);
+ *
+ * @brief               resolve a packet interface directly to its VLAN or through its parent PortChannel
+ *
+ * @param interface     packet interface name
+ *
+ * @return              VLAN name, or an empty string when the interface is not under a relayed VLAN
+ */
+std::string get_vlan_from_interface(const std::string &interface);
+
+/**
  * @code                pkt_in_callback(evutil_socket_t fd, short event, void *arg);
  *
  * @brief               callback for libevent that is called everytime data is received at the filter socket
@@ -320,5 +347,5 @@ void update_vlan_mapping(std::string vlan, bool is_add);
  */
 void pkt_in_callback(evutil_socket_t fd, short event, void *arg);
 void config_event_callback(evutil_socket_t fd, short event, void *arg);
+size_t encode_tlv(uint8_t *buf, uint8_t t, uint8_t l, const uint8_t *v, size_t remaining);
 uint8_t *decode_tlv(const uint8_t *buf, uint8_t t, uint8_t &l, uint32_t options_total_size);
-uint8_t encode_tlv(uint8_t *buf, uint8_t t, uint8_t l, uint8_t *v);
