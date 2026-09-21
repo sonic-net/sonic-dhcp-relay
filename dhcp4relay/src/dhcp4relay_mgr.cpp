@@ -461,11 +461,10 @@ void DHCPMgr::process_relay_notification(std::deque<swss::KeyOpFieldsValuesTuple
                 std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector>("CONFIG_DB", 0);
                 std::shared_ptr<swss::Table> vlan_intf_tbl = std::make_shared<swss::Table>(config_db.get(), CFG_VLAN_INTF_TABLE_NAME);
                 vlan_intf_tbl->hget(vlan, VRF_NAME_FIELD, value);
-                if (value.size() <= 0) {
-                    relay_msg->vrf = "default";
-                } else {
-                    relay_msg->vrf = value;
+                if (value.empty()) {
+                    vlan_intf_tbl->hget(vlan, VNET_NAME_FIELD, value);
                 }
+                relay_msg->vrf = value.empty() ? "default" : value;
             }
 
             // Update the vlan cache entry
@@ -748,23 +747,22 @@ void DHCPMgr::process_portchannel_member_notification(std::deque<swss::KeyOpFiel
 void DHCPMgr::process_vlan_interface_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries) {
      for (auto &entry : entries) {
          std::string key = kfvKey(entry);
-         // Only process VLAN interfaces (keys starting with "Vlan" and Vlan with IP suffix)
          if (key.rfind("Vlan", 0) != 0) {
              continue;
          }
 
+         size_t pos = key.find('|');
          std::string vlan;
          std::string vrf;
-         size_t pos = key.find('|');
          if (pos == std::string::npos) {
              vlan = key;
-             vrf = "default";
              for (auto &fv : kfvFieldsValues(entry)) {
-                 if (fvField(fv) == VRF_NAME_FIELD) {
-                     vrf = fvValue(fv);
+                 if (fvField(fv) == "vrf") {
+                     // STATE_DB publishes an empty value for default VRF.
+                     vrf = fvValue(fv).empty() ? "default" : fvValue(fv);
                      break;
                  }
-            }
+             }
          } else {
              vlan = key.substr(0, pos);
          }
