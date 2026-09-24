@@ -257,6 +257,10 @@ void prepare_relay_interface_config(relay_config &interface_config);
  */
 void prepare_relay_server_config(relay_config &interface_config);
 
+/** Return true when an address matches a configured DHCPv4 server. */
+bool is_ipv4_addr_from_configured_server(const std::string &src_ip,
+                                         const relay_config &config);
+
 /**
  * @code                loop_relay(std::unordered_map<std::string, relay_config> &vlans);
  *
