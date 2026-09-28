@@ -560,9 +560,11 @@ bool encode_relay_option82(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
     }
     buf_offset += offset;
 
-    /* TODO: this sub-option should be set if source interface selection is enabled */
     /* | 5 | 4 | ipv4 | */
-    if (snap.is_dualTor || config->link_selection_opt == "enable") {
+    /* A source-interface giaddr identifies the relay's return address, not necessarily
+       the client subnet. Always identify the receiving VLAN separately in that case. */
+    if (snap.is_dualTor || !config->source_interface.empty() ||
+        config->link_selection_opt == "enable") {
         /* RFC 3527 specifies an address contained in the client subnet; match ISC's VLAN address. */
         uint32_t link_sel_ip = config->link_address.sin_addr.s_addr;
         offset = encode_tlv((buf + buf_offset), OPTION82_SUBOPT_LINK_SELECTION, sizeof(uint32_t),
