@@ -86,7 +86,7 @@ TEST(EncodeDecodeTLV, EncodeAndDecode) {
     uint8_t value[3] = {0x11, 0x22, 0x33};
     uint8_t length = 0;
 
-    uint8_t encoded_length = encode_tlv(buffer, 1, 3, value);
+    size_t encoded_length = encode_tlv(buffer, 1, 3, value, sizeof(buffer));
     EXPECT_EQ(encoded_length, 5);
     EXPECT_EQ(buffer[0], 1);
     EXPECT_EQ(buffer[1], 3);
@@ -100,6 +100,31 @@ TEST(EncodeDecodeTLV, EncodeAndDecode) {
     EXPECT_EQ(decoded_value[0], 0x11);
     EXPECT_EQ(decoded_value[1], 0x22);
     EXPECT_EQ(decoded_value[2], 0x33);
+}
+
+/* A sub-option whose length runs one byte past options_total_size must be
+   rejected. The value spans offset+2 .. offset+2+len-1, so the last byte needs
+   options_total_size to be at least offset + TLV_HEADER + len. Here type+len
+   occupy 2 bytes and len=3, so 5 value+header bytes need size 5; declaring the
+   buffer as size 4 makes the final value byte (index 4) out of bounds. */
+TEST(EncodeDecodeTLV, DecodeRejectsTruncatedSubOption) {
+    uint8_t buffer[5] = {1, 3, 0x11, 0x22, 0x33};
+    uint8_t length = 7;
+
+    /* options_total_size deliberately one byte short of the full TLV. */
+    uint8_t *decoded_value = decode_tlv(buffer, 1, length, 4);
+    EXPECT_EQ(decoded_value, nullptr);
+    EXPECT_EQ(length, 0);
+}
+
+/* Boundary: a sub-option that exactly fills options_total_size is valid. */
+TEST(EncodeDecodeTLV, DecodeAcceptsExactFit) {
+    uint8_t buffer[5] = {1, 3, 0x11, 0x22, 0x33};
+    uint8_t length = 0;
+
+    uint8_t *decoded_value = decode_tlv(buffer, 1, length, 5);
+    ASSERT_NE(decoded_value, nullptr);
+    EXPECT_EQ(length, 3);
 }
 
 TEST(sock, sock_open) {
@@ -1154,4 +1179,117 @@ TEST(DHCPRelayTest, from_client_relay_of_relay_discard) {
 
     EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).Times(0);
     from_client(&dhcpLayer, config);
+}
+TEST(DHCPRelayTest, encode_relay_option_long_circuit_id) {
+    interface_list.clear();
+    phy_interface_alias_map.clear();
+    vlan_vrf_map.clear();
+    m_config = {};
+
+    pcpp::MacAddress clientMac("00:0e:86:11:c0:75");
+    pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_DISCOVER, clientMac);
+
+    interface_list.push_back("Ethernet12");
+    phy_interface_alias_map["Ethernet12"] = "eth12";
+
+    relay_config config = {};
+    config.phy_interface = "Ethernet12";
+    config.vlan = "Vlan10";
+    vlan_vrf_map["Vlan10"] = "default";
+
+    // circuit-id = hostname + ":eth12:Vlan10" (13 fixed chars).
+    // With no optional sub-options, cap = DHCP_OPTION_VALUE_MAX_LEN(255) - remote-id(19) - circuit-id hdr(2) = 234.
+    // Use 225-char hostname → circuit-id = 238 > 234.
+    m_config.hostname = std::string(225, 'a');
+    m_config.host_mac_addr = "12:32:54:24:95:36";
+
+    encode_relay_option(&dhcpLayer, &config);
+
+    auto agent_option = dhcpLayer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
+    EXPECT_TRUE(agent_option.isNull()) << "option 82 must not be added when circuit-id exceeds available buffer space";
+}
+
+TEST(DHCPRelayTest, encode_relay_option_long_vrf_name) {
+    interface_list.clear();
+    phy_interface_alias_map.clear();
+    vlan_vrf_map.clear();
+    m_config = {};
+
+    pcpp::MacAddress clientMac("00:0e:86:11:c0:75");
+    pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_DISCOVER, clientMac);
+
+    interface_list.push_back("Ethernet12");
+    phy_interface_alias_map["Ethernet12"] = "eth12";
+
+    relay_config config = {};
+    config.phy_interface = "Ethernet12";
+    config.vlan = "Vlan10";
+    config.vrf_selection_opt = "enable";
+    config.vrf = "Vrf00";
+    vlan_vrf_map["Vlan10"] = std::string(32, 'v');  // 32-char VRF name overflows vss_buf[32]
+
+    m_config.hostname = "host";
+    m_config.host_mac_addr = "12:32:54:24:95:36";
+
+    encode_relay_option(&dhcpLayer, &config);
+
+    auto agent_option = dhcpLayer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
+    ASSERT_FALSE(agent_option.isNull()) << "option 82 must still be present";
+
+    // VSS sub-option (151) must be absent; circuit-id (1) and remote-id (2) must be present
+    const uint8_t *data = agent_option.getValue();
+    size_t len = agent_option.getDataSize();
+    bool has_circuit_id = false, has_remote_id = false, has_vss = false;
+    for (size_t i = 0; i + 1 < len; ) {
+        uint8_t type = data[i];
+        uint8_t slen = data[i + 1];
+        if (type == 1) has_circuit_id = true;
+        if (type == 2) has_remote_id = true;
+        if (type == 151) has_vss = true;
+        i += 2 + slen;
+    }
+    EXPECT_TRUE(has_circuit_id);
+    EXPECT_TRUE(has_remote_id);
+    EXPECT_FALSE(has_vss) << "VSS sub-option must be skipped for oversized VRF name";
+}
+
+TEST(DHCPRelayTest, encode_relay_option_short_mac) {
+    interface_list.clear();
+    phy_interface_alias_map.clear();
+    vlan_vrf_map.clear();
+    m_config = {};
+
+    pcpp::MacAddress clientMac("00:0e:86:11:c0:75");
+    pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_DISCOVER, clientMac);
+
+    interface_list.push_back("Ethernet12");
+    phy_interface_alias_map["Ethernet12"] = "eth12";
+
+    relay_config config = {};
+    config.phy_interface = "Ethernet12";
+    config.vlan = "Vlan10";
+    vlan_vrf_map["Vlan10"] = "default";
+
+    m_config.hostname = "host";
+    m_config.host_mac_addr = "ab:cd";  // shorter than MAC_ADDR_STR_LEN (17)
+
+    encode_relay_option(&dhcpLayer, &config);
+
+    auto agent_option = dhcpLayer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
+    ASSERT_FALSE(agent_option.isNull());
+
+    const uint8_t *data = agent_option.getValue();
+    size_t len = agent_option.getDataSize();
+    bool has_remote_id = false;
+    for (size_t i = 0; i + 1 < len; ) {
+        uint8_t type = data[i];
+        uint8_t slen = data[i + 1];
+        if (type == 2) {
+            has_remote_id = true;
+            EXPECT_EQ(slen, (uint8_t)m_config.host_mac_addr.length())
+                << "remote-id length must equal actual MAC string length, not MAC_ADDR_STR_LEN";
+        }
+        i += 2 + slen;
+    }
+    EXPECT_TRUE(has_remote_id) << "remote-id sub-option must be present";
 }
