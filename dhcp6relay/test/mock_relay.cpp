@@ -960,10 +960,12 @@ TEST(relay, shutdown_relay) {
 
 TEST(options, Add) {
   class Options options;
+  EXPECT_FALSE(options.Has(OPTION_INTERFACE_ID));
   option_interface_id intf_id;
   std::string s_addr = "2001::1000::1";
   inet_pton(AF_INET6, s_addr.c_str(), &intf_id.interface_id);
   EXPECT_TRUE(options.Add(OPTION_INTERFACE_ID, (const uint8_t *)&intf_id.interface_id, sizeof(option_interface_id)));
+  EXPECT_TRUE(options.Has(OPTION_INTERFACE_ID));
   auto option_get = options.Get(OPTION_INTERFACE_ID);
   EXPECT_EQ(option_get.size(), sizeof(option_interface_id));
   EXPECT_EQ(std::memcmp(option_get.data(), &intf_id, sizeof(option_interface_id)), 0);
@@ -1189,6 +1191,11 @@ TEST(relay, get_relay_int_from_relay_msg) {
       0x00,0x00,0xfe,0x80,0x00,0x00,0x00,0x00,0x00,0x00,0x12,0x70,0xfd,0xff,0xfe,0xcb,
       0x0c,0x06,0x00,0x09,0x00,0x04,0x07,0x00,0x30,0x39
   };
+  uint8_t relay_reply_with_short_opt18[] = {
+      0x0d,0x00,0xfc,0x02,0x10,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+      0x00,0x01,0xfe,0x80,0x00,0x00,0x00,0x00,0x00,0x00,0x12,0x70,0xfd,0xff,0xfe,0xcb,
+      0x0c,0x06,0x00,0x12,0x00,0x01,0xff
+  };
   std::unordered_map<std::string, relay_config> vlans;
   struct relay_config config{
     .interface = vlan_str,
@@ -1219,6 +1226,25 @@ TEST(relay, get_relay_int_from_relay_msg) {
   // no option18 + zero link-address + valid name mapping + valid vlan config mapping
   value = get_relay_int_from_relay_msg(relay_reply_without_opt18_linkaddr_zero, sizeof(relay_reply_without_opt18_linkaddr_zero), &vlans);
   EXPECT_EQ((uintptr_t)value, NULL);
+
+  // A truncated interface-id must not be read as an IPv6 address.
+  value = get_relay_int_from_relay_msg(relay_reply_with_short_opt18, sizeof(relay_reply_with_short_opt18), &vlans);
+  EXPECT_EQ((uintptr_t)value, NULL);
+}
+
+TEST(relay, configured_server_source) {
+  relay_config config{};
+  sockaddr_in6 server{};
+  in6_addr configured{};
+  in6_addr unconfigured{};
+
+  ASSERT_EQ(inet_pton(AF_INET6, "fc02:2000::1", &server.sin6_addr), 1);
+  config.servers_sock.push_back(server);
+  ASSERT_EQ(inet_pton(AF_INET6, "fc02:2000::1", &configured), 1);
+  ASSERT_EQ(inet_pton(AF_INET6, "fc02:2000::2", &unconfigured), 1);
+
+  EXPECT_TRUE(is_addr_from_configured_server(configured, &config));
+  EXPECT_FALSE(is_addr_from_configured_server(unconfigured, &config));
 }
 
 TEST(relay, server_callback_dualtor) {

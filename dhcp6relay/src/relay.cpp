@@ -93,6 +93,15 @@ bool inline isIPv6Zero(const in6_addr &addr) {
     return (memcmp(&addr, &in6addr_any, sizeof(in6addr_any)) == 0);
 }
 
+bool is_addr_from_configured_server(const in6_addr &src, const relay_config *config) {
+    for (const auto &server : config->servers_sock) {
+        if (memcmp(&src, &server.sin6_addr, sizeof(src)) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* Options Class Definition */
 
 // add single option
@@ -109,6 +118,10 @@ bool Options::Delete(OptionCode key) {
     }
     m_options.erase(key);
     return true;
+}
+
+bool Options::Has(OptionCode key) const {
+    return m_options.find(key) != m_options.end();
 }
 
 // get a copy of option value based on OptionCode
@@ -1058,13 +1071,18 @@ get_relay_int_from_relay_msg(const uint8_t *msg, int32_t len, std::unordered_map
         return NULL;
     }
 
+    const bool has_interface_id = relay.m_option_list.Has(OPTION_INTERFACE_ID);
     auto opt_value = relay.m_option_list.Get(OPTION_INTERFACE_ID);
     in6_addr address = in6addr_any;
-    if (opt_value.empty()) {
+    if (!has_interface_id) {
         std::memcpy(&address, &relay.m_msg_hdr.link_address, sizeof(in6_addr));
-    } else {
+    } else if (opt_value.size() == sizeof(in6_addr)) {
         auto interface_id = opt_value.data();
         std::memcpy(&address, interface_id, sizeof(in6_addr));
+    } else {
+        syslog(LOG_WARNING, "Relay-reply contains malformed Interface-ID option length %zu\n",
+               opt_value.size());
+        return NULL;
     }
 
     // multi-level relay agents
@@ -1130,6 +1148,12 @@ void server_callback_dualtor(evutil_socket_t fd, short event, void *arg) {
             syslog(LOG_WARNING, "Invalid DHCPv6 header content on loopback socket, packet will be dropped\n");
             continue;
         }
+        if (!is_addr_from_configured_server(from.sin6_addr, config)) {
+            char addr_str[INET6_ADDRSTRLEN];
+            inet_ntop(AF_INET6, &from.sin6_addr, addr_str, sizeof(addr_str));
+            syslog(LOG_WARNING, "Dropping relay-reply from %s: not a configured DHCPv6 server\n", addr_str);
+            continue;
+        }
         if (!config->is_lla_ready) {
             syslog(LOG_WARNING, "Link local address for %s is not ready, packet will be dropped\n", config->interface.c_str());
             continue;
@@ -1176,6 +1200,14 @@ void server_callback(evutil_socket_t fd, short event, void *arg) {
         if (msg_type < DHCPv6_MESSAGE_TYPE_SOLICIT || msg_type > DHCPv6_MESSAGE_TYPE_RELAY_REPL) {
             increase_counter(config->state_db, config->interface, DHCPv6_MESSAGE_TYPE_UNKNOWN);
             syslog(LOG_WARNING, "Unknown DHCPv6 message type %d\n", msg_type);
+            continue;
+        }
+
+        if (msg_type == DHCPv6_MESSAGE_TYPE_RELAY_REPL &&
+            !is_addr_from_configured_server(from.sin6_addr, config)) {
+            char addr_str[INET6_ADDRSTRLEN];
+            inet_ntop(AF_INET6, &from.sin6_addr, addr_str, sizeof(addr_str));
+            syslog(LOG_WARNING, "Dropping relay-reply from %s: not a configured DHCPv6 server\n", addr_str);
             continue;
         }
 

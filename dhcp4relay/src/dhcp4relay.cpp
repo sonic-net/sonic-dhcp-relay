@@ -257,6 +257,19 @@ void prepare_relay_server_config(relay_config &interface_config) {
     }
 }
 
+bool is_ipv4_addr_from_configured_server(const std::string &src_ip,
+                                         const relay_config &config) {
+    in_addr source = {0};
+    if (inet_pton(AF_INET, src_ip.c_str(), &source) != 1) {
+        return false;
+    }
+
+    return std::any_of(config.servers_sock.begin(), config.servers_sock.end(),
+                       [&source](const sockaddr_in &server) {
+                           return source.s_addr == server.sin_addr.s_addr;
+                       });
+}
+
 /**
  * @code                        addr_is_primary(const std::string &ifname, const struct in_addr *addr);
  *
@@ -949,6 +962,13 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
         freeifaddrs(ifa);
     }
     auto config = config_itr->second;
+
+    if (!is_ipv4_addr_from_configured_server(src_ip, config)) {
+        SWSS_LOG_WARN("[DHCPV4_RELAY] Dropping server reply from %s: not a configured server for %s",
+                      src_ip.c_str(), config.vlan.c_str());
+        dhcp_cntr_table.increment_counter(config.vlan, "RX", DHCPv4_MESSAGE_TYPE_DROP);
+        return;
+    }
 
     dhcp_cntr_table.increment_counter(config.vlan, "RX", (int)dhcp_pkt->getMessageType());
     /* TODO: Also check it is matching remote ID*/
