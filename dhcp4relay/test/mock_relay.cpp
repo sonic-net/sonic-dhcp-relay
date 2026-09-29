@@ -36,32 +36,6 @@ ssize_t RealWrite(int fd, const void *buf, size_t count) {
     return syscall(SYS_write, fd, buf, count);
 }
 
-bool InitConfigPipeForTest() {
-    if (config_pipe[0] > 0) {
-        if (close(config_pipe[0]) != 0) {
-            ADD_FAILURE() << "close config_pipe[0]: " << strerror(errno);
-            return false;
-        }
-        config_pipe[0] = -1;
-    }
-    if (config_pipe[1] > 0) {
-        if (close(config_pipe[1]) != 0) {
-            ADD_FAILURE() << "close config_pipe[1]: " << strerror(errno);
-            return false;
-        }
-        config_pipe[1] = -1;
-    }
-    if (pipe(config_pipe) != 0) {
-        ADD_FAILURE() << "pipe config_pipe: " << strerror(errno);
-        return false;
-    }
-    if (fcntl(config_pipe[0], F_SETFL, O_NONBLOCK) == -1) {
-        ADD_FAILURE() << "fcntl O_NONBLOCK on config_pipe[0]: " << strerror(errno);
-        return false;
-    }
-    return true;
-}
-
 // DHCP options start after the 236-byte BOOTP header and 4-byte magic cookie.
 static constexpr size_t kDhcpOptionsOffset = 240;
 
