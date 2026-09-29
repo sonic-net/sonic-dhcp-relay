@@ -6,6 +6,9 @@
 #include <chrono>
 #include <thread>
 #include <unistd.h>
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
 #include "gtest/gtest.h"
 #include "gmock/gmock.h"
 #include "mock_relay.h"
@@ -191,6 +194,32 @@ TEST(addrIsPrimary, unknown_ip_returns_true) {
     testing_db::reset();
 }
 
+static bool InitMuxConfigPipeForTest() {
+    if (config_pipe[0] > 0) {
+        if (close(config_pipe[0]) != 0) {
+            ADD_FAILURE() << "close config_pipe[0]: " << strerror(errno);
+            return false;
+        }
+        config_pipe[0] = -1;
+    }
+    if (config_pipe[1] > 0) {
+        if (close(config_pipe[1]) != 0) {
+            ADD_FAILURE() << "close config_pipe[1]: " << strerror(errno);
+            return false;
+        }
+        config_pipe[1] = -1;
+    }
+    if (pipe(config_pipe) != 0) {
+        ADD_FAILURE() << "pipe config_pipe: " << strerror(errno);
+        return false;
+    }
+    if (fcntl(config_pipe[0], F_SETFL, O_NONBLOCK) == -1) {
+        ADD_FAILURE() << "fcntl O_NONBLOCK on config_pipe[0]: " << strerror(errno);
+        return false;
+    }
+    return true;
+}
+
 TEST(MuxState, explicit_standby_only) {
     set_dual_tor_enabled(true);
     update_mux_port_state({"Ethernet4", "standby", true});
@@ -222,7 +251,7 @@ TEST(MuxState, standby_filter_requires_dualtor) {
 }
 
 TEST(MuxState, manager_updates_main_thread_cache) {
-    ASSERT_TRUE(InitConfigPipeForTest());
+    ASSERT_TRUE(InitMuxConfigPipeForTest());
     EXPECT_GLOBAL_CALL(write, write(_, _, _))
         .Times(3)
         .WillRepeatedly(Invoke(RealWrite));
@@ -254,7 +283,7 @@ TEST(MuxState, manager_updates_main_thread_cache) {
 }
 
 TEST(MuxState, manager_ignores_set_without_state) {
-    ASSERT_TRUE(InitConfigPipeForTest());
+    ASSERT_TRUE(InitMuxConfigPipeForTest());
     EXPECT_GLOBAL_CALL(write, write(_, _, _))
         .Times(0);
 
@@ -271,7 +300,7 @@ TEST(MuxState, manager_ignores_set_without_state) {
 }
 
 TEST(MuxState, dual_tor_reenable_refreshes_cleared_cache) {
-    ASSERT_TRUE(InitConfigPipeForTest());
+    ASSERT_TRUE(InitMuxConfigPipeForTest());
     EXPECT_GLOBAL_CALL(write, write(_, _, _))
         .Times(2)
         .WillRepeatedly(Invoke(RealWrite));
