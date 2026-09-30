@@ -66,7 +66,7 @@ struct relay_config {
     int lla_sock;
     int lo_sock;
     int filter;
-    sockaddr_in6 link_address;
+    sockaddr_in6 link_address{};
     std::shared_ptr<swss::DBConnector> state_db;
     std::string interface;
     std::string mux_key;
@@ -183,10 +183,11 @@ int prepare_lo_socket(const char *lo);
 /**
  * @code                prepare_vlan_sockets(int &gua_sock, int &lla_sock, relay_config &config);
  * 
- * @brief               prepare vlan L3 socket for sending
+ * @brief               prepare vlan L3 sockets and save the first non-secondary global address as link_address
  *
  * @param gua_sock      socket binded to global address for relaying client message to server and listening for server message
  * @param lla_sock      socket binded to link_local address for relaying server message to client
+ * @param config        VLAN configuration with the existing CONFIG_DB connector
  *
  * @return              int
  */
@@ -195,7 +196,7 @@ int prepare_vlan_sockets(int &gua_sock, int &lla_sock, relay_config &config);
 /**
  * @code                        prepare_relay_config(relay_config &interface_config, int gua_sock, int filter);
  * 
- * @brief                       prepare for specified relay interface config: server and link address
+ * @brief                       prepare server addresses and register the VLAN address selected by prepare_vlan_sockets
  *
  * @param interface_config      pointer to relay config to be prepared
  * @param gua_sock              L3 socket used for relaying messages
