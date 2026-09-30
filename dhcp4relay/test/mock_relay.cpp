@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <iostream>
+#include <iterator>
 #include <signal.h>
 #include <event2/event.h>
 #include <event2/bufferevent.h>
@@ -22,6 +23,7 @@
 #include <pcapplusplus/UdpLayer.h>
 #include <pcapplusplus/PayloadLayer.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <cerrno>
 #include <cstring>
 
@@ -526,6 +528,35 @@ TEST(prepareConfig, update_vlan_mapping) {
     vlan_interface_table.del(vlan_key);
     vlan_map.clear();
     portchannel_map.clear();
+}
+
+struct VlanRoutingContextCase {
+    std::vector<swss::FieldValueTuple> fields;
+    std::string expected_vrf;
+};
+
+static const VlanRoutingContextCase vlan_routing_context_cases[] = {
+    {{}, "default"},
+    {{{"vrf_name", "VrfRed"}}, "VrfRed"},
+    {{{"vnet_name", "VnetBlue"}}, "VnetBlue"},
+    {{{"vnet_name", "VnetBlue"}, {"vrf_name", "VrfRed"}}, "VrfRed"},
+    {{{"vrf_name", ""}, {"vnet_name", "VnetBlue"}}, "VnetBlue"},
+    {{{"vnet_name", ""}}, "default"},
+    {{{"vrf_name", ""}, {"vnet_name", ""}}, "default"},
+};
+
+TEST(prepareConfig, update_vlan_mapping_vnet_fallback) {
+    swss::Table vlan_interface_table(config_db.get(), "VLAN_INTERFACE");
+    const std::string vlan = "Vlan4090";
+    for (const auto &test_case : vlan_routing_context_cases) {
+        SCOPED_TRACE(test_case.expected_vrf);
+        vlan_interface_table.del(vlan);
+        vlan_interface_table.set(vlan, test_case.fields);
+        update_vlan_mapping(vlan, true);
+        expect_mapping(vlan_vrf_map, vlan, test_case.expected_vrf);
+    }
+    vlan_interface_table.del(vlan);
+    update_vlan_mapping(vlan, false);
 }
 
 TEST(prepareConfig, update_vlan_mapping_stale_delete) {
@@ -1045,6 +1076,206 @@ TEST(DHCPMgrTest, initialize_config_listener) {
     dhcpMgr.stop_db_updates();
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     EXPECT_EQ(vlans_copy[vlan].max_hop_count, 16);
+    dhcp_table.del(vlan);
+}
+
+TEST(DHCPMgrTest, process_relay_and_vlan_interface_routing_context) {
+    const VlanRoutingContextCase interface_cases[] = {
+        {{{"vrf", "VrfState"}}, "VrfState"},
+        {{{"vrf", "VnetBlue"}}, "VnetBlue"},
+        {{{"vrf", "default"}}, "default"},
+        {{{"vrf", ""}}, "default"},
+        {{{"vrf_name", "VrfConfig"}}, ""},
+        {{{"vnet_name", "VnetBlue"}}, ""},
+        {{{"state", "ok"}}, ""},
+        {{}, ""},
+    };
+    DHCPMgr dhcp_mgr;
+    ASSERT_TRUE(InitConfigPipeForTest());
+    EXPECT_GLOBAL_CALL(write, write(_, _, _))
+        .Times(std::size(vlan_routing_context_cases) + std::size(interface_cases) + 1)
+        .WillRepeatedly(Invoke(RealWrite));
+    swss::Table vlan_interface_table(config_db.get(), "VLAN_INTERFACE");
+    const std::string vlan = "Vlan4090";
+    std::deque<swss::KeyOpFieldsValuesTuple> entries;
+    event_config event;
+    entries.emplace_back(vlan, "SET",
+                         std::vector<swss::FieldValueTuple>{{"dhcpv4_servers", "192.0.2.1"}});
+
+    for (const auto &test_case : vlan_routing_context_cases) {
+        SCOPED_TRACE(test_case.expected_vrf);
+        vlan_interface_table.del(vlan);
+        vlan_interface_table.set(vlan, test_case.fields);
+        dhcp_mgr.process_relay_notification(entries);
+        ASSERT_EQ(read(config_pipe[0], &event, sizeof(event)), static_cast<ssize_t>(sizeof(event)));
+        ASSERT_EQ(event.type, DHCPv4_RELAY_CONFIG_UPDATE);
+        std::unique_ptr<relay_config> config(static_cast<relay_config *>(event.msg));
+        ASSERT_NE(config, nullptr);
+        EXPECT_EQ(config->vrf, test_case.expected_vrf);
+        EXPECT_EQ(vlans_copy.at(vlan).vrf, test_case.expected_vrf);
+    }
+
+    vlan_interface_table.set(vlan, {{"vnet_name", "VnetBlue"}});
+    entries.clear();
+    entries.emplace_back(vlan, "SET",
+                         std::vector<swss::FieldValueTuple>{{"dhcpv4_servers", "192.0.2.1"},
+                                                            {"server_vrf", "VrfServer"}});
+    dhcp_mgr.process_relay_notification(entries);
+    ASSERT_EQ(read(config_pipe[0], &event, sizeof(event)), static_cast<ssize_t>(sizeof(event)));
+    ASSERT_EQ(event.type, DHCPv4_RELAY_CONFIG_UPDATE);
+    std::unique_ptr<relay_config> server_config(static_cast<relay_config *>(event.msg));
+    ASSERT_NE(server_config, nullptr);
+    EXPECT_EQ(server_config->vrf, "VrfServer");
+
+    for (const auto &test_case : interface_cases) {
+        SCOPED_TRACE(test_case.expected_vrf);
+        entries.clear();
+        entries.emplace_back(vlan, "SET", test_case.fields);
+        dhcp_mgr.process_vlan_interface_notification(entries);
+        ASSERT_EQ(read(config_pipe[0], &event, sizeof(event)), static_cast<ssize_t>(sizeof(event)));
+        ASSERT_EQ(event.type, DHCPv4_RELAY_VLAN_INTERFACE_UPDATE);
+        std::unique_ptr<vlan_interface_config> config(static_cast<vlan_interface_config *>(event.msg));
+        ASSERT_NE(config, nullptr);
+        EXPECT_EQ(config->vlan, vlan);
+        EXPECT_EQ(config->vrf, test_case.expected_vrf);
+    }
+    vlan_interface_table.del(vlan);
+    vlans_copy.erase(vlan);
+    close(config_pipe[0]);
+    close(config_pipe[1]);
+    config_pipe[0] = config_pipe[1] = -1;
+}
+
+TEST(DHCPMgrTest, process_vlan_interface_address_notifications) {
+    DHCPMgr dhcp_mgr;
+    ASSERT_TRUE(InitConfigPipeForTest());
+    EXPECT_GLOBAL_CALL(write, write(_, _, _)).Times(4).WillRepeatedly(Invoke(RealWrite));
+    const std::string vlan = "Vlan4090";
+    vlans_copy[vlan].vlan = vlan;
+    vlans_copy[vlan].vrf = "VnetBlue";
+    vlan_vrf_map[vlan] = "VnetBlue";
+    std::deque<swss::KeyOpFieldsValuesTuple> entries;
+    for (const auto &operation : {"SET", "DEL"}) {
+        for (const auto &key : {"Vlan4090|192.0.2.1/24", "Vlan4090|2001:db8::1/64",
+                               "Ethernet0", "Ethernet0|192.0.2.1/24",
+                               "Vlan4089", "Vlan4089|192.0.2.1/24"}) {
+            entries.emplace_back(key, operation, std::vector<swss::FieldValueTuple>{});
+        }
+    }
+    dhcp_mgr.process_vlan_interface_notification(entries);
+    for (int i = 0; i < 4; ++i) {
+        event_config event;
+        ASSERT_EQ(read(config_pipe[0], &event, sizeof(event)), static_cast<ssize_t>(sizeof(event)));
+        EXPECT_EQ(event.type, DHCPv4_RELAY_VLAN_INTERFACE_UPDATE);
+        std::unique_ptr<vlan_interface_config> config(static_cast<vlan_interface_config *>(event.msg));
+        ASSERT_NE(config, nullptr);
+        EXPECT_EQ(config->vlan, vlan);
+        EXPECT_TRUE(config->vrf.empty());
+    }
+    pollfd readiness{config_pipe[0], POLLIN, 0};
+    EXPECT_EQ(poll(&readiness, 1, 0), 0);
+    expect_mapping(vlan_vrf_map, vlan, "VnetBlue");
+    EXPECT_EQ(vlans_copy.at(vlan).vrf, "VnetBlue");
+    vlans_copy.erase(vlan);
+    vlan_vrf_map.erase(vlan);
+    close(config_pipe[0]);
+    close(config_pipe[1]);
+    config_pipe[0] = config_pipe[1] = -1;
+}
+
+TEST(DHCPMgrTest, address_updates_refresh_vlan_without_changing_routing_context) {
+    const struct {
+        const char *key_suffix;
+        const char *operation;
+        const char *address;
+        const char *netmask;
+    } address_cases[] = {
+        {"192.0.2.1/24", "SET", "192.0.2.1", "255.255.255.0"},
+        {"192.0.2.2/25", "SET", "192.0.2.2", "255.255.255.128"},
+        {"2001:db8::1/64", "SET", "192.0.2.2", "255.255.255.128"},
+        {"2001:db8::1/64", "DEL", "192.0.2.2", "255.255.255.128"},
+        {"192.0.2.2/25", "DEL", nullptr, nullptr},
+        {"192.0.2.3/24", "SET", "192.0.2.3", "255.255.255.0"},
+    };
+    const std::string client_contexts[] = {"default", "VrfRed", "VnetBlue"};
+    const auto event_count = 2 * std::size(client_contexts) * std::size(address_cases);
+    DHCPMgr dhcp_mgr;
+    ASSERT_TRUE(InitConfigPipeForTest());
+    EXPECT_GLOBAL_CALL(write, write(_, _, _)).Times(event_count).WillRepeatedly(Invoke(RealWrite));
+    struct ifaddrs *mock_ifaddrs = nullptr;
+    EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_)).Times(event_count).WillRepeatedly(
+        [&](struct ifaddrs **result) {
+            *result = mock_ifaddrs;
+            return 0;
+        });
+    EXPECT_GLOBAL_CALL(freeifaddrs, freeifaddrs(_)).Times(event_count).WillRepeatedly(
+        [&](struct ifaddrs *result) { EXPECT_EQ(result, mock_ifaddrs); });
+
+    const std::string vlan = "Vlan4090";
+    swss::Table dhcp_table(config_db.get(), "DHCPV4_RELAY");
+    std::unordered_map<std::string, relay_config> runtime_vlans;
+    for (const auto &client_vrf : client_contexts) {
+        for (bool server_override : {false, true}) {
+            const std::string server_vrf = server_override ? "VrfServer" : client_vrf;
+            SCOPED_TRACE(client_vrf + " -> " + server_vrf);
+            dhcp_table.del(vlan);
+            if (server_override) {
+                dhcp_table.set(vlan, {{"server_vrf", server_vrf}});
+            }
+            runtime_vlans[vlan] = relay_config{};
+            auto &config = runtime_vlans.at(vlan);
+            config.vlan = vlan;
+            config.vrf = server_vrf;
+            config.vrf_sock = -1;
+            config.source_interface = "Loopback0";
+            vlans_copy[vlan] = config;
+            vlan_vrf_map[vlan] = client_vrf;
+
+            for (const auto &address_case : address_cases) {
+                SCOPED_TRACE(std::string(address_case.operation) + " " + address_case.key_suffix);
+                mock_ifaddrs = CreateMockIfaddrs(
+                    address_case.address ? address_case.address : "0.0.0.0",
+                    address_case.netmask ? address_case.netmask : "0.0.0.0",
+                    vlan, "10.1.0.32", "Loopback0");
+                if (!address_case.address) {
+                    delete reinterpret_cast<sockaddr_in *>(mock_ifaddrs->ifa_addr);
+                    mock_ifaddrs->ifa_addr = nullptr;
+                }
+                // UNIT_TEST uses fd 1 as a socket sentinel; do not close stdout on the next refresh.
+                config.client_sock = -1;
+                std::deque<swss::KeyOpFieldsValuesTuple> entries;
+                entries.emplace_back(vlan + "|" + address_case.key_suffix, address_case.operation,
+                                     std::vector<swss::FieldValueTuple>{{"vrf", "NotAnAddressContext"}});
+                dhcp_mgr.process_vlan_interface_notification(entries);
+                pollfd readiness{config_pipe[0], POLLIN, 0};
+                const int ready = poll(&readiness, 1, 0);
+                EXPECT_EQ(ready, 1);
+                if (ready > 0 && (readiness.revents & POLLIN)) {
+                    config_event_callback(config_pipe[0], 0, &runtime_vlans);
+                }
+
+                EXPECT_EQ(config.client_sock, 1);
+                EXPECT_EQ(config.link_address.sin_addr.s_addr,
+                          address_case.address ? inet_addr(address_case.address) : INADDR_ANY);
+                EXPECT_EQ(config.link_address_netmask.sin_addr.s_addr,
+                          address_case.netmask ? inet_addr(address_case.netmask) : INADDR_ANY);
+                EXPECT_EQ(config.src_intf_sel_addr.sin_addr.s_addr, inet_addr("10.1.0.32"));
+                expect_mapping(vlan_vrf_map, vlan, client_vrf);
+                EXPECT_EQ(config.vrf, server_vrf);
+                EXPECT_EQ(config.vrf_sock, -1);
+                EXPECT_EQ(vlans_copy.at(vlan).vrf, server_vrf);
+                FreeMockIfaddrs(mock_ifaddrs);
+                mock_ifaddrs = nullptr;
+            }
+        }
+    }
+    runtime_vlans.at(vlan).client_sock = -1;
+    dhcp_table.del(vlan);
+    vlans_copy.erase(vlan);
+    vlan_vrf_map.erase(vlan);
+    close(config_pipe[0]);
+    close(config_pipe[1]);
+    config_pipe[0] = config_pipe[1] = -1;
 }
 
 TEST(DHCPMgrTest, process_portchannel_member_events) {
@@ -1688,6 +1919,68 @@ TEST(DHCPRelayTest, from_client_dual_tor_dhcp_uses_source_interface_giaddr) {
 
 TEST(DHCPRelayTest, from_client_dual_tor_bootp_uses_vlan_giaddr) {
     verify_from_client_giaddr(false, true, "192.168.10.10");
+}
+
+TEST(DHCPRelayTest, from_client_source_interface_ip) {
+    struct SourceIpCase {
+        bool is_dhcp;
+        bool use_source_interface;
+        bool resolved;
+        int deployment_id;
+        const char *expected_source;
+    };
+    const SourceIpCase test_cases[] = {
+        {true, true, true, 0, "10.1.0.32"},
+        {true, true, true, 8, "10.1.0.32"},
+        {false, true, true, 0, "10.1.0.32"},
+        {false, true, true, 8, "10.1.0.32"},
+        {true, false, true, 0, "0.0.0.0"},
+        {true, false, true, 8, "192.168.10.10"},
+        {false, true, false, 0, "0.0.0.0"},
+        {false, true, false, 8, "192.168.10.10"},
+    };
+    const auto saved_deployment_id = m_config.deployment_id;
+    for (const auto &test_case : test_cases) {
+        SCOPED_TRACE(testing::Message() << "DHCP=" << test_case.is_dhcp
+                     << " source_interface=" << test_case.use_source_interface
+                     << " resolved=" << test_case.resolved
+                     << " deployment_id=" << test_case.deployment_id);
+        auto config = make_from_client_giaddr_config(test_case.use_source_interface);
+        if (!test_case.resolved) {
+            config.src_intf_sel_addr.sin_addr.s_addr = 0;
+        }
+        m_config.deployment_id = test_case.deployment_id;
+        pcpp::DhcpLayer packet(pcpp::DHCP_DISCOVER, pcpp::MacAddress("00:0e:86:11:c0:75"));
+        packet.getDhcpHeader()->gatewayIpAddress = 0;
+        packet.getDhcpHeader()->magicNumber = test_case.is_dhcp ? DHCP_MAGIC_NUMBER : 0;
+        const auto expected_source = inet_addr(test_case.expected_source);
+        const auto expected_giaddr = test_case.is_dhcp && test_case.use_source_interface
+            ? config.src_intf_sel_addr.sin_addr.s_addr : config.link_address.sin_addr.s_addr;
+        EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).WillOnce(
+            [expected_source, expected_giaddr](int, uint8_t *header, struct sockaddr_in,
+                                               uint32_t, in_addr source, bool use_source, bool pad) {
+                EXPECT_EQ(source.s_addr, expected_source);
+                EXPECT_EQ(use_source, expected_source != 0);
+                EXPECT_EQ(reinterpret_cast<pcpp::dhcp_header *>(header)->gatewayIpAddress,
+                          expected_giaddr);
+                EXPECT_TRUE(pad);
+                return true;
+            });
+        from_client(&packet, config);
+    }
+    m_config.deployment_id = saved_deployment_id;
+}
+
+TEST(DHCPRelayTest, from_client_unresolved_source_interface_drops_dhcp) {
+    auto config = make_from_client_giaddr_config(true);
+    config.src_intf_sel_addr.sin_addr.s_addr = 0;
+    pcpp::DhcpLayer packet(pcpp::DHCP_DISCOVER, pcpp::MacAddress("00:0e:86:11:c0:75"));
+    packet.getDhcpHeader()->gatewayIpAddress = 0;
+    packet.getDhcpHeader()->magicNumber = DHCP_MAGIC_NUMBER;
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).Times(0);
+    from_client(&packet, config);
+    EXPECT_EQ(packet.getDhcpHeader()->gatewayIpAddress, 0U);
+    EXPECT_EQ(packet.getDhcpHeader()->hops, 0);
 }
 
 /* Helper: build a relay-of-relay packet (giaddr already set) with a pre-existing Option 82. */

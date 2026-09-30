@@ -802,6 +802,13 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
         }
     }
 
+    /* source-interface selection takes precedence */
+    if (!config.source_interface.empty() &&
+        config.src_intf_sel_addr.sin_addr.s_addr != 0) {
+        use_intf_ip_as_src_ip = true;
+        src_ip.s_addr = config.src_intf_sel_addr.sin_addr.s_addr;
+    }
+
     for (auto server : config.servers_sock) {
         const char *server_str = (index < config.servers.size()) ? config.servers[index].c_str() : "<unknown>";
         if (send_udp(sock, (uint8_t *)dhcp_pkt->getDhcpHeader(), server, dhcp_pkt->getHeaderLen(), src_ip, use_intf_ip_as_src_ip, true)) {
@@ -1139,12 +1146,10 @@ void update_vlan_mapping(std::string vlan, bool is_add) {
     std::string value;
     std::shared_ptr<swss::Table> vlan_intf_tbl = std::make_shared<swss::Table>(config_db.get(), CFG_VLAN_INTF_TABLE_NAME);
     vlan_intf_tbl->hget(vlan, VRF_NAME_FIELD, value);
-    if (value.size() <= 0) {
-        /* use default instance as vrf */
-        vlan_vrf_map[vlan] = "default";
-    } else {
-        vlan_vrf_map[vlan] = value;
+    if (value.empty()) {
+        vlan_intf_tbl->hget(vlan, VNET_NAME_FIELD, value);
     }
+    vlan_vrf_map[vlan] = value.empty() ? "default" : value;
 }
 
 std::string get_vlan_from_interface(const std::string &interface) {
@@ -1267,8 +1272,10 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
         std::string intf(interface_name);
         auto itr = std::find(interface_list.begin(), interface_list.end(), intf);
         /* To avoid duplicate packets, we are only processing packets from
-           interface in PORT_TABLE and packets from VXLAN interface and docker0 interfaces */
-        if ((itr == interface_list.end()) && (intf.rfind("VXLAN", 0) != 0) && (intf.rfind("docker0", 0) != 0)) {
+           interfaces in PORT_TABLE, VXLAN interfaces, and docker0. */
+        if ((itr == interface_list.end()) && (intf.rfind("VXLAN", 0) != 0) &&
+            (intf.rfind("Vxlan", 0) != 0) &&
+            (intf.rfind("docker0", 0) != 0)) {
             continue;
         }
 
