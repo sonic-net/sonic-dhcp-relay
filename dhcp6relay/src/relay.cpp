@@ -472,15 +472,9 @@ int sock_open(const struct sock_fprog *fprog)
  *
  * @return                      none
  */
-void prepare_relay_config(relay_config &interface_config, int gua_sock, int filter) {
-    struct ifaddrs *ifa, *ifa_tmp;
-    sockaddr_in6 non_link_local;
-    sockaddr_in6 link_local;
-    
-    interface_config.gua_sock = gua_sock;
-    interface_config.filter = filter; 
-
-    for(auto server: interface_config.servers) {
+void build_servers_sock(relay_config &config) {
+    config.servers_sock.clear();
+    for(auto server: config.servers) {
         sockaddr_in6 tmp;
         if(inet_pton(AF_INET6, server.c_str(), &tmp.sin6_addr) != 1)
         {
@@ -489,9 +483,20 @@ void prepare_relay_config(relay_config &interface_config, int gua_sock, int filt
         tmp.sin6_family = AF_INET6;
         tmp.sin6_flowinfo = 0;
         tmp.sin6_port = htons(RELAY_PORT);
-        tmp.sin6_scope_id = 0; 
-        interface_config.servers_sock.push_back(tmp);
+        tmp.sin6_scope_id = 0;
+        config.servers_sock.push_back(tmp);
     }
+}
+
+void prepare_relay_config(relay_config &interface_config, int gua_sock, int filter) {
+    struct ifaddrs *ifa, *ifa_tmp;
+    sockaddr_in6 non_link_local;
+    sockaddr_in6 link_local;
+
+    interface_config.gua_sock = gua_sock;
+    interface_config.filter = filter;
+
+    build_servers_sock(interface_config);
 
     if (getifaddrs(&ifa) == -1) {
         syslog(LOG_WARNING, "getifaddrs: Unable to get network interfaces\n");
@@ -1360,6 +1365,24 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
     // hence manually invoke it here to immediate execute it
     lla_check_callback(-1, 0, timer_args);
 
+    // Runtime config monitor: apply relay config changes without a container restart (wakes this loop via a self-pipe).
+    int cfg_pipe[2];
+    if (pipe(cfg_pipe) == 0) {
+        evutil_make_socket_nonblocking(cfg_pipe[0]);
+        evutil_make_socket_nonblocking(cfg_pipe[1]);
+        auto *apply_ctx = new config_apply_ctx{&vlans, timer_args, timer_event, cfg_pipe[0]};
+        auto cfg_event = event_new(base, cfg_pipe[0], EV_READ|EV_PERSIST, config_change_callback, apply_ctx);
+        if (cfg_event != NULL) {
+            event_add(cfg_event, NULL);
+            start_dhcp_config_monitor(cfg_pipe[1]);
+            syslog(LOG_INFO, "libevent: Add runtime config monitor event\n");
+        } else {
+            syslog(LOG_ERR, "libevent: Failed to create runtime config monitor event\n");
+        }
+    } else {
+        syslog(LOG_ERR, "Failed to create config monitor pipe: %s\n", strerror(errno));
+    }
+
     if(signal_init() == 0 && signal_start() == 0) {
         shutdown_relay();
         for(std::size_t i = 0; i < sockets.size(); i++) {
@@ -1369,11 +1392,77 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
 }
 
 /**
+ * @code                bool apply_desired_config(std::unordered_map<std::string, relay_config> &vlans,
+ *                                          std::unordered_map<std::string, relay_config> &desired);
+ *
+ * @brief               update the relay config of vlans that already exist, at runtime
+ *
+ * @param vlans         live per-vlan relay config (mutated in place)
+ * @param desired       desired per-vlan relay config (config fields only)
+ *
+ * @return              true if at least one vlan was newly added
+ */
+bool apply_desired_config(std::unordered_map<std::string, relay_config> &vlans,
+                          std::unordered_map<std::string, relay_config> &desired) {
+    for (auto &desired_entry : desired) {
+        auto it = vlans.find(desired_entry.first);
+        if (it == vlans.end()) {
+            continue;
+        }
+        relay_config &live = it->second;
+        relay_config &dcfg = desired_entry.second;
+        bool changed = (live.servers != dcfg.servers) ||
+                       (live.is_option_79 != dcfg.is_option_79) ||
+                       (live.is_interface_id != dcfg.is_interface_id);
+        if (changed) {
+            live.servers = dcfg.servers;
+            live.is_option_79 = dcfg.is_option_79;
+            live.is_interface_id = dcfg.is_interface_id;
+            // Rebuild the cached server sockaddr list only if the relay is active.
+            if (live.is_lla_ready) {
+                build_servers_sock(live);
+            }
+            syslog(LOG_INFO, "Update relay config for %s at runtime\n", desired_entry.first.c_str());
+        }
+    }
+    return false;
+}
+
+/**
+ * @code                config_change_callback(evutil_socket_t fd, short event, void *arg);
+ *
+ * @brief               libevent callback that applies runtime relay configuration changes
+ *
+ * @param fd            notify pipe read end
+ * @param event         libevent triggered event
+ * @param arg           pointer to config_apply_ctx
+ *
+ * @return              none
+ */
+void config_change_callback(evutil_socket_t fd, short event, void *arg) {
+    auto *ctx = reinterpret_cast<config_apply_ctx *>(arg);
+
+    // Drain the notify pipe (the monitor may have coalesced several changes into wake bytes).
+    char drain_buf[64];
+    while (read(ctx->notify_rd, drain_buf, sizeof(drain_buf)) > 0) {
+        // discard
+    }
+
+    std::unordered_map<std::string, relay_config> desired;
+    if (!fetch_desired_config(desired)) {
+        return;
+    }
+
+    apply_desired_config(*ctx->vlans, desired);
+}
+
+/**
  * @code shutdown_relay();
  *
  * @brief free signals and terminate threads
  */
 void shutdown_relay() {
+    stop_dhcp_config_monitor();
     event_del(ev_sigint);
     event_del(ev_sigterm);
     event_free(ev_sigint);
