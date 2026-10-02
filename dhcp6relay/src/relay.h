@@ -284,6 +284,56 @@ void server_callback_dualtor(evutil_socket_t fd, short event, void *arg);
  */
 void loop_relay(std::unordered_map<std::string, relay_config> &vlans);
 
+/*
+ * Context passed to config_change_callback so the libevent main thread can
+ * reconcile the live vlans map with the desired configuration published by the
+ * runtime configuration monitor thread.
+ */
+struct config_apply_ctx {
+    std::unordered_map<std::string, relay_config> *vlans;
+    void *timer_args;
+    struct event *timer_event;
+    int notify_rd;
+};
+
+/**
+ * @code                build_servers_sock(relay_config &config);
+ *
+ * @brief               (re)build the cached server sockaddr list from config.servers
+ *
+ * @param config        relay interface config whose servers_sock is rebuilt
+ *
+ * @return              none
+ */
+void build_servers_sock(relay_config &config);
+
+/**
+ * @code                apply_desired_config(std::unordered_map<std::string, relay_config> &vlans,
+ *                                          std::unordered_map<std::string, relay_config> &desired);
+ *
+ * @brief               update the relay config of vlans that already exist, at runtime
+ *
+ * @param vlans         live per-vlan relay config (mutated in place)
+ * @param desired       desired per-vlan relay config (config fields only)
+ *
+ * @return              true if at least one vlan was newly added
+ */
+bool apply_desired_config(std::unordered_map<std::string, relay_config> &vlans,
+                          std::unordered_map<std::string, relay_config> &desired);
+
+/**
+ * @code                config_change_callback(evutil_socket_t fd, short event, void *arg);
+ *
+ * @brief               libevent callback that applies runtime relay configuration changes
+ *
+ * @param fd            notify pipe read end
+ * @param event         libevent triggered event
+ * @param arg           pointer to config_apply_ctx
+ *
+ * @return              none
+ */
+void config_change_callback(evutil_socket_t fd, short event, void *arg);
+
 /**
  * @code signal_init();
  *
