@@ -937,3 +937,24 @@ TEST(DHCPRelayTest, from_client) {
     });
     from_client(&dhcpLayer, config);
 }
+
+TEST(DHCPRelayTest, from_client_discard_no_ipv4) {
+    pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
+    pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_DISCOVER, clientMac);
+    dhcpLayer.getDhcpHeader()->hops = 0;
+    dhcpLayer.getDhcpHeader()->gatewayIpAddress = 0;
+    dhcpLayer.getDhcpHeader()->opCode = BOOTPREQUEST;
+
+    relay_config config = {};
+    config.vlan = "Vlan1000";
+    config.link_address.sin_addr.s_addr = 0;
+    struct sockaddr_in addr = {0};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = inet_addr("192.168.20.100");
+    config.servers_sock = {addr};
+    config.servers = {"192.168.20.100"};
+
+    // Must not forward when VLAN has no IPv4 (isc-dhcp discard semantics).
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).Times(0);
+    from_client(&dhcpLayer, config);
+}

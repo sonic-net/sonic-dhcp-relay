@@ -248,9 +248,9 @@ bool addr_is_primary(const std::string &ifname, const struct in_addr *addr) {
  */
 void prepare_relay_interface_config(relay_config &interface_config) {
     struct ifaddrs *ifa, *ifa_tmp;
-    sockaddr_in intf_addr;
-    sockaddr_in net_mask;
-    sockaddr_in src_intf_sel;
+    sockaddr_in intf_addr = {};
+    sockaddr_in net_mask = {};
+    sockaddr_in src_intf_sel = {};
     bool intf_name_set = false;
     bool source_intf_sel_opt = false;
 
@@ -573,6 +573,16 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
  * @return none
  */
 void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
+    /* Match isc-dhcp dhcrelay: discard client packets on interfaces with no IPv4.
+     * Exact syslog text is required for rsyslog tag dhcp-relay-discard
+     * (files/image_config/rsyslog/rsyslog.d/dhcp_relay_regex.json). */
+    if (config.link_address.sin_addr.s_addr == 0) {
+        syslog(LOG_INFO, "Discarding packet received on %s interface that has no IPv4 address assigned.",
+               config.vlan.c_str());
+        dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
+        return;
+    }
+
     /* Update giaddr */
     if (!(dhcp_pkt->getDhcpHeader()->gatewayIpAddress)) {
         if (config.source_interface.length() > 0) {
