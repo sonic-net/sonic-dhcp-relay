@@ -13,11 +13,16 @@
 
 #include <map>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "dbconnector.h"
 #include "dhcp4_sender.h"
 #include "table.h"
+
+namespace pcpp {
+class DhcpLayer;
+}
 
 #define PACKED __attribute__((packed))
 
@@ -146,6 +151,7 @@ typedef enum {
     DHCPv4_SERVER_IP_DELETE,
     DHCPv4_RELAY_DUAL_TOR_UPDATE,
     DHCPv4_RELAY_PORT_UPDATE,
+    DHCPv4_RELAY_MUX_STATE_UPDATE,
     /*
      * General-purpose main<->mgr synchronisation barrier on
      * config_pipe. The mgr thread emits one to mark a coherent
@@ -182,6 +188,12 @@ struct vlan_interface_config {
 struct port_config {
     std::string phy_interface;
     std::string alias;
+    bool is_add;
+};
+
+struct mux_state_config {
+    std::string interface;
+    std::string state;
     bool is_add;
 };
 
@@ -332,6 +344,33 @@ void update_vlan_mapping(std::string vlan, bool is_add);
  * @return              VLAN name, or an empty string when the interface is not under a relayed VLAN
  */
 std::string get_vlan_from_interface(const std::string &interface);
+
+/**
+ * @brief Update the main-thread-owned mux state for one physical interface.
+ */
+void update_mux_port_state(const mux_state_config &config);
+
+/**
+ * @brief Replace the mux cache with the current STATE_DB snapshot.
+ */
+void refresh_mux_port_state();
+
+/**
+ * @brief Enable or clear DualToR-scoped standby filtering on the main thread.
+ */
+void set_dual_tor_enabled(bool enabled);
+
+/**
+ * @brief Return true only in DualToR mode when the physical interface is standby.
+ */
+bool intf_is_standby(const std::string &ifname);
+
+/**
+ * @brief Process a validated client BOOTP request unless its ingress is standby.
+ */
+void process_client_packet(pcpp::DhcpLayer *dhcp_pkt, const std::string &intf,
+                           const std::string &vlan, int vlan_id,
+                           std::unordered_map<std::string, relay_config> *vlans);
 
 /**
  * @code                pkt_in_callback(evutil_socket_t fd, short event, void *arg);
