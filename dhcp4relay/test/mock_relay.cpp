@@ -1275,6 +1275,44 @@ TEST(DHCPRelayTest, encode_relay_option82) {
     EXPECT_EQ(memcmp(vss_buf, vrf_ptr, 6), 0);
 }
 
+TEST(DHCPRelayTest, source_interface_adds_link_selection_without_explicit_flag) {
+    interface_list.push_back("Ethernet12");
+    phy_interface_alias_map["Ethernet12"] = "eth12";
+    m_config.hostname = "sonic";
+    m_config.host_mac_addr = "12:32:54:24:95:36";
+    m_config.is_dualTor = false;
+
+    relay_config config = {};
+    config.phy_interface = "Ethernet12";
+    config.vlan = "Vlan10";
+    config.source_interface = "Loopback0";
+    config.src_intf_sel_addr.sin_addr.s_addr = inet_addr("10.1.0.32");
+    config.link_address.sin_addr.s_addr = inet_addr("192.168.10.10");
+
+    pcpp::MacAddress client_mac("00:0e:86:11:c0:75");
+    pcpp::DhcpLayer request(pcpp::DHCP_DISCOVER, client_mac);
+    ASSERT_TRUE(encode_relay_option82(&request, &config));
+
+    auto option82 = request.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
+    ASSERT_NE(option82.getValue(), nullptr);
+    uint8_t length = 0;
+    auto value = decode_tlv((const uint8_t *)option82.getValue(),
+                            OPTION82_SUBOPT_LINK_SELECTION, length, option82.getDataSize());
+    ASSERT_NE(value, nullptr);
+    ASSERT_EQ(length, sizeof(uint32_t));
+    uint32_t link_address;
+    memcpy(&link_address, value, sizeof(link_address));
+    EXPECT_EQ(link_address, config.link_address.sin_addr.s_addr);
+
+    config.source_interface.clear();
+    pcpp::DhcpLayer default_request(pcpp::DHCP_DISCOVER, client_mac);
+    ASSERT_TRUE(encode_relay_option82(&default_request, &config));
+    auto default_option82 = default_request.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS);
+    ASSERT_NE(default_option82.getValue(), nullptr);
+    EXPECT_EQ(decode_tlv((const uint8_t *)default_option82.getValue(),
+                         OPTION82_SUBOPT_LINK_SELECTION, length, default_option82.getDataSize()), nullptr);
+}
+
 TEST(DHCPRelayTest, encode_relay_option82_server_client_same_vrf) {
     std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
     pcpp::EthLayer ethLayer(pcpp::MacAddress("00:13:72:25:fa:cd"), pcpp::MacAddress("00:e0:b1:49:39:02"));
