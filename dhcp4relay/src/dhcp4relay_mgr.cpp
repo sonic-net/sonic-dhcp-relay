@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <memory>
 #include <sstream>
 constexpr auto DEFAULT_TIMEOUT_MSEC = 1000;
 
@@ -16,31 +17,30 @@ using namespace swss;
 
 metadata_config m_config;
 
-bool feature_dhcp_server_enabled = false;
+std::atomic<bool> feature_dhcp_server_enabled{false};
 std::shared_ptr<swss::SubscriberStateTable> config_db_dhcp_server_ipv4_ptr = NULL;
 std::shared_ptr<swss::SubscriberStateTable> state_db_dhcp_server_ipv4_ip_ptr = NULL;
 std::shared_ptr<swss::SubscriberStateTable> config_db_relaymgr_table_ptr = NULL;
 std::string global_dhcp_server_ip;
+std::mutex m_config_mutex;
 /**
  * @brief Initializes the configuration listener for the DHCP manager.
  *
- * This function starts a new detached thread that listens for SWSS (Switch State Service)
- * notifications by invoking the handle_swss_notification method. It also sets the stop_thread
- * flag to false to indicate that the listener thread should be running.
- *
- * @note The spawned thread is detached, so it will run independently of the main thread.
+ * Starts a joinable thread that listens for SWSS notifications via
+ * handle_swss_notification(). Any prior listener is stopped and joined first.
  */
 void DHCPMgr::initialize_config_listener() {
+    stop_db_updates();
     stop_thread = false;
-    std::thread m_swss_thread(&DHCPMgr::handle_swss_notification, this);
-    m_swss_thread.detach();
+    config_listener_thread_ = std::thread(&DHCPMgr::handle_swss_notification, this);
 }
 
 /**
  * @brief Handles SWSS (Sonic Warehouse State Service) notifications for DHCPv4 relay manager.
  *
  * This method listens for configuration changes in various tables within the CONFIG_DB,
- * such as DHCPV4_RELAY, INTERFACE, LOOPBACK_INTERFACE, PORTCHANNEL_INTERFACE, and DEVICE_METADATA.
+ * such as DHCPV4_RELAY, INTERFACE, LOOPBACK_INTERFACE, PORTCHANNEL_INTERFACE,
+ * VLAN_MEMBER, PORTCHANNEL_MEMBER, and DEVICE_METADATA.
  * It uses a select loop to wait for notifications from these tables and processes them accordingly.
  *
  * The function continues to run until the `stop_thread` flag is set. For each notification,
@@ -50,6 +50,7 @@ void DHCPMgr::initialize_config_listener() {
  * Tables monitored:
  * - DHCPV4_RELAY: Triggers relay notification processing.
  * - INTERFACE, LOOPBACK_INTERFACE, PORTCHANNEL_INTERFACE: Triggers interface notification processing.
+ * - VLAN_MEMBER, PORTCHANNEL_MEMBER: Triggers client-interface membership processing.
  * - DEVICE_METADATA: Triggers device metadata notification processing.
  *
  * @note This function is intended to be run in a dedicated thread.
@@ -63,6 +64,7 @@ void DHCPMgr::handle_swss_notification() {
     swss::SubscriberStateTable config_db_portchannel_table(config_db_ptr.get(), "PORTCHANNEL_INTERFACE");
     swss::SubscriberStateTable config_db_device_metadata_table(config_db_ptr.get(), "DEVICE_METADATA");
     swss::SubscriberStateTable config_db_vlan_member_table(config_db_ptr.get(), "VLAN_MEMBER");
+    swss::SubscriberStateTable config_db_portchannel_member_table(config_db_ptr.get(), "PORTCHANNEL_MEMBER");
     swss::SubscriberStateTable config_db_feature_table(config_db_ptr.get(), "FEATURE");
     swss::SubscriberStateTable config_db_vlan_table(config_db_ptr.get(), "VLAN");
     config_db_dhcp_server_ipv4_ptr = std::make_shared<swss::SubscriberStateTable>(config_db_ptr.get(), "DHCP_SERVER_IPV4");
@@ -70,6 +72,7 @@ void DHCPMgr::handle_swss_notification() {
     swss::SubscriberStateTable config_db_port_table(config_db_ptr.get(), "PORT");
     swss::SubscriberStateTable config_db_dpu_table(config_db_ptr.get(), "DPUS");
     swss::SubscriberStateTable state_db_interface_table(state_db_ptr.get(), "INTERFACE_TABLE");
+    swss::SubscriberStateTable state_db_mux_cable_table(state_db_ptr.get(), "HW_MUX_CABLE_TABLE");
 
     std::deque<swss::KeyOpFieldsValuesTuple> entries;
     swss::Select swss_select;
@@ -79,6 +82,7 @@ void DHCPMgr::handle_swss_notification() {
     swss_select.addSelectable(&config_db_portchannel_table);
     swss_select.addSelectable(&config_db_device_metadata_table);
     swss_select.addSelectable(&config_db_vlan_member_table);
+    swss_select.addSelectable(&config_db_portchannel_member_table);
     swss_select.addSelectable(&config_db_feature_table);
     swss_select.addSelectable(&config_db_vlan_table);
     swss_select.addSelectable(config_db_dhcp_server_ipv4_ptr.get());
@@ -86,18 +90,26 @@ void DHCPMgr::handle_swss_notification() {
     swss_select.addSelectable(&config_db_port_table);
     swss_select.addSelectable(&config_db_dpu_table);
     swss_select.addSelectable(&state_db_interface_table);
+    swss_select.addSelectable(&state_db_mux_cable_table);
 
     /*
-     * Push the initial DHCPV4_RELAY snapshot down config_pipe, then
-     * a DHCPv4_RELAY_SYNC_BARRIER as the last event. pops() returns
-     * synchronously because SubscriberStateTable cached the existing
-     * keys at construction time. The main thread predrains the pipe
-     * up to the barrier before arming pkt_in_callback; without this,
-     * packets arriving during startup hit an empty vlans map and
-     * produce a per-packet 'Config not found for vlan' ERR.
+     * Push the initial DEVICE_METADATA, mux, and DHCPV4_RELAY snapshots down
+     * config_pipe, then a DHCPv4_RELAY_SYNC_BARRIER as the last event. pops()
+     * returns synchronously because SubscriberStateTable cached the existing
+     * keys at construction time. Metadata goes first so DualToR is known
+     * before mux filtering is applied. The main thread predrains the
+     * snapshots before arming pkt_in_callback.
      */
     {
         std::deque<swss::KeyOpFieldsValuesTuple> initial_entries;
+        config_db_device_metadata_table.pops(initial_entries);
+        process_device_metadata_notification(initial_entries);
+
+        initial_entries.clear();
+        state_db_mux_cable_table.pops(initial_entries);
+        process_mux_cable_notification(initial_entries);
+
+        initial_entries.clear();
         config_db_relaymgr_table_ptr->pops(initial_entries);
         if (!initial_entries.empty()) {
             SWSS_LOG_INFO("[DHCPV4_RELAY] Loading initial DHCPV4_RELAY snapshot: %zu entries",
@@ -150,32 +162,44 @@ void DHCPMgr::handle_swss_notification() {
         }
 
         entries.clear();
-	if (!feature_dhcp_server_enabled) {
-            if (config_db_relaymgr_table_ptr && selectable == config_db_relaymgr_table_ptr.get()) {
-                config_db_relaymgr_table_ptr->pops(entries);
+        /* Always pops() whatever selectable fired so its keyspace-event buffer
+           drains, then gate processing on feature_dhcp_server_enabled. Leaving a
+           feature-gated selectable undrained keeps hasCachedData() true, which
+           makes swss::Select re-queue it and spin at 100% CPU. */
+        if (config_db_relaymgr_table_ptr && selectable == config_db_relaymgr_table_ptr.get()) {
+            config_db_relaymgr_table_ptr->pops(entries);
+            if (!feature_dhcp_server_enabled) {
                 process_relay_notification(entries);
                 if (!entries.empty()) {
                     // Keep replay scoped to this DHCPV4_RELAY batch.
                     dispatch_source_intf_from_cache(entries);
                 }
-            } else if (selectable == static_cast<swss::Selectable *>(&config_db_interface_table)) {
-                config_db_interface_table.pops(entries);
+            }
+        } else if (selectable == static_cast<swss::Selectable *>(&config_db_interface_table)) {
+            config_db_interface_table.pops(entries);
+            if (!feature_dhcp_server_enabled) {
                 process_interface_notification(entries);
-            } else if (selectable == static_cast<swss::Selectable *>(&config_db_loopback_table)) {
-                config_db_loopback_table.pops(entries);
+            }
+        } else if (selectable == static_cast<swss::Selectable *>(&config_db_loopback_table)) {
+            config_db_loopback_table.pops(entries);
+            if (!feature_dhcp_server_enabled) {
                 process_interface_notification(entries);
-            } else if (selectable == static_cast<swss::Selectable *>(&config_db_portchannel_table)) {
-                config_db_portchannel_table.pops(entries);
+            }
+        } else if (selectable == static_cast<swss::Selectable *>(&config_db_portchannel_table)) {
+            config_db_portchannel_table.pops(entries);
+            if (!feature_dhcp_server_enabled) {
                 process_interface_notification(entries);
-	    }
-	} else {
-            if (config_db_dhcp_server_ipv4_ptr && selectable == config_db_dhcp_server_ipv4_ptr.get()) {
-                config_db_dhcp_server_ipv4_ptr->pops(entries);
+            }
+        } else if (config_db_dhcp_server_ipv4_ptr && selectable == config_db_dhcp_server_ipv4_ptr.get()) {
+            config_db_dhcp_server_ipv4_ptr->pops(entries);
+            if (feature_dhcp_server_enabled) {
                 process_dhcp_server_ipv4_notification(entries);
-            } else if (state_db_dhcp_server_ipv4_ip_ptr && selectable == state_db_dhcp_server_ipv4_ip_ptr.get()) {
-                state_db_dhcp_server_ipv4_ip_ptr->pops(entries);
+            }
+        } else if (state_db_dhcp_server_ipv4_ip_ptr && selectable == state_db_dhcp_server_ipv4_ip_ptr.get()) {
+            state_db_dhcp_server_ipv4_ip_ptr->pops(entries);
+            if (feature_dhcp_server_enabled) {
                 process_dhcp_server_ipv4_ip_notification(entries, swss_select, config_db_ptr);
-	    }
+            }
 	}
 
 	if (selectable == static_cast<swss::Selectable *>(&config_db_device_metadata_table)) {
@@ -184,6 +208,9 @@ void DHCPMgr::handle_swss_notification() {
         } else if (selectable == static_cast<swss::Selectable *>(&config_db_vlan_member_table)) {
             config_db_vlan_member_table.pops(entries);
             process_vlan_member_notification(entries);
+        } else if (selectable == static_cast<swss::Selectable *>(&config_db_portchannel_member_table)) {
+            config_db_portchannel_member_table.pops(entries);
+            process_portchannel_member_notification(entries);
         } else if (selectable == static_cast<swss::Selectable *>(&state_db_interface_table)) {
             state_db_interface_table.pops(entries);
             process_vlan_interface_notification(entries);
@@ -199,7 +226,40 @@ void DHCPMgr::handle_swss_notification() {
 	} else if (selectable == static_cast<swss::Selectable *>(&config_db_dpu_table)) {
             config_db_dpu_table.pops(entries);
             process_port_notification(entries);
+	} else if (selectable == static_cast<swss::Selectable *>(&state_db_mux_cable_table)) {
+            state_db_mux_cable_table.pops(entries);
+            process_mux_cable_notification(entries);
 	}
+    }
+}
+
+void DHCPMgr::process_mux_cable_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries) {
+    for (auto &entry : entries) {
+        auto mux_msg = std::make_unique<mux_state_config>();
+        mux_msg->interface = kfvKey(entry);
+        mux_msg->is_add = kfvOp(entry) != "DEL";
+
+        if (mux_msg->is_add) {
+            for (auto &field : kfvFieldsValues(entry)) {
+                if (fvField(field) == "state") {
+                    mux_msg->state = fvValue(field);
+                    break;
+                }
+            }
+            if (mux_msg->state.empty()) {
+                continue;
+            }
+        }
+
+        event_config event{};
+        event.type = DHCPv4_RELAY_MUX_STATE_UPDATE;
+        event.msg = mux_msg.get();
+        if (write(config_pipe[1], &event, sizeof(event)) != static_cast<ssize_t>(sizeof(event))) {
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to write mux state update to config pipe: %s",
+                           strerror(errno));
+            continue;
+        }
+        mux_msg.release();
     }
 }
 
@@ -229,18 +289,25 @@ void DHCPMgr::process_device_metadata_notification(std::deque<swss::KeyOpFieldsV
         bool send_dualTor_event = false;
         std::string subtype_value;
 
+        /* Work on a local copy; apply to m_config atomically at the end. */
+        metadata_config new_config;
+        {
+            std::lock_guard<std::mutex> lk(m_config_mutex);
+            new_config = m_config;
+        }
+
         for (auto &field : field_values) {
             std::string f = fvField(field);
             std::string v = fvValue(field);
 
             if (f == "hostname") {
-		m_config.hostname = v;
+                new_config.hostname = v;
             } else if (f == "mac") {
                 std::transform(v.begin(), v.end(), v.begin(), ::tolower);
-		m_config.host_mac_addr = v;
+                new_config.host_mac_addr = v;
             } else if (f == "deployment_id") {
                 try {
-                    m_config.deployment_id = static_cast<uint32_t>(std::stoul(v));
+                    new_config.deployment_id = static_cast<uint32_t>(std::stoul(v));
                 } catch (const std::exception &e) {
                     SWSS_LOG_WARN("[DHCPV4_RELAY] Invalid deployment_id value '%s': %s", v.c_str(), e.what());
                 }
@@ -249,58 +316,74 @@ void DHCPMgr::process_device_metadata_notification(std::deque<swss::KeyOpFieldsV
                 subtype_value = v;
             }
 
-            // Handle is_dualToR logic
-            if (subtype_found && subtype_value == "DualToR") {
-                m_config.is_dualTor = true;
-                send_dualTor_event = true;
-            } else if (m_config.is_dualTor) {
-                // Covers both 'subtype' deleted and any value other than "DualToR"
-                m_config.is_dualTor = false;
+        }
+
+        /* SubscriberStateTable delivers all current hash fields on every
+         * notification, so subtype_found=false means the field was deleted
+         * (not merely unchanged).  Clear derived flags on removal to avoid
+         * leaving relays in DualToR/SmartSwitch mode after the device subtype
+         * is unset. */
+        if (subtype_found) {
+            bool prev_dual_tor = new_config.is_dualTor;
+            new_config.is_dualTor = (subtype_value == "DualToR");
+            if (prev_dual_tor != new_config.is_dualTor) {
                 send_dualTor_event = true;
             }
 
-            // Handle is_SmartSwitch logic
-            if (subtype_found && subtype_value == "SmartSwitch") {
-                m_config.is_SmartSwitch = true;
+            if (subtype_value == "SmartSwitch") {
+                new_config.is_SmartSwitch = true;
                 std::string bridge_name;
                 bool ok = midplane_tbl.hget("GLOBAL", "bridge", bridge_name);
                 if (ok) {
-                    m_config.midplane_bridge = bridge_name;
+                    new_config.midplane_bridge = bridge_name;
                 } else {
                     SWSS_LOG_ERROR("Failed to read midplane bridge name");
                 }
-            } else if (m_config.is_SmartSwitch) {
-                m_config.is_SmartSwitch = false;
+            } else {
+                new_config.is_SmartSwitch = false;
             }
-
-            if (send_dualTor_event) {
-                relay_config *relay_msg = nullptr;
-                try {
-                    relay_msg = new relay_config();
-                } catch (const std::bad_alloc &e) {
-                    SWSS_LOG_ERROR("[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
-                    return;
-                }
-
-                if (m_config.is_dualTor) {
-                   relay_msg->is_add = true;
-                } else {
-                   relay_msg->is_add = false;
-                }
-
-                event_config event;
-                event.type = DHCPv4_RELAY_DUAL_TOR_UPDATE;
-                event.msg = static_cast<void *>(relay_msg);
-                // Write the pointer address to the pipe
-                if (write(config_pipe[1], &event, sizeof(event)) == -1) {
-                    SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to write to config update pipe: %s", strerror(errno));
-                    delete relay_msg;
-                }
-	    }
+        } else {
+            /* subtype field absent: it was deleted.  Reset derived flags so
+             * the relay stops using DualToR/SmartSwitch-specific behaviour. */
+            if (new_config.is_dualTor) {
+                new_config.is_dualTor = false;
+                send_dualTor_event = true;
+            }
+            new_config.is_SmartSwitch = false;
         }
+
         /* Re-set hostname to default value if hostname is deleted */
-	if (m_config.hostname.length() == 0) {
-            m_config.hostname = "sonic";
+        if (new_config.hostname.length() == 0) {
+            new_config.hostname = "sonic";
+        }
+        bool is_dualTor_final = new_config.is_dualTor;
+        {
+            std::lock_guard<std::mutex> lk(m_config_mutex);
+            m_config = std::move(new_config);
+        }
+
+        /* Publish the DualToR update only after m_config is committed, so the
+         * main thread's prepare_relay_interface_config() observes the fresh
+         * is_dualTor instead of a stale value. Publishing once here (rather than
+         * per field inside the loop) also avoids duplicate events. */
+        if (send_dualTor_event) {
+            relay_config *relay_msg = nullptr;
+            try {
+                relay_msg = new relay_config();
+            } catch (const std::bad_alloc &e) {
+                SWSS_LOG_ERROR("[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
+                return;
+            }
+            relay_msg->is_add = is_dualTor_final;
+
+            event_config event;
+            event.type = DHCPv4_RELAY_DUAL_TOR_UPDATE;
+            event.msg = static_cast<void *>(relay_msg);
+            // Write the pointer address to the pipe
+            if (write(config_pipe[1], &event, sizeof(event)) == -1) {
+                SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to write to config update pipe: %s", strerror(errno));
+                delete relay_msg;
+            }
         }
     }
 }
@@ -602,7 +685,10 @@ void DHCPMgr::process_feature_notification(std::deque<swss::KeyOpFieldsValuesTup
         } else if (state == "disabled" && feature_dhcp_server_enabled) {
             SWSS_LOG_INFO("[DHCPV4_RELAY] Disabling DHCP server auto-config mode and cleaning up.");
             feature_dhcp_server_enabled = false;
-            global_dhcp_server_ip.clear();
+            {
+                std::lock_guard<std::mutex> lk(m_config_mutex);
+                global_dhcp_server_ip.clear();
+            }
 	    vlans_copy.clear();
 	    //Delete the old auto generated relay config in main thread
 	    event_config event;
@@ -663,18 +749,28 @@ void DHCPMgr::process_dhcp_server_ipv4_ip_notification(std::deque<swss::KeyOpFie
 		  SWSS_LOG_ERROR("[DHCPV4_RELAY] dhcp_server IP is not present in state DB");
 		  return;
             }
-	    //modification case
-            if (!global_dhcp_server_ip.empty() && (global_dhcp_server_ip != server_ip)) {
+	    //modification case. Update the global under the lock and before the
+	    //pipe event so the main thread never reads a torn/stale string.
+	    std::string prev_ip;
+	    {
+		std::lock_guard<std::mutex> lk(m_config_mutex);
+		is_modify = !global_dhcp_server_ip.empty() && (global_dhcp_server_ip != server_ip);
+		if (is_modify) {
+		    prev_ip = global_dhcp_server_ip;
+		}
+		global_dhcp_server_ip = server_ip;
+	    }
+            if (is_modify) {
 		event_config event;
                 event.type = DHCPv4_SERVER_IP_UPDATE;
 
 		if (write(config_pipe[1], &event, sizeof(event)) == -1) {
                     SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to send delete event for dhcp_server IP update");
+		    std::lock_guard<std::mutex> lk(m_config_mutex);
+		    global_dhcp_server_ip = prev_ip;
 		    return;
                 }
-		is_modify = true;
 	    }
-	    global_dhcp_server_ip = server_ip;
 	    //Since the server IP see newly added, restart the listener for the dhcp_server config.
 	    if (!is_modify) {
 	       SWSS_LOG_INFO("[DHCPV4_RELAY] Restarting the dhcp_server listener");
@@ -693,7 +789,10 @@ void DHCPMgr::process_dhcp_server_ipv4_ip_notification(std::deque<swss::KeyOpFie
                 SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to send delete event for dhcp_server IP delete");
 		return;
             }
-	    global_dhcp_server_ip.clear();
+	    {
+		std::lock_guard<std::mutex> lk(m_config_mutex);
+		global_dhcp_server_ip.clear();
+	    }
 	    vlans_copy.clear();
 	}
     }
@@ -744,6 +843,35 @@ void DHCPMgr::process_vlan_member_notification(std::deque<swss::KeyOpFieldsValue
             delete msg;
         }
      }
+}
+
+void DHCPMgr::process_portchannel_member_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries) {
+    for (auto &entry : entries) {
+        std::string key = kfvKey(entry);
+        std::string operation = kfvOp(entry);
+        size_t pos = key.find('|');
+
+        portchannel_member_config *msg = nullptr;
+        try {
+            msg = new portchannel_member_config();
+        } catch (const std::bad_alloc &e) {
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Memory allocation failed: %s", e.what());
+            return;
+        }
+
+        msg->portchannel = key.substr(0, pos);
+        msg->interface = key.substr(pos + 1);
+        msg->is_add = operation == "SET";
+
+        event_config event;
+        event.type = DHCPv4_RELAY_PORTCHANNEL_MEMBER_UPDATE;
+        event.msg = static_cast<void *>(msg);
+        if (write(config_pipe[1], &event, sizeof(event)) == -1) {
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to send PortChannel member update for <%s, %s>",
+                           msg->portchannel.c_str(), msg->interface.c_str());
+            delete msg;
+        }
+    }
 }
 
 void DHCPMgr::process_vlan_interface_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries) {
@@ -841,14 +969,23 @@ void DHCPMgr::process_dhcp_server_ipv4_notification(std::deque<swss::KeyOpFields
             }
 
             if (state == "enabled") {
-              if (global_dhcp_server_ip.empty()) {
+              std::string server_ip;
+              {
+                  std::lock_guard<std::mutex> lk(m_config_mutex);
+                  server_ip = global_dhcp_server_ip;
+              }
+              if (server_ip.empty()) {
                   std::shared_ptr<swss::DBConnector> state_db_ptr = std::make_shared<swss::DBConnector>("STATE_DB", 0);
                   swss::Table ip_tbl(state_db_ptr.get(), "DHCP_SERVER_IPV4_SERVER_IP");
 
                   std::string ip;
                   ip_tbl.hget("eth0", "ip", ip);
                   if (!ip.empty()) {
-                     global_dhcp_server_ip = ip;
+                     {
+                         std::lock_guard<std::mutex> lk(m_config_mutex);
+                         global_dhcp_server_ip = ip;
+                         server_ip = ip;
+                     }
                      SWSS_LOG_INFO("[DHCPV4_RELAY] Fetched DHCPv4 server IP from STATE_DB: %s", ip.c_str());
                   } else {
                      SWSS_LOG_ERROR("[DHCPV4_RELAY] Failed to get DHCPv4 server IP from STATE_DB");
@@ -857,7 +994,7 @@ void DHCPMgr::process_dhcp_server_ipv4_notification(std::deque<swss::KeyOpFields
                   }
               }
               relay_msg->is_add = true;
-              relay_msg->servers.push_back(global_dhcp_server_ip);
+              relay_msg->servers.push_back(server_ip);
               relay_msg->vrf = "default";
             } else if (state == "disabled") {
 		relay_msg->is_add = false; //In case of modify in state field need to delete the entry
@@ -993,7 +1130,10 @@ void DHCPMgr::process_port_notification(std::deque<swss::KeyOpFieldsValuesTuple>
  */
 
 void DHCPMgr::stop_db_updates() {
-	stop_thread = true;
+    stop_thread = true;
+    if (config_listener_thread_.joinable()) {
+        config_listener_thread_.join();
+    }
 }
 
 /**

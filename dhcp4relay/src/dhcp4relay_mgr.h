@@ -17,6 +17,7 @@
 class DHCPMgr {
    private:
     std::atomic<bool> stop_thread;
+    std::thread config_listener_thread_;
 
    public:
     DHCPMgr() : stop_thread(false) {}
@@ -30,6 +31,7 @@ class DHCPMgr {
     void dispatch_source_intf_from_cache(const std::deque<swss::KeyOpFieldsValuesTuple> &entries);
     void process_device_metadata_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
     void process_vlan_member_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
+    void process_portchannel_member_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
     void process_vlan_interface_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
     void process_feature_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries,
 		                      swss::Select &select, std::shared_ptr<swss::DBConnector> config_db_ptr,
@@ -39,4 +41,5 @@ class DHCPMgr {
     void process_dhcp_server_ipv4_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
     void process_vlan_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
     void process_port_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
+    void process_mux_cable_notification(std::deque<swss::KeyOpFieldsValuesTuple> &entries);
 };
