@@ -33,6 +33,7 @@ class DhcpLayer;
 #define RAWSOCKET_RECV_SIZE 1048576
 #define CLIENT_IF_PREFIX "Ethernet"
 #define VRF_NAME_FIELD "vrf_name"  // typo "vrf" caused VRF-update miss; field is "vrf_name"
+#define VNET_NAME_FIELD "vnet_name"
 #define SERVER_VRF_FIELD "server_vrf"
 #define SOURCE_INTERFACE_FIELD "source_interface"
 #define LINK_SELECTION_FIELD "link_selection"
