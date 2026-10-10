@@ -248,9 +248,6 @@ void relay_relay_forw(const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, re
  */
 void relay_relay_reply(const uint8_t *msg, int32_t len, relay_config *configs);
 
-/** Return true when a packet source matches a configured DHCPv6 server. */
-bool is_addr_from_configured_server(const in6_addr &src, const relay_config *config);
-
 /**
  * @code                struct relay_config *
  *                      get_relay_int_from_relay_msg(const uint8_t *msg, int32_t len,

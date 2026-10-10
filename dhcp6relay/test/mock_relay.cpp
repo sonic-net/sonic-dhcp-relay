@@ -1232,21 +1232,6 @@ TEST(relay, get_relay_int_from_relay_msg) {
   EXPECT_EQ((uintptr_t)value, NULL);
 }
 
-TEST(relay, configured_server_source) {
-  relay_config config{};
-  sockaddr_in6 server{};
-  in6_addr configured{};
-  in6_addr unconfigured{};
-
-  ASSERT_EQ(inet_pton(AF_INET6, "fc02:2000::1", &server.sin6_addr), 1);
-  config.servers_sock.push_back(server);
-  ASSERT_EQ(inet_pton(AF_INET6, "fc02:2000::1", &configured), 1);
-  ASSERT_EQ(inet_pton(AF_INET6, "fc02:2000::2", &unconfigured), 1);
-
-  EXPECT_TRUE(is_addr_from_configured_server(configured, &config));
-  EXPECT_FALSE(is_addr_from_configured_server(unconfigured, &config));
-}
-
 TEST(relay, server_callback_dualtor) {
   std::unordered_map<std::string, relay_config> vlans_in_loop;
   std::string ifname = "Vlan1000";
