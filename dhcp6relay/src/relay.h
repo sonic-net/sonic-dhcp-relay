@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <unordered_map>
 #include <event2/util.h>
 #include <syslog.h>
 #include "dbconnector.h"
@@ -27,6 +28,14 @@
 #define RAWSOCKET_RECV_SIZE 1048576 // system allowed max size under /proc/sys/net/core/rmem_max
 #define CLIENT_IF_PREFIX "Ethernet"
 #define BUFFER_SIZE 9200
+
+/* CONFIG_DB field names used to resolve the VRF the upstream socket binds to.
+ * The VLAN's own VRF comes from VLAN_INTERFACE|<vlan> "vrf_name"; an explicit
+ * server-side VRF (server reachable in a different VRF) comes from
+ * DHCP_RELAY|<vlan> "server_vrf". A value of DEFAULT_VRF means the global table. */
+#define VRF_NAME_FIELD "vrf_name"
+#define SERVER_VRF_FIELD "server_vrf"
+#define DEFAULT_VRF "default"
 
 #define lengthof(A) (sizeof (A) / sizeof (A)[0])
 
@@ -77,6 +86,17 @@ struct relay_config {
     std::shared_ptr<swss::Table> mux_table;
     std::shared_ptr<swss::DBConnector> config_db;
     bool is_lla_ready;
+    /* VRF the upstream (gua) socket binds to via SO_BINDTODEVICE: the VLAN's own
+     * vrf_name, or DEFAULT_VRF for the global table. Used to reach servers that
+     * are reachable in the same VRF as the client VLAN (the common case). */
+    std::string vrf;
+    /* Explicit VRF in which the DHCPv6 servers are reachable, when that differs
+     * from the VLAN's own VRF. Empty means "same VRF as the VLAN" (use gua_sock).
+     * When set, relay-forward is sent and relay-reply received on a shared
+     * per-VRF socket bound in6addr_any:547 + SO_BINDTODEVICE(server_vrf), with
+     * replies demultiplexed to the VLAN by the relay link-address. */
+    std::string server_vrf;
+    struct event *server_event = nullptr;
 };
 
 /* DHCPv6 messages and options */
@@ -283,6 +303,97 @@ void server_callback_dualtor(evutil_socket_t fd, short event, void *arg);
  * @param state_db      state_db connector
  */
 void loop_relay(std::unordered_map<std::string, relay_config> &vlans);
+
+/*
+ * Context passed to config_change_callback so the libevent main thread can
+ * reconcile the live vlans map with the desired configuration published by the
+ * runtime configuration monitor thread.
+ */
+struct config_apply_ctx {
+    std::unordered_map<std::string, relay_config> *vlans;
+    void *timer_args;
+    struct event *timer_event;
+    int notify_rd;
+};
+
+/* Shared upstream socket bound (SO_BINDTODEVICE) to a server VRF: one socket is
+ * shared by all vlans whose DHCP_RELAY row names that server_vrf. Declared here
+ * (rather than file-static in relay.cpp) so the unit tests can drive and observe
+ * the create/lookup/release lifecycle. */
+struct server_vrf_socket {
+    int sock;
+    struct event *event;
+};
+extern std::map<std::string, server_vrf_socket> g_server_vrf_socks;
+
+/* Return the shared upstream socket fd for `vrf`, or -1 if it is not armed. */
+int lookup_server_vrf_sock(const std::string &vrf);
+
+/**
+ * @code                release_server_vrf_sock_if_unused(const std::string &vrf, vlans);
+ *
+ * @brief               close and drop the shared upstream socket for `vrf` once
+ *                      no live vlan still references it as its server_vrf, so a
+ *                      deleted/recreated server VRF cannot leave a stale
+ *                      SO_BINDTODEVICE socket behind.
+ *
+ * @param vrf           server VRF whose socket may now be unreferenced
+ * @param vlans         live per-vlan relay config
+ *
+ * @return              none
+ */
+void release_server_vrf_sock_if_unused(
+        const std::string &vrf,
+        const std::unordered_map<std::string, relay_config> &vlans);
+
+/**
+ * @code                build_servers_sock(relay_config &config);
+ *
+ * @brief               (re)build the cached server sockaddr list from config.servers
+ *
+ * @param config        relay interface config whose servers_sock is rebuilt
+ *
+ * @return              none
+ */
+void build_servers_sock(relay_config &config);
+
+/**
+ * @code                teardown_vlan_relay(relay_config &config);
+ *
+ * @brief               free libevent event and sockets for a vlan being removed at runtime
+ *
+ * @param config        relay interface config being torn down
+ *
+ * @return              none
+ */
+void teardown_vlan_relay(relay_config &config);
+
+/**
+ * @code                apply_desired_config(std::unordered_map<std::string, relay_config> &vlans,
+ *                                          std::unordered_map<std::string, relay_config> &desired);
+ *
+ * @brief               reconcile the live vlans map with the desired config (add/remove/update)
+ *
+ * @param vlans         live per-vlan relay config (mutated in place)
+ * @param desired        desired per-vlan relay config (config fields only)
+ *
+ * @return              true if at least one vlan was newly added (sockets need arming)
+ */
+bool apply_desired_config(std::unordered_map<std::string, relay_config> &vlans,
+                          std::unordered_map<std::string, relay_config> &desired);
+
+/**
+ * @code                config_change_callback(evutil_socket_t fd, short event, void *arg);
+ *
+ * @brief               libevent callback that applies runtime relay configuration changes
+ *
+ * @param fd            notify pipe read end
+ * @param event         libevent triggered event
+ * @param arg           pointer to config_apply_ctx
+ *
+ * @return              none
+ */
+void config_change_callback(evutil_socket_t fd, short event, void *arg);
 
 /**
  * @code signal_init();
