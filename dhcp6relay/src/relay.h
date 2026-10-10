@@ -114,6 +114,7 @@ class Options {
 public:
     bool Add(OptionCode key, const uint8_t *value, uint16_t len);
     bool Delete(OptionCode key);
+    bool Has(OptionCode key) const;
     std::vector<uint8_t> Get(OptionCode key);
     std::vector<uint8_t> *MarshalBinary();
     bool UnmarshalBinary(const uint8_t *packet, uint16_t len);
@@ -246,6 +247,9 @@ void relay_relay_forw(const uint8_t *msg, int32_t len, const ip6_hdr *ip_hdr, re
  * @return              none
  */
 void relay_relay_reply(const uint8_t *msg, int32_t len, relay_config *configs);
+
+/** Return true when a packet source matches a configured DHCPv6 server. */
+bool is_addr_from_configured_server(const in6_addr &src, const relay_config *config);
 
 /**
  * @code                struct relay_config *

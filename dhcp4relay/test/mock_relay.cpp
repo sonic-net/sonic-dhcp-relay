@@ -1571,6 +1571,10 @@ TEST(DHCPRelayTest, to_client) {
     config.link_address_netmask.sin_addr.s_addr = inet_addr("255.255.255.0");
     config.vrf_selection_opt = "enable";
     config.client_sock = 1;
+    struct sockaddr_in server = {0};
+    server.sin_family = AF_INET;
+    server.sin_addr.s_addr = inet_addr("172.22.178.234");
+    config.servers_sock = {server};
     vlan_vrf_map["Vlan10"] = "Vrf01";
 
     m_config.hostname = "cisco";
@@ -1593,6 +1597,78 @@ TEST(DHCPRelayTest, to_client) {
         return true;
     });
     to_client(&dhcpLayer, &vlans, "172.22.178.234");
+}
+
+TEST(DHCPRelayTest, configured_server_source) {
+    relay_config config = {};
+    struct sockaddr_in server = {0};
+    server.sin_family = AF_INET;
+    server.sin_addr.s_addr = inet_addr("192.0.2.10");
+    config.servers_sock = {server};
+
+    EXPECT_TRUE(is_ipv4_addr_from_configured_server("192.0.2.10", config));
+    EXPECT_FALSE(is_ipv4_addr_from_configured_server("192.0.2.11", config));
+    EXPECT_FALSE(is_ipv4_addr_from_configured_server("invalid", config));
+}
+
+TEST(DHCPRelayTest, to_client_rejects_unconfigured_server_from_option82_vlan) {
+    std::unordered_map<std::string, relay_config> vlans;
+    pcpp::MacAddress client_mac("00:0e:86:11:c0:75");
+    pcpp::DhcpLayer dhcp_layer(pcpp::DHCP_OFFER, client_mac);
+    dhcp_layer.getDhcpHeader()->gatewayIpAddress = inet_addr("192.168.1.1");
+
+    relay_config config = {};
+    config.phy_interface = "Ethernet12";
+    config.vlan = "Vlan10";
+    config.client_sock = 1;
+    config.link_address.sin_addr.s_addr = inet_addr("192.168.10.10");
+    struct sockaddr_in server = {0};
+    server.sin_family = AF_INET;
+    server.sin_addr.s_addr = inet_addr("192.0.2.10");
+    config.servers_sock = {server};
+
+    interface_list.push_back("Ethernet12");
+    phy_interface_alias_map["Ethernet12"] = "eth12";
+    m_config.hostname = "sonic";
+    m_config.host_mac_addr = "12:32:54:24:95:36";
+    ASSERT_TRUE(encode_relay_option82(&dhcp_layer, &config));
+    vlans["Vlan10"] = config;
+
+    struct ifaddrs *mock_ifaddrs = CreateMockIfaddrs(
+        "192.168.1.1", "255.255.255.0", "Vlan10",
+        "192.168.1.2", "Ethernet4");
+    EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_))
+        .WillOnce(DoAll(testing::SetArgPointee<0>(mock_ifaddrs), Return(0)));
+    EXPECT_GLOBAL_CALL(freeifaddrs, freeifaddrs(_)).Times(1);
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).Times(0);
+
+    to_client(&dhcp_layer, &vlans, "192.0.2.11");
+}
+
+TEST(DHCPRelayTest, to_client_rejects_unconfigured_server_from_giaddr_vlan) {
+    std::unordered_map<std::string, relay_config> vlans;
+    pcpp::MacAddress client_mac("00:0e:86:11:c0:75");
+    pcpp::DhcpLayer dhcp_layer(pcpp::DHCP_OFFER, client_mac);
+    dhcp_layer.getDhcpHeader()->gatewayIpAddress = inet_addr("192.168.1.1");
+
+    relay_config config = {};
+    config.vlan = "Vlan10";
+    config.client_sock = 1;
+    struct sockaddr_in server = {0};
+    server.sin_family = AF_INET;
+    server.sin_addr.s_addr = inet_addr("192.0.2.10");
+    config.servers_sock = {server};
+    vlans["Vlan10"] = config;
+
+    struct ifaddrs *mock_ifaddrs = CreateMockIfaddrs(
+        "192.168.1.1", "255.255.255.0", "Vlan10",
+        "192.168.1.2", "Ethernet4");
+    EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_))
+        .WillOnce(DoAll(testing::SetArgPointee<0>(mock_ifaddrs), Return(0)));
+    EXPECT_GLOBAL_CALL(freeifaddrs, freeifaddrs(_)).Times(1);
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).Times(0);
+
+    to_client(&dhcp_layer, &vlans, "192.0.2.11");
 }
 
 TEST(DHCPRelayTest, from_client) {
