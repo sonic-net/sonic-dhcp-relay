@@ -464,7 +464,7 @@ int sock_open(const struct sock_fprog *fprog)
 /**
  * @code                        prepare_relay_config(relay_config &interface_config, int gua_sock, int filter);
  * 
- * @brief                       prepare for specified relay interface config: server and link address
+ * @brief                       prepare server addresses and register the VLAN address selected by prepare_vlan_sockets
  *
  * @param interface_config      pointer to relay config to be prepared
  * @param gua_sock            L3 socket used for relaying messages
@@ -473,9 +473,11 @@ int sock_open(const struct sock_fprog *fprog)
  * @return                      none
  */
 void prepare_relay_config(relay_config &interface_config, int gua_sock, int filter) {
-    struct ifaddrs *ifa, *ifa_tmp;
-    sockaddr_in6 non_link_local;
-    sockaddr_in6 link_local;
+    if (interface_config.link_address.sin6_family != AF_INET6 ||
+        IN6_IS_ADDR_UNSPECIFIED(&interface_config.link_address.sin6_addr)) {
+        syslog(LOG_ERR, "No IPv6 link address selected on interface %s\n", interface_config.interface.c_str());
+        exit(EXIT_FAILURE);
+    }
     
     interface_config.gua_sock = gua_sock;
     interface_config.filter = filter; 
@@ -493,36 +495,39 @@ void prepare_relay_config(relay_config &interface_config, int gua_sock, int filt
         interface_config.servers_sock.push_back(tmp);
     }
 
-    if (getifaddrs(&ifa) == -1) {
-        syslog(LOG_WARNING, "getifaddrs: Unable to get network interfaces\n");
-        exit(1);
-    }
-
-    ifa_tmp = ifa;
-    while (ifa_tmp) {
-        if (ifa_tmp->ifa_addr && ifa_tmp->ifa_addr->sa_family == AF_INET6) {
-            struct sockaddr_in6 *in6 = (struct sockaddr_in6*) ifa_tmp->ifa_addr;
-            if((strcmp(ifa_tmp->ifa_name, interface_config.interface.c_str()) == 0) && !IN6_IS_ADDR_LINKLOCAL(&in6->sin6_addr)) {    
-                non_link_local = *in6;
-                break;
-            }
-            if((strcmp(ifa_tmp->ifa_name, interface_config.interface.c_str()) == 0) && IN6_IS_ADDR_LINKLOCAL(&in6->sin6_addr)) {    
-                link_local = *in6;
-            }
-        }
-        ifa_tmp = ifa_tmp->ifa_next;
-    }
-    freeifaddrs(ifa); 
-    
-    if(!IN6_IS_ADDR_LINKLOCAL(&non_link_local.sin6_addr)) {
-        interface_config.link_address = non_link_local;
-    }
-    else {
-        interface_config.link_address = link_local;
-    }
     char ipv6_str[INET6_ADDRSTRLEN] = {};
     inet_ntop(AF_INET6, &interface_config.link_address.sin6_addr, ipv6_str, INET6_ADDRSTRLEN);
     addr_vlan_map[std::string(ipv6_str)] = interface_config.interface;
+}
+
+/**
+ * @code                bool addr_is_primary(const relay_config &config, const in6_addr &addr);
+ *
+ * @brief               check VLAN IPv6 address eligibility using CONFIG_DB secondary metadata
+ *
+ * @param config        VLAN configuration with the existing CONFIG_DB connector
+ * @param addr          IPv6 address assigned to the VLAN interface
+ *
+ * @return              false only for an address explicitly configured with secondary=true;
+ *                      missing keys or fields retain dhcp4relay's primary-address default
+ */
+static bool addr_is_primary(const relay_config &config, const in6_addr &addr) {
+    auto keys = config.config_db->keys("VLAN_INTERFACE|" + config.interface + "|*");
+    for (const auto &key : keys) {
+        auto last_bar = key.find_last_of('|');
+        auto last_slash = key.find_last_of('/');
+        if (last_bar == std::string::npos || last_slash == std::string::npos || last_bar >= last_slash) {
+            continue;
+        }
+        auto addr_str = key.substr(last_bar + 1, last_slash - last_bar - 1);
+        in6_addr curr_addr;
+        if (inet_pton(AF_INET6, addr_str.c_str(), &curr_addr) == 1 &&
+            memcmp(&curr_addr, &addr, sizeof(addr)) == 0) {
+            auto secondary = config.config_db->hget(key, "secondary");
+            return secondary == nullptr || *secondary != "true";
+        }
+    }
+    return true;
 }
 
 /**
@@ -581,16 +586,23 @@ int prepare_lo_socket(const char *lo) {
 /**
  * @code                prepare_vlan_sockets(int &gua_sock, int &lla_sock, relay_config &config);
  * 
- * @brief               prepare vlan L3 socket for sending
+ * @brief               prepare vlan L3 sockets and save the first non-secondary global address as link_address
  *
  * @param gua_sock      socket binded to global address for relaying client message to server and listening for server message
  * @param lla_sock      socket binded to link_local address for relaying server message to client
+ * @param config        VLAN configuration with the existing CONFIG_DB connector
  *
  * @return              int
  */
 int prepare_vlan_sockets(int &gua_sock, int &lla_sock, relay_config &config) {
     struct ifaddrs *ifa, *ifa_tmp;
     sockaddr_in6 gua = {0}, lla = {0};
+
+    config.link_address = {};
+    if (!config.config_db) {
+        syslog(LOG_ERR, "Missing CONFIG_DB connection on interface %s\n", config.interface.c_str());
+        return -1;
+    }
 
     if ((gua_sock = socket(AF_INET6, SOCK_DGRAM, 0)) == -1) {
         syslog(LOG_ERR, "socket: Failed to create gua socket on interface %s\n", config.interface.c_str());
@@ -612,6 +624,11 @@ int prepare_vlan_sockets(int &gua_sock, int &lla_sock, relay_config &config) {
     bool bind_gua = false;
     bool bind_lla = false;
     do {
+        // Both addresses must come from the same interface snapshot.
+        bind_gua = false;
+        bind_lla = false;
+        gua = {};
+        lla = {};
         if (getifaddrs(&ifa) == -1) {
             syslog(LOG_WARNING, "getifaddrs: Unable to get network interfaces with %s\n", strerror(errno));
         }
@@ -622,10 +639,12 @@ int prepare_vlan_sockets(int &gua_sock, int &lla_sock, relay_config &config) {
                     if (strcmp(ifa_tmp->ifa_name, config.interface.c_str()) == 0) {
                         struct sockaddr_in6 *in6 = (struct sockaddr_in6*) ifa_tmp->ifa_addr;
                         if (!IN6_IS_ADDR_LINKLOCAL(&in6->sin6_addr)) {
-                            bind_gua = true;
-                            gua = *in6;
-                            gua.sin6_family = AF_INET6;
-                            gua.sin6_port = htons(RELAY_PORT);
+                            if (!bind_gua && addr_is_primary(config, in6->sin6_addr)) {
+                                bind_gua = true;
+                                gua = *in6;
+                                gua.sin6_family = AF_INET6;
+                                gua.sin6_port = htons(RELAY_PORT);
+                            }
                         } else {
                             bind_lla = true;
                             lla = *in6;
@@ -662,6 +681,8 @@ int prepare_vlan_sockets(int &gua_sock, int &lla_sock, relay_config &config) {
         close(lla_sock);
         return -1;
     }
+    // Keep the VLAN identity even when DualToR sends through the loopback socket.
+    config.link_address = gua;
     return 0;
 }
 
