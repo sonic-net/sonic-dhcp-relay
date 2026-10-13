@@ -957,8 +957,8 @@ void to_client(pcpp::DhcpLayer *dhcp_pkt, std::unordered_map<std::string, relay_
         auto circuit_id_ptr = decode_tlv((const uint8_t *)options_ptr, OPTION82_SUBOPT_CIRCUIT_ID,
                 circuit_id_len, agent_option_size);
         if (circuit_id_ptr == NULL) {
-            SWSS_LOG_ERROR("[DHCPV4_RELAY] Circuit id sub-option is missing in relay"
-                    " agent option from server %s",
+            SWSS_LOG_ERROR("[DHCPV4_RELAY] Missing Circuit id sub-option or malformed sub-option"
+                    " in relay agent option from server %s",
                     src_ip.c_str());
             freeifaddrs(ifa);
             return;
