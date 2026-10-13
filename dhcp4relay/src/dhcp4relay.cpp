@@ -888,10 +888,9 @@ bool validate_vss_reply(const uint8_t *options_ptr, uint32_t options_size,
     auto vss_control_ptr = decode_tlv(options_ptr, OPTION82_SUBOPT_VIRTUAL_SUBNET_CONTROL,
                                       vss_control_len, options_size);
     if (vss_control_ptr != nullptr) {
-        SWSS_LOG_WARN("[DHCPV4_RELAY] Dropping server reply for %s from %s: "
-                      "server did not process VSS sub-option (VSS-Control sub-option 152 retained)",
+        SWSS_LOG_WARN("[DHCPV4_RELAY] Server reply for %s from %s: "
+                      "VSS processing not acknowledged (VSS-Control sub-option 152 retained)",
                       config.vlan.c_str(), src_ip.c_str());
-        return false;
     }
 
     uint8_t vss_len = 0;

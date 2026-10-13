@@ -1457,9 +1457,11 @@ TEST(DHCPRelayTest, validate_vss_reply) {
     };
     const vss_case cases[] = {
         {"Vrf01", true, false, true},
-        {"Vrf01", true, true, false},
+        {"Vrf01", true, true, true},
         {"Vrf02", true, false, false},
+        {"Vrf02", true, true, false},
         {"Vrf01", false, false, false},
+        {"Vrf01", false, true, false},
     };
     for (const auto &test : cases) {
         uint8_t options[32] = {};
