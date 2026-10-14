@@ -114,6 +114,7 @@ class Options {
 public:
     bool Add(OptionCode key, const uint8_t *value, uint16_t len);
     bool Delete(OptionCode key);
+    bool Has(OptionCode key) const;
     std::vector<uint8_t> Get(OptionCode key);
     std::vector<uint8_t> *MarshalBinary();
     bool UnmarshalBinary(const uint8_t *packet, uint16_t len);

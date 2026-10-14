@@ -111,6 +111,10 @@ bool Options::Delete(OptionCode key) {
     return true;
 }
 
+bool Options::Has(OptionCode key) const {
+    return m_options.find(key) != m_options.end();
+}
+
 // get a copy of option value based on OptionCode
 std::vector<uint8_t> Options::Get(OptionCode key) {
     if (m_options.find(key) == m_options.end()) {
@@ -1058,13 +1062,18 @@ get_relay_int_from_relay_msg(const uint8_t *msg, int32_t len, std::unordered_map
         return NULL;
     }
 
+    const bool has_interface_id = relay.m_option_list.Has(OPTION_INTERFACE_ID);
     auto opt_value = relay.m_option_list.Get(OPTION_INTERFACE_ID);
     in6_addr address = in6addr_any;
-    if (opt_value.empty()) {
+    if (!has_interface_id) {
         std::memcpy(&address, &relay.m_msg_hdr.link_address, sizeof(in6_addr));
-    } else {
+    } else if (opt_value.size() == sizeof(in6_addr)) {
         auto interface_id = opt_value.data();
         std::memcpy(&address, interface_id, sizeof(in6_addr));
+    } else {
+        syslog(LOG_WARNING, "Relay-reply contains malformed Interface-ID option length %zu\n",
+               opt_value.size());
+        return NULL;
     }
 
     // multi-level relay agents
