@@ -1425,6 +1425,18 @@ bool apply_desired_config(std::unordered_map<std::string, relay_config> &vlans,
             syslog(LOG_INFO, "Update relay config for %s at runtime\n", desired_entry.first.c_str());
         }
     }
+    // Clear a live relay no longer in the desired snapshot (config removed); keep it for re-add.
+    for (auto &live_entry : vlans) {
+        if (desired.find(live_entry.first) != desired.end()) {
+            continue;
+        }
+        relay_config &live = live_entry.second;
+        if (!live.servers.empty() || !live.servers_sock.empty()) {
+            live.servers.clear();
+            live.servers_sock.clear();
+            syslog(LOG_INFO, "Clear relay servers for %s at runtime (config removed)\n", live_entry.first.c_str());
+        }
+    }
     return false;
 }
 

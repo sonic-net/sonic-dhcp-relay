@@ -1333,3 +1333,46 @@ TEST(relay, apply_desired_config_rebuilds_active_servers_sock) {
   EXPECT_EQ(vlans["Vlan1000"].servers.size(), 2);
   EXPECT_EQ(vlans["Vlan1000"].servers_sock.size(), 2);
 }
+
+TEST(relay, apply_desired_config_clear_last_server_then_readd) {
+  // Last-server removal deletes the DHCP_RELAY entry; the live relay must be cleared, not left stale.
+  auto config_db = std::make_shared<swss::DBConnector>("CONFIG_DB", 0);
+  // clean slate
+  config_db->del("DHCP_RELAY|Vlan5000");
+  config_db->del("VLAN_INTERFACE|Vlan5000|fc02:5000::1");
+  config_db->hset("VLAN_INTERFACE|Vlan5000|fc02:5000::1", "", "");
+  config_db->hset("DHCP_RELAY|Vlan5000", "dhcpv6_servers@", "fc02:5000::1");
+
+  // [A] one server: active live relay from the snapshot
+  auto desired_a = build_desired_config(config_db);
+  ASSERT_EQ(desired_a.count("Vlan5000"), 1);
+  std::unordered_map<std::string, relay_config> vlans;
+  vlans["Vlan5000"] = desired_a["Vlan5000"];
+  vlans["Vlan5000"].is_lla_ready = true;
+  build_servers_sock(vlans["Vlan5000"]);
+  ASSERT_EQ(vlans["Vlan5000"].servers.size(), 1);
+  ASSERT_EQ(vlans["Vlan5000"].servers_sock.size(), 1);
+
+  // [] last server removed -> CLI deletes the entry -> absent from snapshot
+  config_db->del("DHCP_RELAY|Vlan5000");
+  auto desired_empty = build_desired_config(config_db);
+  ASSERT_EQ(desired_empty.count("Vlan5000"), 0);
+  apply_desired_config(vlans, desired_empty);
+  EXPECT_EQ(vlans.count("Vlan5000"), 1);                // relay retained
+  EXPECT_TRUE(vlans["Vlan5000"].servers.empty());
+  EXPECT_TRUE(vlans["Vlan5000"].servers_sock.empty());
+  EXPECT_TRUE(vlans["Vlan5000"].is_lla_ready);          // relay kept active
+
+  // [B] re-add -> same relay updated in place
+  config_db->hset("DHCP_RELAY|Vlan5000", "dhcpv6_servers@", "fc02:5000::2");
+  auto desired_b = build_desired_config(config_db);
+  ASSERT_EQ(desired_b.count("Vlan5000"), 1);
+  apply_desired_config(vlans, desired_b);
+  ASSERT_EQ(vlans["Vlan5000"].servers.size(), 1);
+  EXPECT_EQ(vlans["Vlan5000"].servers[0], "fc02:5000::2");
+  EXPECT_EQ(vlans["Vlan5000"].servers_sock.size(), 1);
+  EXPECT_TRUE(vlans["Vlan5000"].is_lla_ready);          // same relay, not recreated
+
+  config_db->del("DHCP_RELAY|Vlan5000");
+  config_db->del("VLAN_INTERFACE|Vlan5000|fc02:5000::1");
+}
