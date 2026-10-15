@@ -1892,6 +1892,8 @@ TEST(DHCPRelayTest, from_client_first_hop_with_option82_is_dropped) {
     dhcpLayer.getDhcpHeader()->hops = 0;
     dhcpLayer.getDhcpHeader()->gatewayIpAddress = 0;
     dhcpLayer.getDhcpHeader()->magicNumber = DHCP_MAGIC_NUMBER;
+    ASSERT_TRUE(dhcpLayer.addOption(
+        pcpp::DhcpOptionBuilder(pcpp::DHCPOPT_PAD, nullptr, 0)).isNotNull());
     encode_relay_option82(&dhcpLayer, &config);
 
     auto original_option =
