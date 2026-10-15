@@ -676,7 +676,7 @@ TEST(relayConfig, handle_vlan_events) {
 }
 
 TEST(relayConfig, max_hop_count_config_event_propagates_updates) {
-    EXPECT_EQ(relay_config{}.max_hop_count, DEFAULT_MAX_HOP_COUNT);
+    EXPECT_EQ(relay_config{}.max_hop_count, MAX_HOP_COUNT);
     EXPECT_EQ(MAX_HOP_COUNT, 16);
 
     int pipe_fds[2];
