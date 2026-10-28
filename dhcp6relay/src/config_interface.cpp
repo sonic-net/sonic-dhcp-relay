@@ -166,11 +166,22 @@ void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries,
                 }
                 syslog(LOG_DEBUG, "key: %s, Operation: %s, f: %s, v: %s", vlan.c_str(), operation.c_str(), f.c_str(), v.c_str());
             }
-            if(f == "dhcpv6_option|rfc6939_support" && v == "false") {
-                intf.is_option_79 = false;
+            // Prefer YANG leaf names (rfc6939_support / interface_id); keep
+            // dhcpv6_option|* as aliases for configs that still use them.
+            if (f == "rfc6939_support" || f == "dhcpv6_option|rfc6939_support") {
+                if (v == "false") {
+                    intf.is_option_79 = false;
+                } else if (v == "true") {
+                    intf.is_option_79 = true;
+                }
             }
-            if(f == "dhcpv6_option|interface_id" && v == "true") { // interface-id is off by default on non-Dual-ToR, unless specified in config db
-                intf.is_interface_id = true;
+            if (f == "interface_id" || f == "dhcpv6_option|interface_id") {
+                // Default off on non-Dual-ToR; Dual-ToR default is on above.
+                if (v == "true") {
+                    intf.is_interface_id = true;
+                } else if (v == "false") {
+                    intf.is_interface_id = false;
+                }
             }
         }
         if (intf.servers.empty()) {

@@ -5,8 +5,8 @@ using namespace ::testing;
 TEST(configInterface, initialize_swss) {
   std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
   config_db->hset("DHCP_RELAY|Vlan1000", "dhcpv6_servers@", "fc02:2000::1,fc02:2000::2,fc02:2000::3,fc02:2000::4");
-  config_db->hset("DHCP_RELAY|Vlan1000", "dhcpv6_option|rfc6939_support", "false");
-  config_db->hset("DHCP_RELAY|Vlan1000", "dhcpv6_option|interface_id", "true");
+  config_db->hset("DHCP_RELAY|Vlan1000", "rfc6939_support", "false");
+  config_db->hset("DHCP_RELAY|Vlan1000", "interface_id", "true");
   config_db->hset("VLAN_INTERFACE|Vlan1000|fc02:1000::1", "", "");
   std::unordered_map<std::string, relay_config> vlans;
   ASSERT_NO_THROW(initialize_swss(vlans));
@@ -20,8 +20,8 @@ TEST(configInterface, deinitialize_swss) {
 TEST(configInterface, get_dhcp) {
   std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
   config_db->hset("DHCP_RELAY|Vlan1000", "dhcpv6_servers@", "fc02:2000::1,fc02:2000::2,fc02:2000::3,fc02:2000::4");
-  config_db->hset("DHCP_RELAY|Vlan1000", "dhcpv6_option|rfc6939_support", "false");
-  config_db->hset("DHCP_RELAY|Vlan1000", "dhcpv6_option|interface_id", "true");
+  config_db->hset("DHCP_RELAY|Vlan1000", "rfc6939_support", "false");
+  config_db->hset("DHCP_RELAY|Vlan1000", "interface_id", "true");
   swss::SubscriberStateTable ipHelpersTable(config_db.get(), "DHCP_RELAY");
   std::unordered_map<std::string, relay_config> vlans;
 
@@ -44,8 +44,9 @@ TEST(configInterface, handleRelayNotification) {
 TEST(configInterface, processRelayNotification) {  
   std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
   config_db->hset("DHCP_RELAY|Vlan1000", "dhcpv6_servers@", "fc02:2000::1,fc02:2000::2,fc02:2000::3,fc02:2000::4");
-  config_db->hset("DHCP_RELAY|Vlan1000", "dhcpv6_option|rfc6939_support", "false");
-  config_db->hset("DHCP_RELAY|Vlan1000", "dhcpv6_option|interface_id", "true");
+  config_db->hset("DHCP_RELAY|Vlan1000", "rfc6939_support", "false");
+  config_db->hset("DHCP_RELAY|Vlan1000", "interface_id", "true");
+  config_db->hset("VLAN_INTERFACE|Vlan1000|fc02:1000::1", "", "");
   swss::SubscriberStateTable ipHelpersTable(config_db.get(), "DHCP_RELAY");
   swssSelect.addSelectable(&ipHelpersTable);
   std::deque<swss::KeyOpFieldsValuesTuple> entries;
@@ -58,6 +59,26 @@ TEST(configInterface, processRelayNotification) {
   EXPECT_FALSE(vlans["Vlan1000"].is_option_79);
   EXPECT_TRUE(vlans["Vlan1000"].is_interface_id);
   EXPECT_FALSE(vlans["Vlan1000"].state_db);
+}
+
+// Legacy dhcpv6_option|* field names remain accepted for older configs.
+TEST(configInterface, processRelayNotificationLegacyOptionFields) {
+  std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+  config_db->hset("DHCP_RELAY|Vlan1000", "dhcpv6_servers@", "fc02:2000::1,fc02:2000::2");
+  config_db->hset("DHCP_RELAY|Vlan1000", "dhcpv6_option|rfc6939_support", "false");
+  config_db->hset("DHCP_RELAY|Vlan1000", "dhcpv6_option|interface_id", "true");
+  config_db->hset("VLAN_INTERFACE|Vlan1000|fc02:1000::1", "", "");
+  swss::SubscriberStateTable ipHelpersTable(config_db.get(), "DHCP_RELAY");
+  swssSelect.addSelectable(&ipHelpersTable);
+  std::deque<swss::KeyOpFieldsValuesTuple> entries;
+  ipHelpersTable.pops(entries);
+  std::unordered_map<std::string, relay_config> vlans;
+
+  processRelayNotification(entries, vlans, config_db);
+
+  EXPECT_EQ(vlans.size(), 1);
+  EXPECT_FALSE(vlans["Vlan1000"].is_option_79);
+  EXPECT_TRUE(vlans["Vlan1000"].is_interface_id);
 }
 
 MOCK_GLOBAL_FUNC0(stopSwssNotificationPoll, void(void));
