@@ -361,6 +361,12 @@ void prepare_relay_interface_config(relay_config &interface_config) {
     interface_config.link_address = intf_addr;
     interface_config.link_address_netmask = net_mask;
     interface_config.src_intf_sel_addr = src_intf_sel;
+
+    const auto relay_source_address = interface_config.source_interface.empty()
+        ? intf_addr.sin_addr.s_addr : src_intf_sel.sin_addr.s_addr;
+    if (relay_source_address != 0) {
+        interface_config.missing_address_log_limiter.reset();
+    }
 }
 
 int prepare_vrf_sockets(relay_config &config) {
@@ -741,12 +747,25 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
                 config.link_address.sin_addr.s_addr;
         }
         if (!(dhcp_pkt->getDhcpHeader()->gatewayIpAddress)) {
-            SWSS_LOG_ERROR("[DHCPV4_RELAY] No IPv4 address configured on %s,"
-                   " dropping DHCP packet. Configure an IPv4 address on the VLAN"
-                   " interface for relay to function", config.vlan.c_str());
+            const auto log_result = config.missing_address_log_limiter.record(
+                PerVlanLogRateLimiter::Clock::now());
+            if (log_result.should_log) {
+                if (log_result.suppressed_packet_count == 0) {
+                    SWSS_LOG_ERROR("[DHCPV4_RELAY] No IPv4 address configured on %s,"
+                           " dropping DHCP packet. Configure an IPv4 address on the VLAN"
+                           " interface for relay to function", config.vlan.c_str());
+                } else {
+                    SWSS_LOG_ERROR("[DHCPV4_RELAY] No IPv4 address configured on %s,"
+                           " dropping DHCP packet. Suppressed %llu repeated packet-drop logs"
+                           " since the previous report. Configure an IPv4 address on the VLAN"
+                           " interface for relay to function", config.vlan.c_str(),
+                           static_cast<unsigned long long>(log_result.suppressed_packet_count));
+                }
+            }
             dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
             return;
         }
+        config.missing_address_log_limiter.reset();
         if (!is_bootp) {
             SWSS_LOG_WARN("[DHCPV4_RELAY] encode DHCP relay option");
             if (!encode_relay_option82(dhcp_pkt, &config) && vss_required) {
@@ -1690,6 +1709,7 @@ static void apply_config_event(const event_config &received_event,
                 } else {
                     memset(&vlans->at(relay_msg->vlan).src_intf_sel_addr, 0, sizeof(sockaddr_in));
                 }
+                vlans->at(relay_msg->vlan).missing_address_log_limiter.reset();
                 delete relay_msg;
             }
         } else if (received_event.type == DHCPv4_RELAY_VLAN_MEMBER_UPDATE) {

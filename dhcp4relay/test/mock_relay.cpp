@@ -13,6 +13,7 @@
 #include "mock_table.h"
 #include "../src/dhcp4_sender.h"
 #include "../src/dhcp4relay_stats.h"
+#include <poll.h>
 #include <sys/syscall.h>
 
 #include <pcapplusplus/DhcpLayer.h>
@@ -1860,6 +1861,98 @@ TEST(DHCPRelayTest, from_client_dual_tor_dhcp_uses_source_interface_giaddr) {
 
 TEST(DHCPRelayTest, from_client_dual_tor_bootp_uses_vlan_giaddr) {
     verify_from_client_giaddr(true, true, "192.168.10.10");
+TEST(DHCPRelayTest, from_client_missing_address_drops_each_packet_and_tracks_suppressed_logs) {
+    relay_config config{};
+    config.vlan = "VlanRateLimitTest";
+    const auto counters_before = dhcp_cntr_table.get_counters_data();
+    uint64_t dropped_before = 0;
+    const auto vlan_before = counters_before.find(config.vlan);
+    if (vlan_before != counters_before.end()) {
+        const auto dropped = vlan_before->second.TX.find(counter_map.at(DHCPv4_MESSAGE_TYPE_DROP));
+        if (dropped != vlan_before->second.TX.end()) {
+            dropped_before = dropped->second;
+        }
+    }
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).Times(0);
+
+    pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
+    pcpp::DhcpLayer first_packet(pcpp::DHCP_DISCOVER, clientMac);
+    first_packet.getDhcpHeader()->gatewayIpAddress = 0;
+    from_client(&first_packet, config);
+
+    pcpp::DhcpLayer second_packet(pcpp::DHCP_DISCOVER, clientMac);
+    second_packet.getDhcpHeader()->gatewayIpAddress = 0;
+    from_client(&second_packet, config);
+
+    pcpp::DhcpLayer third_packet(pcpp::DHCP_DISCOVER, clientMac);
+    third_packet.getDhcpHeader()->gatewayIpAddress = 0;
+    from_client(&third_packet, config);
+
+    EXPECT_EQ(first_packet.getDhcpHeader()->gatewayIpAddress, 0);
+    EXPECT_EQ(second_packet.getDhcpHeader()->gatewayIpAddress, 0);
+    EXPECT_EQ(third_packet.getDhcpHeader()->gatewayIpAddress, 0);
+    EXPECT_EQ(config.missing_address_log_limiter.suppressed_packet_count(), 2);
+
+    const auto counters_after = dhcp_cntr_table.get_counters_data();
+    const auto vlan_after = counters_after.find(config.vlan);
+    ASSERT_NE(vlan_after, counters_after.end());
+    EXPECT_EQ(vlan_after->second.TX.at(counter_map.at(DHCPv4_MESSAGE_TYPE_DROP)), dropped_before + 3);
+}
+
+TEST(DHCPRelayTest, missing_address_log_limiter_reports_first_drop_and_suppresses_repeats) {
+    PerVlanLogRateLimiter limiter(std::chrono::seconds(60));
+    const auto start = PerVlanLogRateLimiter::Clock::time_point{};
+
+    auto result = limiter.record(start);
+    EXPECT_TRUE(result.should_log);
+    EXPECT_EQ(result.suppressed_packet_count, 0);
+
+    result = limiter.record(start + std::chrono::seconds(10));
+    EXPECT_FALSE(result.should_log);
+    EXPECT_EQ(limiter.suppressed_packet_count(), 1);
+
+    result = limiter.record(start + std::chrono::seconds(59));
+    EXPECT_FALSE(result.should_log);
+    EXPECT_EQ(limiter.suppressed_packet_count(), 2);
+
+    result = limiter.record(start + std::chrono::seconds(60));
+    EXPECT_TRUE(result.should_log);
+    EXPECT_EQ(result.suppressed_packet_count, 3);
+    EXPECT_EQ(limiter.suppressed_packet_count(), 0);
+
+    result = limiter.record(start + std::chrono::seconds(61));
+    EXPECT_FALSE(result.should_log);
+    EXPECT_EQ(limiter.suppressed_packet_count(), 1);
+}
+
+TEST(DHCPRelayTest, missing_address_log_limiter_reset_reports_next_drop_immediately) {
+    PerVlanLogRateLimiter limiter(std::chrono::seconds(60));
+    const auto start = PerVlanLogRateLimiter::Clock::time_point{};
+
+    EXPECT_TRUE(limiter.record(start).should_log);
+    EXPECT_FALSE(limiter.record(start + std::chrono::seconds(5)).should_log);
+    EXPECT_EQ(limiter.suppressed_packet_count(), 1);
+
+    limiter.reset();
+
+    const auto result = limiter.record(start + std::chrono::seconds(6));
+    EXPECT_TRUE(result.should_log);
+    EXPECT_EQ(result.suppressed_packet_count, 0);
+    EXPECT_EQ(limiter.suppressed_packet_count(), 0);
+}
+
+TEST(DHCPRelayTest, missing_address_log_limiters_are_independent_per_vlan) {
+    PerVlanLogRateLimiter vlan10_limiter(std::chrono::seconds(60));
+    PerVlanLogRateLimiter vlan20_limiter(std::chrono::seconds(60));
+    const auto start = PerVlanLogRateLimiter::Clock::time_point{};
+
+    EXPECT_TRUE(vlan10_limiter.record(start).should_log);
+    EXPECT_FALSE(vlan10_limiter.record(start + std::chrono::seconds(1)).should_log);
+
+    const auto vlan20_result = vlan20_limiter.record(start + std::chrono::seconds(1));
+    EXPECT_TRUE(vlan20_result.should_log);
+    EXPECT_EQ(vlan20_result.suppressed_packet_count, 0);
+    EXPECT_EQ(vlan10_limiter.suppressed_packet_count(), 1);
 }
 
 /* Helper: build a relay-of-relay packet (giaddr already set) with a pre-existing Option 82. */

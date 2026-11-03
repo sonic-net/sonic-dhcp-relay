@@ -18,6 +18,7 @@
 
 #include "dbconnector.h"
 #include "dhcp4_sender.h"
+#include "dhcp4relay_log_limiter.h"
 #include "table.h"
 
 namespace pcpp {
@@ -135,6 +136,7 @@ struct relay_config {
     uint8_t max_hop_count = MAX_HOP_COUNT;
     std::vector<std::string> servers;
     std::vector<sockaddr_in> servers_sock;
+    PerVlanLogRateLimiter missing_address_log_limiter;
     bool is_interface_id;
     bool is_add;
 };
