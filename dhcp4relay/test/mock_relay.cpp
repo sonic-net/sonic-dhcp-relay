@@ -1861,6 +1861,8 @@ TEST(DHCPRelayTest, from_client_dual_tor_dhcp_uses_source_interface_giaddr) {
 
 TEST(DHCPRelayTest, from_client_dual_tor_bootp_uses_vlan_giaddr) {
     verify_from_client_giaddr(true, true, "192.168.10.10");
+}
+
 TEST(DHCPRelayTest, from_client_missing_address_drops_each_packet_and_tracks_suppressed_logs) {
     relay_config config{};
     config.vlan = "VlanRateLimitTest";
