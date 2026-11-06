@@ -19,8 +19,7 @@ jobs:
 - template: .azure-pipelines/build.yml
   parameters:
     arch: amd64
-    pool:
-      vmImage: 'ubuntu-latest'
+    pool: sonic-ubuntu-1c
     codeCoverage: true
     containerImage: sonicdev-microsoft.azurecr.io:443/sonic-slave-bookworm:$(BUILD_BRANCH)
 - template: .azure-pipelines/build.yml
@@ -33,4 +32,3 @@ jobs:
     arch: armhf
     pool: sonicso1ES-armhf
     containerImage: sonicdev-microsoft.azurecr.io:443/sonic-slave-bookworm:$(BUILD_BRANCH)-armhf
-
