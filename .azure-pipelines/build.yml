@@ -14,6 +14,8 @@ jobs:
 - job:
   displayName: ${{ parameters.arch }}
   timeoutInMinutes: 60
+  workspace:
+    clean: all
   pool: ${{ parameters.pool }}
 
   container:
