@@ -711,6 +711,22 @@ bool encode_relay_option82(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
     return true;
 }
 
+static bool has_relay_option82(const pcpp::DhcpLayer *dhcp_pkt) {
+    if (dhcp_pkt->getHeaderLen() <= sizeof(pcpp::dhcp_header)) {
+        return false;
+    }
+
+    /* PcapPlusPlus bounds-checks options but continues past END. */
+    for (auto option = dhcp_pkt->getFirstOptionData();
+         option.isNotNull() && option.getType() != pcpp::DHCPOPT_END;
+         option = dhcp_pkt->getNextOptionData(option)) {
+        if (option.getType() == pcpp::DHCPOPT_DHCP_AGENT_OPTIONS) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /**
  * @code                 void from_client(pcpp::DhcpLayer* dhcp_pkt, relay_config *config)
  *
@@ -729,6 +745,13 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
     if (!(dhcp_pkt->getDhcpHeader()->gatewayIpAddress)) {
         const bool is_bootp =
             dhcp_pkt->getDhcpHeader()->magicNumber != DHCP_MAGIC_NUMBER;
+
+        if (!is_bootp && has_relay_option82(dhcp_pkt)) {
+            SWSS_LOG_NOTICE("[DHCPV4_RELAY] Dropping first-hop packet with pre-existing Option 82 on untrusted interface %s",
+                    config.vlan.c_str());
+            dhcp_cntr_table.increment_counter(config.vlan, "TX", DHCPv4_MESSAGE_TYPE_DROP);
+            return;
+        }
 
         /* Non-BOOTP packets can use the VLAN IP or the Loopback0 IP on
          * dual-ToR; BOOTP always uses the VLAN IP. */
