@@ -33,14 +33,14 @@ void initialize_swss(std::unordered_map<std::string, relay_config> &vlans);
 void deinitialize_swss();
 
 /**
- * @code                void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic,
+ * @code                void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable,
  *                                    std::shared_ptr<swss::DBConnector> config_db)
  * 
  * @brief               initialize and get vlan information from DHCP_RELAY
  *
  * @return              none
  */
-void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable, bool dynamic,
+void get_dhcp(std::unordered_map<std::string, relay_config> &vlans, swss::SubscriberStateTable *ipHelpersTable,
               std::shared_ptr<swss::DBConnector> config_db);
 
 /**
@@ -81,3 +81,45 @@ void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries,
  * @return                  bool value indicates whether lla ready
  */
 bool check_is_lla_ready(std::string vlan);
+
+/**
+ * @code                build_desired_config(std::shared_ptr<swss::DBConnector> config_db);
+ *
+ * @brief               read the full DHCP_RELAY table and build the desired per-vlan relay config
+ *
+ * @param config_db     CONFIG_DB connector used to read DHCP_RELAY and VLAN_INTERFACE
+ *
+ * @return              desired map of vlan name to relay_config (config fields only)
+ */
+std::unordered_map<std::string, relay_config> build_desired_config(std::shared_ptr<swss::DBConnector> config_db);
+
+/**
+ * @code                start_dhcp_config_monitor(int notify_fd);
+ *
+ * @brief               start the detached thread that watches CONFIG_DB and publishes desired config
+ *
+ * @param notify_fd     write end of the pipe used to wake the libevent main loop
+ *
+ * @return              none
+ */
+void start_dhcp_config_monitor(int notify_fd);
+
+/**
+ * @code                stop_dhcp_config_monitor();
+ *
+ * @brief               signal the config monitor thread to stop
+ *
+ * @return              none
+ */
+void stop_dhcp_config_monitor();
+
+/**
+ * @code                fetch_desired_config(std::unordered_map<std::string, relay_config> &out);
+ *
+ * @brief               copy the latest desired config published by the monitor thread
+ *
+ * @param out           map populated with the latest desired per-vlan relay config
+ *
+ * @return              true on success
+ */
+bool fetch_desired_config(std::unordered_map<std::string, relay_config> &out);
