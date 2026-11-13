@@ -101,7 +101,7 @@ void update_interface_counters_in_db(
  * @return              none
  */
 void DHCPCounter_table::db_update_loop() {
-    std::shared_ptr<swss::DBConnector> cntrs_db = std::make_shared<swss::DBConnector>("COUNTERS_DB", 0);
+    std::shared_ptr<swss::DBConnector> cntrs_db = std::make_shared<swss::DBConnector>("COUNTERS_DB", 0, false, "", true);
     std::shared_ptr<swss::Table> cntr_table = std::make_shared<swss::Table>(
         cntrs_db.get(), "COUNTERS_DHCPV4");
 
