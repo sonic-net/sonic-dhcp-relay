@@ -57,6 +57,14 @@ namespace swss
         }
     }
 
+    DBConnector::DBConnector(const std::string& dbName, unsigned int timeout, bool isTcpConn,
+                             const std::string& netns, bool /* authenticate */)
+        : DBConnector(dbName, timeout, isTcpConn)
+    {
+        // This in-memory fixture does not open sockets or perform authentication.
+        m_key = SonicDBKey(netns);
+    }
+
     int DBConnector::getDbId() const
     {
         return m_dbId;
