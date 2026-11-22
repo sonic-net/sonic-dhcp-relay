@@ -72,6 +72,14 @@ void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries,
                               std::shared_ptr<swss::DBConnector> config_db);
 
 /**
+ * @brief Validate a DHCP relay VLAN interface name.
+ *
+ * Valid names use the form Vlan<digits> and must fit in the kernel's
+ * IFNAMSIZ buffer, including its terminating null byte.
+ */
+bool is_valid_vlan_interface_name(const std::string &vlan);
+
+/**
  * @code                    bool check_is_lla_ready(std::string vlan)
  * 
  * @brief                   Check whether link local address appear in vlan interface

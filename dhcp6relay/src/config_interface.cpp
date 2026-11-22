@@ -1,12 +1,26 @@
+#include <algorithm>
+#include <cctype>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <netinet/in.h>
 #include <sstream>
 #include <syslog.h>
-#include <algorithm>
 #include "config_interface.h"
 
 constexpr auto DEFAULT_TIMEOUT_MSEC = 1000;
 
 bool pollSwssNotifcation = true;
 swss::Select swssSelect;
+
+bool is_valid_vlan_interface_name(const std::string &vlan)
+{
+    static const std::string prefix = "Vlan";
+
+    return vlan.size() > prefix.size() && vlan.size() < IFNAMSIZ &&
+           vlan.compare(0, prefix.size(), prefix) == 0 &&
+           std::all_of(vlan.begin() + prefix.size(), vlan.end(),
+                       [](unsigned char character) { return std::isdigit(character); });
+}
 
 /**
  * @code                void initialize_swss()
@@ -124,6 +138,10 @@ void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries,
     for (auto &entry: entries) {
         std::string vlan = kfvKey(entry);
         std::string operation = kfvOp(entry);
+        if (!is_valid_vlan_interface_name(vlan)) {
+            syslog(LOG_WARNING, "Ignoring DHCP_RELAY entry with invalid VLAN interface name");
+            continue;
+        }
         std::vector<swss::FieldValueTuple> fieldValues = kfvFieldsValues(entry);
         bool has_ipv6_address = false;
 
@@ -193,17 +211,30 @@ void processRelayNotification(std::deque<swss::KeyOpFieldsValuesTuple> &entries,
  * @return                  bool value indicates whether lla ready
  */
 bool check_is_lla_ready(std::string vlan) {
-    const std::string cmd = "ip -6 addr show " + vlan + " scope link 2> /dev/null";
-    std::array<char, 256> buffer;
-    std::string result;
-    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd.c_str(), "r"), pclose);
-    if (pipe) {
-        while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-            result += buffer.data();
+    if (!is_valid_vlan_interface_name(vlan)) {
+        return false;
+    }
+
+    struct ifaddrs *interfaces = nullptr;
+    if (getifaddrs(&interfaces) == -1) {
+        syslog(LOG_WARNING, "Unable to enumerate interfaces while checking for a link-local address");
+        return false;
+    }
+
+    bool ready = false;
+    for (const struct ifaddrs *interface = interfaces; interface != nullptr; interface = interface->ifa_next) {
+        if (interface->ifa_name == nullptr || interface->ifa_addr == nullptr ||
+            interface->ifa_addr->sa_family != AF_INET6 || vlan != interface->ifa_name) {
+            continue;
         }
-        if (!result.empty()) {
-            return true;
+
+        const auto *address = reinterpret_cast<const struct sockaddr_in6 *>(interface->ifa_addr);
+        if (IN6_IS_ADDR_LINKLOCAL(&address->sin6_addr)) {
+            ready = true;
+            break;
         }
     }
-    return false;
+
+    freeifaddrs(interfaces);
+    return ready;
 }
