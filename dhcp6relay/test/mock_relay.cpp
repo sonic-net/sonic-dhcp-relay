@@ -821,6 +821,7 @@ TEST(relay, server_callback) {
 MOCK_GLOBAL_FUNC2(if_indextoname, char*(unsigned int, char *));
 
 TEST(relay, client_callback_portchannel_member) {
+  dual_tor_sock = false;
   std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
   std::string vlan = "Vlan1000";
   initialize_counter(state_db, vlan);
