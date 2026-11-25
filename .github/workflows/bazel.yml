@@ -27,13 +27,7 @@ jobs:
       - name: Install the JUnit report parser
         run: python3 -m pip install --require-hashes -r tools/bazel/requirements-ci.txt
       - name: Install verified project-local Bazel
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/relay-tools"
-          curl --fail --location --retry 3 https://releases.bazel.build/8.5.1/release/bazel-8.5.1-linux-x86_64 -o "$RUNNER_TEMP/relay-tools/bazel"
-          echo '61d89402f0368e64b6c827be5de79d8e65382e8124c3cbb97325611a1851392e  '"$RUNNER_TEMP/relay-tools/bazel" | sha256sum --check
-          chmod 755 "$RUNNER_TEMP/relay-tools/bazel"
+        run: bash tools/bazel/install-ci-bazel.sh
       - name: Build and execute declared source gates
         env:
           BAZEL: ${{ runner.temp }}/relay-tools/bazel
