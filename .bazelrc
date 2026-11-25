@@ -5,3 +5,11 @@ common:aarch64 --platforms=@sonic_build_infra//platforms:aarch64_trixie
 build --compilation_mode=opt
 build --copt=-g
 build --linkopt=-Wl,--build-id
+
+# CodeQL observes local compiler invocations in a fresh output base.
+build:codeql --host_platform=@sonic_build_infra//platforms:x86_64_trixie
+build:codeql --jobs=2
+build:codeql --spawn_strategy=local
+build:codeql --disk_cache=
+build:codeql --remote_cache=
+build:codeql --remote_executor=
