@@ -8,3 +8,10 @@ dhcp4relay/debian/*
 !dhcp4relay/debian/compat
 !dhcp4relay/debian/control
 !dhcp4relay/debian/rules
+
+# Generated Bazel resolution state is retained with validation evidence.
+/MODULE.bazel.lock
+/bazel-*
+
+# Python fixture validation bytecode.
+__pycache__/

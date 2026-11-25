@@ -1,0 +1,142 @@
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+load("@sonic_build_infra//tar:sonic_deploy_tar.bzl", "sonic_deploy_tar")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "sender",
+    srcs = ["src/sender.cpp"],
+    hdrs = ["src/sender.h"],
+    copts = [
+        "-Wall",
+        "-std=c++17",
+        "-fPIE",
+    ],
+)
+
+cc_library(
+    name = "relay",
+    srcs = [
+        "src/config_interface.cpp",
+        "src/relay.cpp",
+    ],
+    hdrs = [
+        "src/config_interface.h",
+        "src/relay.h",
+    ],
+    copts = [
+        "-Wall",
+        "-std=c++17",
+        "-fPIE",
+    ],
+    linkopts = ["-pthread"],
+    deps = [
+        ":sender",
+        "@dhcpmon_debian//libboost-system1.83-dev:libboost_system_cc",
+        "@dhcpmon_debian//libboost-thread1.83-dev:libboost_thread_cc",
+        "@dhcpmon_debian//libevent-dev:libevent_cc",
+        "@sonic_swss_common//:libswsscommon_shared",
+    ],
+)
+
+cc_binary(
+    name = "dhcp6relay",
+    srcs = ["src/main.cpp"],
+    copts = [
+        "-Wall",
+        "-std=c++17",
+        "-fPIE",
+    ],
+    linkopts = [
+        "-pie",
+        "-pthread",
+    ],
+    deps = [":relay"],
+)
+
+sonic_deploy_tar(
+    name = "runtime",
+    binaries = {"usr/sbin/dhcp6relay uid=0 gid=0 mode=0755 type=file": ":dhcp6relay"},
+    force_debug_build = True,
+    mtree = [
+        "usr type=dir uid=0 gid=0 mode=0755",
+        "usr/sbin type=dir uid=0 gid=0 mode=0755",
+    ],
+)
+
+# Exercises the real sender.cpp, not the existing mock_send replacement.
+# Linker wrapping permits deterministic error/byte checks with no network/root.
+cc_test(
+    name = "sender_test",
+    size = "small",
+    srcs = ["test/sender_test.cpp"],
+    copts = [
+        "-Wall",
+        "-std=c++17",
+    ],
+    linkopts = ["-Wl,--wrap=sendto"],
+    deps = [
+        ":sender",
+        "@com_google_googletest//:gtest_main",
+    ],
+)
+
+# Original relay/config suite, using the existing mocks and PR #1 Redis fixture.
+# ASan preserves the original Make death-test contract; the test-only socket
+# seam removes CAP_NET_RAW without mocking kernel BPF validation.
+cc_binary(
+    name = "relay_test",
+    testonly = True,
+    srcs = [
+        "src/config_interface.cpp",
+        "src/config_interface.h",
+        "src/relay.cpp",
+        "src/relay.h",
+        "src/sender.h",
+        "test/main.cpp",
+        "test/mock_config_interface.cpp",
+        "test/mock_config_interface.h",
+        "test/mock_relay.cpp",
+        "test/mock_relay.h",
+        "test/mock_send.cpp",
+        "test/mock_send.h",
+        "test/socket_seam.cpp",
+    ],
+    copts = [
+        "-Wall",
+        "-std=c++17",
+        "-fPIE",
+        "-DBAZEL_TEST_BUILD",
+        "-fsanitize=address",
+        "-fno-omit-frame-pointer",
+    ],
+    linkopts = [
+        "-pthread",
+        "-fsanitize=address",
+        "-Wl,--wrap=socket",
+        "-Wl,--wrap=bind",
+        "-Wl,--wrap=close",
+        "-Wl,--wrap=event_new",
+        "-Wl,--wrap=event_free",
+    ],
+    deps = [
+        "@com_google_googletest//:gtest",
+        "@dhcpmon_debian//libboost-system1.83-dev:libboost_system_cc",
+        "@dhcpmon_debian//libboost-thread1.83-dev:libboost_thread_cc",
+        "@dhcpmon_debian//libevent-dev:libevent_cc",
+        "@gmock_global_headers//:headers",
+        "@sonic_swss_common//:libswsscommon_shared",
+    ],
+)
+
+exports_files([
+    "test/run_tests.py",
+    "test/database_config.json",
+])
+
+exports_files([
+    "debian/control",
+    "debian/changelog",
+])

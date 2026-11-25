@@ -14,6 +14,21 @@
 using namespace ::testing;
 
 bool dual_tor_sock = false;
+
+// A test's dual-ToR mode must not leak into later single-ToR test cases,
+// including when an assertion returns early from the test body.
+class ScopedDualTorMode {
+public:
+    explicit ScopedDualTorMode(bool enabled) : previous_(dual_tor_sock) {
+        dual_tor_sock = enabled;
+    }
+    ~ScopedDualTorMode() {
+        dual_tor_sock = previous_;
+    }
+private:
+    const bool previous_;
+};
+
 char loopback[IF_NAMESIZE] = "Loopback0";
 int mock_sock = 124;
 
@@ -440,7 +455,7 @@ TEST(relay, relay_client)
   EXPECT_DEATH(relay_client(msg, 65535, &ip_hdr, &ether_hdr, &config), "");
 
   // normal packet testing
-  dual_tor_sock = true;
+  const ScopedDualTorMode dual_tor_mode(true);
   ASSERT_NO_THROW(relay_client(msg, msg_len, &ip_hdr, &ether_hdr, &config));
 
   EXPECT_EQ(last_used_sock, mock_sock);
@@ -510,7 +525,7 @@ TEST(relay, relay_relay_forw) {
   ASSERT_NO_THROW(relay_relay_forw(super_frame, BUFFER_SIZE, &ip_hdr, &config));
 
   // normal packet
-  dual_tor_sock = true;
+  const ScopedDualTorMode dual_tor_mode(true);
   ASSERT_NO_THROW(relay_relay_forw(msg, msg_len, &ip_hdr, &config));
 
   EXPECT_EQ(last_used_sock, mock_sock);
@@ -938,7 +953,7 @@ TEST(relay, client_callback) {
   // test normal msg and vlan found 
   ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
 
-  dual_tor_sock = true;
+  const ScopedDualTorMode dual_tor_mode(true);
   // test normal msg and vlan found + dual tor
   ASSERT_NO_THROW(client_callback(-1, 0, &vlans));
   dual_tor_sock = false;

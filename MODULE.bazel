@@ -1,0 +1,100 @@
+module(
+    name = "sonic-dhcp-relay",
+    version = "0.1.0",
+    bazel_compatibility = [
+        ">=8.5.1",
+        "<=8.5.1",
+    ],
+)
+
+bazel_dep(name = "sonic-build-infra", version = "0.0.45-77ef625a4ddafc8cdc15f3cc6aee31eabac8a5de", repo_name = "sonic_build_infra")
+bazel_dep(name = "sonic-swss-common", version = "0.0.8-2a4ddd070edb719f2e969a880a5cfff711e64e72", repo_name = "sonic_swss_common")
+bazel_dep(name = "rules_cc", version = "0.2.20")
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "rules_distroless", version = "0.9.4.sonic.26")
+bazel_dep(name = "googletest", version = "1.14.0.bcr.1", repo_name = "com_google_googletest")
+
+gcc = use_extension("@sonic_build_infra//toolchains/gcc:extensions.bzl", "gcc")
+use_repo(gcc, "gcc_toolchains")
+
+register_toolchains("@gcc_toolchains//:all")
+
+# Reuse the published global APT lock; no component-private resolver or lock.
+apt = use_extension("@rules_distroless//apt:extensions.bzl", "apt")
+apt.import_lock(
+    dependency_sets = [
+        "dhcpmon_debian",
+        "dhcp_relay_test_debian",
+        "trixie",
+    ],
+    libraries = True,
+    lock = "@sonic_build_infra//apt:apt.lock.json",
+    requests = "@sonic_build_infra//apt:requests.json",
+    sources = "@sonic_build_infra//apt:sources.json",
+)
+use_repo(apt, "dhcp_relay_test_debian", "dhcpmon_debian", "trixie")
+
+bazel_dep(name = "rules_python", version = "1.9.0.sonic.2")
+
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(python_version = "3.13")
+use_repo(python, "python_3_13")
+
+register_toolchains("@python_3_13//:all")
+
+# Root-only compatibility selections required by the existing owner modules.
+# Match the shared deployment rules' supported patched tar implementation.
+single_version_override(
+    module_name = "tar.bzl",
+    version = "0.10.5.sonic.2",
+)
+
+# Later rules_cc requires a Bazel runtime toolchain unavailable in 8.5.1.
+single_version_override(
+    module_name = "rules_cc",
+    version = "0.2.20",
+)
+
+# Common registers Rust consumers; its non-root dev toolchains are not inherited.
+bazel_dep(name = "rules_rs", version = "0.1.0")
+
+rust = use_extension("@rules_rs//rs:rules_rust_reexported_extensions.bzl", "rust", dev_dependency = True)
+rust.toolchain(
+    edition = "2021",
+    extra_target_triples = [
+        "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-gnu",
+    ],
+    versions = ["1.90.0"],
+)
+use_repo(rust, "rust_toolchains")
+
+register_toolchains(
+    "@rust_toolchains//:all",
+    dev_dependency = True,
+)
+
+# Existing source module used by installed-runtime validation.
+bazel_dep(name = "libyang", version = "3.12.2.sonic.9")
+
+# Direct runtime TAR references require a root-visible repository mapping.
+# Match Common's selected source owner; do not substitute distro libnl.
+bazel_dep(name = "libnl3", version = "3.7.0.sonic.10")
+
+# The shared native producer preserves v24.09 and the identical SONiC DHCP
+# random-source-port patch. It owns libpcap and all library build definitions.
+bazel_dep(name = "pcapplusplus", version = "24.9.0.sonic.2")
+
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+# Same immutable source as the existing gitlink, also available in source archives.
+http_archive(
+    name = "gmock_global_headers",
+    build_file = "//third_party:gmock-global.BUILD.bazel",
+    sha256 = "29c753ae56de70e1f558c5f1ef8c16014f27bcf899acb0c41713eb31806e9a81",
+    strip_prefix = "gmock-global-6552faa2a94250ed0192dbd62e608d37fafcc216",
+    type = "tar.gz",
+    urls = ["https://codeload.github.com/apriorit/gmock-global/tar.gz/6552faa2a94250ed0192dbd62e608d37fafcc216"],
+)
+
+bazel_dep(name = "rules_shell", version = "0.8.0")
