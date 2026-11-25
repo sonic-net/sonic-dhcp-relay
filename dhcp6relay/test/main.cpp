@@ -1,5 +1,6 @@
 #include "gtest/gtest.h"
 #include <swss/dbconnector.h>
+#include <cstdlib>
 #include <string>
 
 std::string database_config = "./test/database_config.json";
@@ -19,6 +20,11 @@ public:
 
 int main(int argc, char* argv[])
 {
+    const char* test_database_config = std::getenv("DHCP6RELAY_TEST_DATABASE_CONFIG");
+    if (test_database_config && *test_database_config)
+    {
+        database_config = test_database_config;
+    }
     testing::InitGoogleTest(&argc, argv);
     // Registers a global test environment, and verifies that the
     // registration function returns its argument.

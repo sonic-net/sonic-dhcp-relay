@@ -1,0 +1,123 @@
+load("@rules_python//python:py_binary.bzl", "py_binary")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("@sonic_build_infra//cc:runtime_test.bzl", "native_runtime_binary")
+load("@sonic_build_infra//tools/build_tools:defs.bzl", "build_tool", "build_tools_runtime")
+
+# Both executables use the same declared target loader and source-built Common
+# dependency closure. No Docker daemon or host-installed target libraries.
+_RUNTIME = [
+    "@sonic_swss_common//dist:libswsscommon_pkg",
+    "@sonic_swss_common//tools/bazel/runtime:test_runtime",
+    "@dhcpmon_debian//libevent-dev",
+    "@dhcpmon_debian//libboost-thread1.83-dev",
+    "@dhcpmon_debian//libboost-system1.83-dev",
+    "@dhcpmon_debian//libpcap0.8-dev",
+    "@dhcp_relay_test_debian//libasan8",
+    "@libyang//:sys_libpcre2-8-0_data",
+    "@libyang//:sys_libxxhash0_data",
+]
+
+[
+    native_runtime_binary(
+        name = name + "_runner",
+        testonly = True,
+        binary = binary,
+        runtime_payloads = _RUNTIME,
+        tags = ["manual"] if "negative" in name else [],
+    )
+    for name, binary in [
+        ("v4", "//dhcp4relay:relay_test"),
+        ("v6", "//dhcp6relay:relay_test"),
+        ("sender", "//dhcp6relay:sender_test"),
+        ("pcap_patch", "//dhcp4relay:pcap_patch_test"),
+        ("v4_negative", "//dhcp4relay:relay_test_negative"),
+    ]
+]
+
+# Redis is a declared fixture executable. The shared ELF preparation rule
+# supplies its complete locked runtime, without a system service or TCP port.
+build_tools_runtime(
+    name = "redis_runtime",
+    testonly = True,
+    architecture = "amd64",
+    elf_tools = {"redis-server": "usr/bin/redis-server"},
+    packages = ["@trixie//redis-server"],
+    profile = "elf",
+    target_compatible_with = ["@platforms//cpu:x86_64"],
+)
+
+build_tool(
+    name = "redis_server",
+    testonly = True,
+    runtime = ":redis_runtime",
+    tool = "redis-server",
+)
+
+py_binary(
+    name = "v6_fixture",
+    testonly = True,
+    srcs = ["//dhcp6relay:test/run_tests.py"],
+    data = ["//dhcp6relay:test/database_config.json"],
+    main = "//dhcp6relay:test/run_tests.py",
+)
+
+sh_test(
+    name = "v6_full_suite_test",
+    size = "medium",
+    srcs = ["full_suite_test.sh"],
+    args = [
+        "$(rootpath :v6_fixture)",
+        "$(rootpath :redis_server)",
+        "$(rootpath :v6_runner)",
+    ],
+    data = [
+        ":redis_server",
+        ":v6_fixture",
+        ":v6_runner",
+    ],
+)
+
+sh_test(
+    name = "v4_full_suite_test",
+    size = "medium",
+    srcs = ["v4_full_suite_test.sh"],
+    args = [
+        "$(rootpath :v4_runner)",
+        "*",
+        "$(rootpath //dhcp4relay:test/database_config.json)",
+    ],
+    data = [
+        ":v4_runner",
+        "//dhcp4relay:test/database_config.json",
+    ],
+)
+
+sh_test(
+    name = "v4_negative_control_test",
+    size = "medium",
+    srcs = ["v4_full_suite_test.sh"],
+    args = [
+        "$(rootpath :v4_negative_runner)",
+        "DHCPRelayTest.bootp_pad_extends_short_packet",
+        "$(rootpath //dhcp4relay:test/database_config.json)",
+    ],
+    data = [
+        ":v4_negative_runner",
+        "//dhcp4relay:test/database_config.json",
+    ],
+    tags = ["manual"],
+)
+
+[
+    sh_test(
+        name = name,
+        size = "small",
+        srcs = ["focused_test.sh"],
+        args = ["$(rootpath :" + runner + ")"],
+        data = [":" + runner],
+    )
+    for name, runner in [
+        ("sender_test", "sender_runner"),
+        ("pcap_patch_test", "pcap_patch_runner"),
+    ]
+]

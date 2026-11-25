@@ -1,0 +1,138 @@
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+load("@sonic_build_infra//tar:sonic_deploy_tar.bzl", "sonic_deploy_tar")
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "relay",
+    srcs = [
+        "src/dhcp4_sender.cpp",
+        "src/dhcp4relay.cpp",
+        "src/dhcp4relay_mgr.cpp",
+        "src/dhcp4relay_stats.cpp",
+    ],
+    hdrs = glob(["src/*.h"]),
+    copts = [
+        "-Wall",
+        "-std=c++17",
+        "-fPIE",
+    ],
+    linkopts = ["-pthread"],
+    deps = [
+        "@dhcpmon_debian//libboost-system1.83-dev:libboost_system_cc",
+        "@dhcpmon_debian//libboost-thread1.83-dev:libboost_thread_cc",
+        "@dhcpmon_debian//libevent-dev:libevent_cc",
+        "@pcapplusplus//:Pcap++",
+        "@sonic_swss_common//:libswsscommon_shared",
+    ],
+)
+
+cc_binary(
+    name = "dhcp4relay",
+    srcs = ["src/main.cpp"],
+    copts = [
+        "-std=c++17",
+        "-fPIE",
+    ],
+    linkopts = ["-pie"],
+    deps = [":relay"],
+)
+
+sonic_deploy_tar(
+    name = "runtime",
+    binaries = {"usr/sbin/dhcp4relay uid=0 gid=0 mode=0755 type=file": ":dhcp4relay"},
+    force_debug_build = True,
+    mtree = [
+        "usr type=dir uid=0 gid=0 mode=0755",
+        "usr/sbin type=dir uid=0 gid=0 mode=0755",
+    ],
+)
+
+cc_test(
+    name = "pcap_patch_test",
+    srcs = ["test/pcap_patch_test.cpp"],
+    copts = ["-std=c++17"],
+    deps = [
+        "@com_google_googletest//:gtest_main",
+        "@pcapplusplus//:Pcap++",
+    ],
+)
+
+# All twelve original test/subdir.mk translation units, plus the narrow socket
+# and fixture-lifetime seam. Original assertions remain unchanged.
+_SUITE_SRCS = [
+    "test/main.cpp",
+    "test/mock_relay.cpp",
+    "src/dhcp4relay_mgr.cpp",
+    "src/dhcp4relay_stats.cpp",
+    "src/dhcp4relay.cpp",
+    "src/dhcp4_sender.cpp",
+    "test/mock_dbconnector.cpp",
+    "test/mock_table.cpp",
+    "test/mock_consumerstatetable.cpp",
+    "test/mock_hiredis.cpp",
+    "test/mock_redisreply.cpp",
+    "test/mock_relay_stats.cpp",
+    "test/socket_seam.cpp",
+    "test/mock_relay.h",
+    "test/mock_table.h",
+] + glob(["src/*.h"])
+
+_SUITE_COPTS = [
+    "-Wall",
+    "-std=c++17",
+    "-fPIE",
+    "-DUNIT_TEST",
+    "-DBAZEL_TEST_BUILD",
+    "-fsanitize=address",
+    "-fno-omit-frame-pointer",
+]
+
+_SUITE_LINKOPTS = [
+    "-pthread",
+    "-fsanitize=address",
+    "-Wl,--wrap=socket",
+    "-Wl,--wrap=bind",
+    "-Wl,--wrap=close",
+    "-Wl,--wrap=setsockopt",
+]
+
+_SUITE_DEPS = [
+    "@pcapplusplus//:Pcap++",
+    "@com_google_googletest//:gtest",
+    "@gmock_global_headers//:headers",
+    "@sonic_swss_common//:libswsscommon_shared",
+    "@dhcpmon_debian//libevent-dev:libevent_cc",
+    "@dhcpmon_debian//libboost-thread1.83-dev:libboost_thread_cc",
+    "@dhcpmon_debian//libboost-system1.83-dev:libboost_system_cc",
+]
+
+cc_binary(
+    name = "relay_test",
+    testonly = True,
+    srcs = _SUITE_SRCS,
+    copts = _SUITE_COPTS,
+    linkopts = _SUITE_LINKOPTS,
+    deps = _SUITE_DEPS,
+)
+
+exports_files(["test/database_config.json"])
+
+# Manual semantic negative control. Never a production dependency; the matching
+# manual runtime test must fail the original bootp_pad assertions.
+cc_binary(
+    name = "relay_test_negative",
+    testonly = True,
+    srcs = _SUITE_SRCS + ["test/negative_bootp.cpp"],
+    copts = _SUITE_COPTS,
+    linkopts = _SUITE_LINKOPTS + ["-Wl,--wrap=_Z9bootp_padPhPKhPjb"],
+    tags = ["manual"],
+    deps = _SUITE_DEPS,
+)
+
+exports_files([
+    "debian/control",
+    "debian/changelog",
+])

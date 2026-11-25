@@ -1,0 +1,1 @@
+Generated metadata-only AMD64 foundation closure, derived byte-for-byte from the reviewed image/base APT locks. No floating resolution and no DEB production. Only the seven actual DHCP native library package controls/data are metadata inputs. All runtime code remains in source owner TARs. No ARM acceptance claim.

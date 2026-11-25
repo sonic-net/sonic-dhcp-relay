@@ -1,0 +1,46 @@
+load("@sonic_build_infra//oci:runtime_packages.bzl", "runtime_packages")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([".bazelversion"])
+
+runtime_packages(
+    name = "dhcp4_metadata",
+    apt_packages = {"@dhcpmon_debian//" + name + ":data": "@dhcpmon_debian//" + name + ":control" for name in [
+        "libc6",
+        "libgcc-s1",
+        "libstdc++6",
+        "libevent-2.1-7t64",
+        "libevent-pthreads-2.1-7t64",
+        "libexplain51t64",
+        "libhiredis1.1.0",
+        "libpcap0.8t64",
+    ]},
+    architecture = "amd64",
+    changelog = "//dhcp4relay:debian/changelog",
+    control = "//dhcp4relay:debian/control",
+    dependencies = ["@sonic_swss_common//:runtime_packages.json"],
+    module_name = "sonic-dhcp-relay",
+    packages = {"sonic-dhcp4relay": "//dhcp4relay:runtime"},
+    visibility = ["//visibility:public"],
+)
+
+runtime_packages(
+    name = "dhcp6_metadata",
+    apt_packages = {"@dhcpmon_debian//" + name + ":data": "@dhcpmon_debian//" + name + ":control" for name in [
+        "libc6",
+        "libgcc-s1",
+        "libstdc++6",
+        "libevent-2.1-7t64",
+        "libevent-pthreads-2.1-7t64",
+        "libexplain51t64",
+        "libhiredis1.1.0",
+    ]},
+    architecture = "amd64",
+    changelog = "//dhcp6relay:debian/changelog",
+    control = "//dhcp6relay:debian/control",
+    dependencies = ["@sonic_swss_common//:runtime_packages.json"],
+    module_name = "sonic-dhcp-relay",
+    packages = {"sonic-dhcp6relay": "//dhcp6relay:runtime"},
+    visibility = ["//visibility:public"],
+)

@@ -931,6 +931,7 @@ TEST(relayConfig, handle_vlan_interface_events) {
 
     close(pipe_fds[0]);
     close(pipe_fds[1]);
+    FreeMockIfaddrs(mock_ifaddrs);
 }
 
 TEST(relayConfig, handle_port_table_events) {
@@ -1112,6 +1113,7 @@ TEST(DHCPMgrTest, process_vlan_events) {
     config->vlan = "Vlan100";
     config->is_add = true;
     vlans_copy["Vlan100"] = *config;
+    delete config;  // map owns its value copy, not this fixture allocation
     std::deque<swss::KeyOpFieldsValuesTuple> entries;
     entries.emplace_back("Vlan100", "SET", std::vector<swss::FieldValueTuple>{}); 
     dhcpMgr.process_vlan_notification(entries);
@@ -1688,6 +1690,7 @@ TEST(DHCPRelayTest, to_client) {
         return true;
     });
     to_client(&dhcpLayer, &vlans, "172.22.178.234");
+    FreeMockIfaddrs(mock_ifaddrs);
 }
 
 TEST(DHCPRelayTest, to_client_zero_giaddr_skips_interface_lookup) {
