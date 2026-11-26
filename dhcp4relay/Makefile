@@ -28,7 +28,7 @@ LIB_DIR = $(PCAPPLUSPLUS_DIR)/lib
 override LDLIBS += -levent -lhiredis -lswsscommon -pthread -lboost_thread $(LD_PCAPPLUSPLUS_LIB) -lpcap
 override CPPFLAGS += -Wall -std=c++17 -fPIE -I/usr/include/swss -I$(INCLUDE_DIR)
 override CPPFLAGS += -MMD -MP -MF"$(@:%.o=%.d)" -MT"$(@)"
-override LDFLAGS += -L$(LIB_DIR) -Wl,-rpath=$(abspath $(LIB_DIR))
+override LDFLAGS += -L$(LIB_DIR)
 CPPFLAGS_TEST := --coverage -fprofile-arcs -ftest-coverage -fprofile-generate -fsanitize=address -DUNIT_TEST
 LDLIBS_TEST := --coverage -lgtest -lgmock -pthread -lstdc++fs -fsanitize=address
 PWD := $(shell pwd)
