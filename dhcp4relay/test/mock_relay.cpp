@@ -1732,6 +1732,17 @@ TEST(DHCPRelayTest, to_client_bootp_skips_vss_validation) {
     FreeMockIfaddrs(mock_ifaddrs);
 }
 
+static struct ifaddrs *expect_local_address_check(
+        const std::string &vlan_ip = "192.168.10.10",
+        const std::string &source_ip = "192.168.1.2") {
+    struct ifaddrs *mock_ifaddrs = CreateMockIfaddrs(
+        vlan_ip, "255.255.255.0", "Vlan10", source_ip, "Ethernet12");
+    EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_))
+        .WillOnce(DoAll(testing::SetArgPointee<0>(mock_ifaddrs), Return(0)));
+    EXPECT_GLOBAL_CALL(freeifaddrs, freeifaddrs(_)).Times(1);
+    return mock_ifaddrs;
+}
+
 TEST(DHCPRelayTest, from_client) {
 
     pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
@@ -1764,6 +1775,7 @@ TEST(DHCPRelayTest, from_client) {
     m_config.host_mac_addr = "12:32:54:24:95:36";
     EXPECT_EQ(dhcpLayer.getOptionData(pcpp::DHCPOPT_DHCP_AGENT_OPTIONS).getDataSize(), 0U);
 
+    struct ifaddrs *mock_ifaddrs = expect_local_address_check();
     EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).WillOnce([]
 		    (int sock, uint8_t* hdr, struct sockaddr_in target, uint32_t len, in_addr src_ip, bool use_src_ip, bool pad) {
         pcpp::dhcp_header* dhcp_hdr = (pcpp::dhcp_header*)hdr;
@@ -1793,6 +1805,7 @@ TEST(DHCPRelayTest, from_client) {
         return true;
     });
     from_client(&dhcpLayer, config);
+    FreeMockIfaddrs(mock_ifaddrs);
 }
 
 static relay_config make_from_client_giaddr_config(bool use_source_interface) {
@@ -1887,6 +1900,48 @@ static relay_config make_relay_of_relay_config(const std::string &agent_relay_mo
     return config;
 }
 
+TEST(DHCPRelayTest, from_client_relay_of_relay_local_giaddr_is_dropped) {
+    relay_config config = make_relay_of_relay_config("forward");
+
+    pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
+    pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_DISCOVER, clientMac);
+    dhcpLayer.getDhcpHeader()->hops = 2;
+    dhcpLayer.getDhcpHeader()->gatewayIpAddress = inet_addr("192.168.1.2");
+    encode_relay_option(&dhcpLayer, &config);
+
+    struct ifaddrs *mock_ifaddrs = expect_local_address_check();
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).Times(0);
+    from_client(&dhcpLayer, config);
+
+    EXPECT_EQ(dhcpLayer.getDhcpHeader()->hops, 2);
+    EXPECT_EQ(dhcpLayer.getDhcpHeader()->gatewayIpAddress, inet_addr("192.168.1.2"));
+    FreeMockIfaddrs(mock_ifaddrs);
+}
+
+TEST(DHCPRelayTest, from_client_relay_of_relay_nonlocal_giaddr_forwards) {
+    relay_config config = make_relay_of_relay_config("forward");
+
+    pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
+    pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_DISCOVER, clientMac);
+    dhcpLayer.getDhcpHeader()->hops = 2;
+    dhcpLayer.getDhcpHeader()->gatewayIpAddress = inet_addr("203.0.113.10");
+    encode_relay_option(&dhcpLayer, &config);
+
+    struct ifaddrs *mock_ifaddrs = expect_local_address_check();
+    EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).WillOnce([]
+            (int, uint8_t *hdr, struct sockaddr_in, uint32_t, in_addr, bool, bool) {
+        pcpp::dhcp_header *dhcp_hdr = reinterpret_cast<pcpp::dhcp_header *>(hdr);
+        EXPECT_EQ(dhcp_hdr->hops, 3);
+        EXPECT_EQ(dhcp_hdr->gatewayIpAddress, inet_addr("203.0.113.10"));
+        return true;
+    });
+    from_client(&dhcpLayer, config);
+
+    EXPECT_EQ(dhcpLayer.getDhcpHeader()->hops, 3);
+    EXPECT_EQ(dhcpLayer.getDhcpHeader()->gatewayIpAddress, inet_addr("203.0.113.10"));
+    FreeMockIfaddrs(mock_ifaddrs);
+}
+
 /* agent_relay_mode=append: packet already has Option 82; we should append ours and forward. */
 TEST(DHCPRelayTest, from_client_relay_of_relay_append) {
     relay_config config = make_relay_of_relay_config("append");
@@ -1898,6 +1953,7 @@ TEST(DHCPRelayTest, from_client_relay_of_relay_append) {
     dhcpLayer.getDhcpHeader()->gatewayIpAddress = inet_addr("192.168.1.1");
     encode_relay_option82(&dhcpLayer, &config);
 
+    struct ifaddrs *mock_ifaddrs = expect_local_address_check();
     EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).WillOnce([]
             (int, uint8_t* hdr, struct sockaddr_in, uint32_t, in_addr, bool, bool) {
         pcpp::dhcp_header* dhcp_hdr = (pcpp::dhcp_header*)hdr;
@@ -1906,6 +1962,7 @@ TEST(DHCPRelayTest, from_client_relay_of_relay_append) {
         return true;
     });
     from_client(&dhcpLayer, config);
+    FreeMockIfaddrs(mock_ifaddrs);
 }
 
 /* agent_relay_mode=replace: existing Option 82 stripped, ours added, packet forwarded. */
@@ -1918,6 +1975,7 @@ TEST(DHCPRelayTest, from_client_relay_of_relay_replace) {
     dhcpLayer.getDhcpHeader()->gatewayIpAddress = inet_addr("192.168.1.1");
     encode_relay_option82(&dhcpLayer, &config);
 
+    struct ifaddrs *mock_ifaddrs = expect_local_address_check();
     EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).WillOnce([]
             (int, uint8_t* hdr, struct sockaddr_in, uint32_t, in_addr, bool, bool) {
         pcpp::dhcp_header* dhcp_hdr = (pcpp::dhcp_header*)hdr;
@@ -1926,6 +1984,7 @@ TEST(DHCPRelayTest, from_client_relay_of_relay_replace) {
         return true;
     });
     from_client(&dhcpLayer, config);
+    FreeMockIfaddrs(mock_ifaddrs);
 }
 
 /* agent_relay_mode=forward: packet forwarded unchanged, Option 82 not modified. */
@@ -1938,6 +1997,7 @@ TEST(DHCPRelayTest, from_client_relay_of_relay_forward) {
     dhcpLayer.getDhcpHeader()->gatewayIpAddress = inet_addr("192.168.1.1");
     encode_relay_option82(&dhcpLayer, &config);
 
+    struct ifaddrs *mock_ifaddrs = expect_local_address_check();
     EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).WillOnce([]
             (int, uint8_t* hdr, struct sockaddr_in, uint32_t, in_addr, bool, bool) {
         pcpp::dhcp_header* dhcp_hdr = (pcpp::dhcp_header*)hdr;
@@ -1946,6 +2006,7 @@ TEST(DHCPRelayTest, from_client_relay_of_relay_forward) {
         return true;
     });
     from_client(&dhcpLayer, config);
+    FreeMockIfaddrs(mock_ifaddrs);
 }
 
 TEST(DHCPRelayTest, from_client_relay_of_relay_forward_with_vss_forwards_unchanged) {
@@ -2015,8 +2076,10 @@ TEST(DHCPRelayTest, from_client_relay_of_relay_discard) {
     dhcpLayer.getDhcpHeader()->gatewayIpAddress = inet_addr("192.168.1.1");
     encode_relay_option82(&dhcpLayer, &config);
 
+    struct ifaddrs *mock_ifaddrs = expect_local_address_check();
     EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _, _)).Times(0);
     from_client(&dhcpLayer, config);
+    FreeMockIfaddrs(mock_ifaddrs);
 }
 
 TEST(DHCPRelayTest, bootp_pad_extends_short_packet) {
