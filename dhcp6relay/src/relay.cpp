@@ -1293,7 +1293,7 @@ void loop_relay(std::unordered_map<std::string, relay_config> &vlans) {
         exit(EXIT_FAILURE);
     }
 
-    std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+    std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0, false, "", true);
     std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
     std::shared_ptr<swss::Table> mStateDbMuxTablePtr = std::make_shared<swss::Table> (
         state_db.get(), "HW_MUX_CABLE_TABLE"
